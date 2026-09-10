@@ -68,7 +68,8 @@ jobs:
 
   flutter-sync:
     name: iPad offline queue and merge protection
-    runs-on: ubuntu-latest
+    # pdfx rejects Linux before invoking the mocked native PDF renderer.
+    runs-on: macos-14
     timeout-minutes: 20
     steps:
       - name: Checkout repository
