@@ -10,6 +10,31 @@ import 'app_config.dart';
 import 'document_repository.dart' show InlineDocumentBytes, InlineDocumentOrder;
 import 'note_repository.dart' show InlinePlanBytes;
 
+class SyncSessionScope {
+  SyncSessionScope()
+    : epoch = AppConfig.sessionEpoch,
+      token = AppConfig.appSessionToken;
+  final int epoch;
+  final String token;
+  static final _key = Object();
+  static SyncSessionScope? get current =>
+      Zone.current[_key] as SyncSessionScope?;
+  bool get isCurrent => epoch == AppConfig.sessionEpoch;
+  void check() {
+    if (!isCurrent) {
+      throw TransientRemoteException('Session changed; queued work retained');
+    }
+  }
+
+  Future<T> run<T>(Future<T> Function() action) =>
+      runZoned(action, zoneValues: {_key: this});
+  static String get requestToken {
+    final scope = current;
+    scope?.check();
+    return scope?.token ?? AppConfig.appSessionToken;
+  }
+}
+
 class _AuthAwareHttpClient extends http.BaseClient {
   _AuthAwareHttpClient(this._inner);
 
@@ -17,7 +42,17 @@ class _AuthAwareHttpClient extends http.BaseClient {
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final scope = SyncSessionScope.current ?? SyncSessionScope();
+    scope.check();
+    final sentToken = request.headers['X-App-Session'];
+    if (sentToken != null && sentToken != scope.token) {
+      throw TransientRemoteException('Session changed before request');
+    }
     final response = await _inner.send(request);
+    if (!scope.isCurrent) {
+      await response.stream.listen((_) {}).cancel();
+      scope.check();
+    }
     final token = request.headers['X-App-Session']?.trim() ?? '';
     final isAuthenticatedRequest = token.isNotEmpty;
     final path = request.url.path;
@@ -30,7 +65,24 @@ class _AuthAwareHttpClient extends http.BaseClient {
         response.statusCode == 401) {
       unawaited(AppConfig.notifyUnauthorized());
     }
-    return response;
+    Stream<List<int>> guardedBody() async* {
+      await for (final chunk in response.stream) {
+        scope.check();
+        yield chunk;
+      }
+      scope.check();
+    }
+
+    return http.StreamedResponse(
+      guardedBody(),
+      response.statusCode,
+      contentLength: response.contentLength,
+      request: response.request,
+      headers: response.headers,
+      isRedirect: response.isRedirect,
+      persistentConnection: response.persistentConnection,
+      reasonPhrase: response.reasonPhrase,
+    );
   }
 
   @override
@@ -141,12 +193,14 @@ class _QueuedJsonMutation {
     required this.method,
     required this.path,
     required this.body,
+    required this.session,
   });
 
   final String id;
   final String method;
   final String path;
   final Map<String, dynamic> body;
+  final SyncSessionScope session;
   final Completer<http.Response> completer = Completer<http.Response>();
 }
 
@@ -191,7 +245,7 @@ class NocodbApiClient {
 
   Map<String, String> get _headers => {
     'Content-Type': 'application/json',
-    'X-App-Session': AppConfig.appSessionToken,
+    'X-App-Session': SyncSessionScope.requestToken,
   };
 
   String _pathSegment(String value) => Uri.encodeComponent(value);
@@ -220,6 +274,7 @@ class NocodbApiClient {
       method: method,
       path: path,
       body: Map<String, dynamic>.from(body),
+      session: SyncSessionScope.current ?? SyncSessionScope(),
     );
     _jsonMutationQueue.add(mutation);
 
@@ -252,6 +307,9 @@ class NocodbApiClient {
         _jsonMutationQueue.removeRange(0, takeCount);
 
         try {
+          for (final mutation in batch) {
+            mutation.session.check();
+          }
           final outerResponse = await _client
               .post(
                 Uri.parse('$_baseUrl/api/sync/batch'),
@@ -449,7 +507,7 @@ class NocodbApiClient {
       ).timeout(_jsonBatchTimeout),
     );
 
-    if (response.statusCode == 409) {
+    if (response.statusCode == 409 || response.statusCode == 428) {
       Map<String, dynamic>? remoteData;
       try {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -520,7 +578,7 @@ class NocodbApiClient {
         body: updates,
       ).timeout(_jsonBatchTimeout),
     );
-    if (response.statusCode == 409) {
+    if (response.statusCode == 409 || response.statusCode == 428) {
       Map<String, dynamic>? remoteData;
       try {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -577,7 +635,7 @@ class NocodbApiClient {
         body: updates,
       ).timeout(_jsonBatchTimeout),
     );
-    if (response.statusCode == 409) {
+    if (response.statusCode == 409 || response.statusCode == 428) {
       Map<String, dynamic>? remoteData;
       try {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -619,9 +677,11 @@ class NocodbApiClient {
   /// PUT /api/mesures/:dossierId — upsert mesures anthropométriques.
   /// Body : `{deboutHauteurCoude, assisHauteurAssise, assisProfondeurGenoux,
   /// assisHauteurCoudes, observations}` — toutes en string nullable.
-  Future<void> updateMesures({
+  Future<String?> updateMesures({
     required String dossierId,
     required Map<String, dynamic> updates,
+    String? expectedUpdatedAt,
+    Map<String, dynamic>? concurrency,
   }) async {
     if (!AppConfig.hasRemoteConfig) {
       throw Exception('Remote config missing');
@@ -631,10 +691,14 @@ class NocodbApiClient {
       () => _sendJsonMutation(
         method: 'PUT',
         path: '/api/mesures/${_pathSegment(dossierId)}',
-        body: updates,
+        body: {
+          ...updates,
+          if (expectedUpdatedAt != null) 'expectedUpdatedAt': expectedUpdatedAt,
+          if (concurrency != null) 'concurrency': concurrency,
+        },
       ).timeout(_jsonBatchTimeout),
     );
-    if (response.statusCode == 409) {
+    if (response.statusCode == 409 || response.statusCode == 428) {
       Map<String, dynamic>? remoteData;
       try {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -649,6 +713,14 @@ class NocodbApiClient {
         'Remote mesures update failed (${response.statusCode}): ${response.body}',
       );
     }
+    return _childUpdatedAt(
+      response,
+      guarded:
+          concurrency != null ||
+          expectedUpdatedAt != null ||
+          updates['concurrency'] != null ||
+          updates['expectedUpdatedAt'] != null,
+    );
   }
 
   /// PUT /api/observations/:dossierId — upsert observations de synthèse
@@ -656,9 +728,11 @@ class NocodbApiClient {
   /// Alimente les pages 6 (« Observation sur les équipements ») et 7
   /// (« Projet ou souhait de l'usager » + « Résumé des préconisations »)
   /// du rapport PDF.
-  Future<void> updateObservations({
+  Future<String?> updateObservations({
     required String dossierId,
     required Map<String, dynamic> updates,
+    String? expectedUpdatedAt,
+    Map<String, dynamic>? concurrency,
   }) async {
     if (!AppConfig.hasRemoteConfig) {
       throw Exception('Remote config missing');
@@ -668,10 +742,14 @@ class NocodbApiClient {
       () => _sendJsonMutation(
         method: 'PUT',
         path: '/api/observations/${_pathSegment(dossierId)}',
-        body: updates,
+        body: {
+          ...updates,
+          if (expectedUpdatedAt != null) 'expectedUpdatedAt': expectedUpdatedAt,
+          if (concurrency != null) 'concurrency': concurrency,
+        },
       ).timeout(_jsonBatchTimeout),
     );
-    if (response.statusCode == 409) {
+    if (response.statusCode == 409 || response.statusCode == 428) {
       Map<String, dynamic>? remoteData;
       try {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -686,6 +764,14 @@ class NocodbApiClient {
         'Remote observations update failed (${response.statusCode}): ${response.body}',
       );
     }
+    return _childUpdatedAt(
+      response,
+      guarded:
+          concurrency != null ||
+          expectedUpdatedAt != null ||
+          updates['concurrency'] != null ||
+          updates['expectedUpdatedAt'] != null,
+    );
   }
 
   /// GET /api/mesures/:dossierId — returns the persisted structured
@@ -794,10 +880,12 @@ class NocodbApiClient {
   /// Idem [updateBeneficiary] : sur 409 on lève [ConflictException] (le
   /// serveur appelle `sendConflictIfStale` côté `app.put('/api/
   /// diagnostic-sanitaires/...)`).
-  Future<void> updateDiagnosticSanitaires({
+  Future<String?> updateDiagnosticSanitaires({
     required String dossierId,
     required List<Map<String, dynamic>> sdbInstances,
     required List<Map<String, dynamic>> wcInstances,
+    String? expectedUpdatedAt,
+    Map<String, dynamic>? concurrency,
   }) async {
     if (!AppConfig.hasRemoteConfig) {
       throw Exception('Remote config missing');
@@ -809,10 +897,15 @@ class NocodbApiClient {
       () => _sendJsonMutation(
         method: 'PUT',
         path: '/api/diagnostic-sanitaires/${_pathSegment(dossierId)}',
-        body: {'sdbInstances': sdbInstances, 'wcInstances': wcInstances},
+        body: {
+          'sdbInstances': sdbInstances,
+          'wcInstances': wcInstances,
+          if (expectedUpdatedAt != null) 'expectedUpdatedAt': expectedUpdatedAt,
+          if (concurrency != null) 'concurrency': concurrency,
+        },
       ).timeout(_jsonBatchTimeout),
     );
-    if (response.statusCode == 409) {
+    if (response.statusCode == 409 || response.statusCode == 428) {
       Map<String, dynamic>? remoteData;
       try {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -827,6 +920,39 @@ class NocodbApiClient {
         'Remote diagnostic sanitaires update failed (${response.statusCode}): ${response.body}',
       );
     }
+    return _childUpdatedAt(
+      response,
+      guarded: concurrency != null || expectedUpdatedAt != null,
+    );
+  }
+
+  String? _childUpdatedAt(http.Response response, {required bool guarded}) {
+    // Older servers can acknowledge a write without exposing its own version.
+    try {
+      final body = jsonDecode(response.body);
+      final data = body is Map ? body['data'] : null;
+      final value = data is Map ? data['updatedAt'] : null;
+      if (value is String && _isChildTimestamp(value)) return value;
+    } catch (_) {}
+    if (guarded) {
+      throw TransientRemoteException(
+        'Child write unconfirmed: missing valid updatedAt in acknowledgement',
+      );
+    }
+    return null;
+  }
+
+  bool _isChildTimestamp(String value) {
+    final match = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})[T ](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$',
+    ).firstMatch(value);
+    if (match == null || DateTime.tryParse(value) == null) return false;
+    // DateTime.parse normalizes invalid dates instead of rejecting them.
+    final year = int.parse(match[1]!);
+    final month = int.parse(match[2]!);
+    final day = int.parse(match[3]!);
+    final date = DateTime.utc(year, month, day);
+    return date.year == year && date.month == month && date.day == day;
   }
 
   /// PUT /api/visit-recommendations/:dossierId — replaces the full list of
@@ -859,7 +985,7 @@ class NocodbApiClient {
           )
           .timeout(const Duration(seconds: 60)),
     );
-    if (response.statusCode == 409) {
+    if (response.statusCode == 409 || response.statusCode == 428) {
       Map<String, dynamic>? remoteData;
       try {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -937,7 +1063,7 @@ class NocodbApiClient {
       'POST',
       Uri.parse('$_baseUrl/api/documents'),
     );
-    request.headers['X-App-Session'] = AppConfig.appSessionToken;
+    request.headers['X-App-Session'] = SyncSessionScope.requestToken;
     request.fields['patientId'] = patientId;
     request.fields['documentLocalId'] = documentLocalId;
     request.fields['title'] = title;
@@ -1046,7 +1172,7 @@ class NocodbApiClient {
         'POST',
         Uri.parse('$_baseUrl/api/documents/upload/chunk'),
       );
-      request.headers['X-App-Session'] = AppConfig.appSessionToken;
+      request.headers['X-App-Session'] = SyncSessionScope.requestToken;
       request.fields['uploadId'] = uploadId;
       request.fields['chunkIndex'] = '$i';
       request.fields['totalChunks'] = '$totalChunks';
@@ -1399,7 +1525,7 @@ class NocodbApiClient {
     );
     // Pas de Content-Type ici — multipart le définit lui-même avec
     // boundary. Auth via X-App-Session uniquement.
-    request.headers['X-App-Session'] = AppConfig.appSessionToken;
+    request.headers['X-App-Session'] = SyncSessionScope.requestToken;
 
     // Note : on n'attache pas de `contentType` à `MultipartFile.fromBytes`
     // (évite la dépendance directe `http_parser` juste pour MediaType).

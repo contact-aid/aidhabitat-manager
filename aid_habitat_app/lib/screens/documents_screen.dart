@@ -31,17 +31,23 @@ import '../models/types.dart';
 import '../models/visit_report_categories.dart';
 import '../services/file_drop_listener.dart' show DroppedFile;
 import '../services/image_compressor.dart';
+import '../services/image_rotation_worker.dart';
 import '../services/web_file_picker.dart';
 import '../services/web_file_saver.dart';
 import '../services/app_config.dart';
 import '../services/data_service.dart';
 import '../services/document_file_naming.dart';
+import '../services/document_page_save.dart';
 import '../services/document_scanner_service.dart';
 import '../services/document_repository.dart';
 import '../services/media_cache_service.dart';
 import '../services/native_file_protection.dart';
 import '../services/pencil_interaction_service.dart';
 import '../services/pdf_rotation_service.dart';
+import '../services/pdf_ink_service.dart';
+import '../services/pdf_ink_geometry.dart';
+import '../services/web_pdf_export.dart';
+import '../services/sync_engine.dart';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -133,6 +139,9 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   String? _lastDocumentReorderTargetId;
   int _loadGeneration = 0;
   StreamSubscription<DocumentRepositoryChange>? _documentChangeSubscription;
+  StreamSubscription<SyncEngineState>? _syncEngineSubscription;
+  DateTime? _lastObservedSyncAt;
+  int? _lastObservedPendingCount;
 
   // Sélection multiple
   final Set<String> _selectedIds = <String>{};
@@ -155,8 +164,16 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     _documentChangeSubscription = DocumentRepository.changes.listen((change) {
       if (!mounted) return;
       if (change.patientId != _patientId) return;
-      unawaited(_loadDocuments(silent: true, refreshRemote: false));
+      final documentId = change.documentId;
+      if (documentId != null && documentId.isNotEmpty) {
+        unawaited(_refreshSingleDocument(documentId));
+        return;
+      }
+      unawaited(_reloadLocalDocuments());
     });
+    _syncEngineSubscription = SyncEngine().stateStream.listen(
+      _handleSyncStateChanged,
+    );
     // Refactor 2026-05-12 : suppression du polling 1 s + de
     // `enterActiveContext`. L'écran Documents charge sa grille à
     // l'ouverture et la garde stable pendant toute la session sur
@@ -167,6 +184,28 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     //  - au pull-to-refresh explicite.
     // Les actions locales (ajout, suppression, rotation, renommage...)
     // relisent seulement SQLite pour rester instantanées.
+  }
+
+  void _handleSyncStateChanged(SyncEngineState state) {
+    if (!mounted) return;
+    var shouldRefresh = false;
+
+    final previousPendingCount = _lastObservedPendingCount;
+    _lastObservedPendingCount = state.pendingCount;
+    if (previousPendingCount != null &&
+        previousPendingCount != state.pendingCount) {
+      shouldRefresh = true;
+    }
+
+    final at = state.lastSyncAt;
+    if (at != null && at != _lastObservedSyncAt) {
+      _lastObservedSyncAt = at;
+      shouldRefresh = true;
+    }
+
+    if (shouldRefresh) {
+      unawaited(_reloadLocalDocuments());
+    }
   }
 
   @override
@@ -224,6 +263,56 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     // SQLite affiché juste avant. Le polling timer (2 s) retentera.
   }
 
+  Future<void> _reloadLocalDocuments({bool warmBinaryCache = false}) async {
+    final docs = await _dataService.fetchDocuments(_patientId);
+    if (!mounted) return;
+    _applyDocumentsSnapshot(docs);
+    if (warmBinaryCache) _warmDocumentBinaryCache(docs);
+  }
+
+  Future<void> _refreshSingleDocument(
+    String documentId, {
+    bool warmBinaryCache = false,
+  }) async {
+    final docs = await _dataService.fetchDocuments(_patientId);
+    if (!mounted) return;
+
+    DocItem? updated;
+    for (final doc in docs) {
+      if (doc.id == documentId) {
+        updated = doc;
+        break;
+      }
+    }
+
+    if (updated == null) {
+      _applyDocumentsSnapshot(docs);
+      return;
+    }
+
+    setState(() {
+      final index = _documents.indexWhere((doc) => doc.id == documentId);
+      if (index < 0) {
+        _documents = docs;
+      } else {
+        final next = [..._documents];
+        next[index] = updated!;
+        _documents = next;
+      }
+    });
+
+    if (warmBinaryCache) _warmDocumentBinaryCache([updated]);
+  }
+
+  void _applyDocumentsSnapshot(List<DocItem> docs) {
+    final visibleIds = docs.map((doc) => doc.id).toSet();
+    setState(() {
+      _documents = docs;
+      _selectedIds.removeWhere((id) => !visibleIds.contains(id));
+      if (_selectedIds.isEmpty) _isSelectionMode = false;
+    });
+  }
+
   /// Pré-télécharge les bytes de TOUS les documents listés (images
   /// + PDFs) via le cache SQLite `web_media_cache` (web) ou le cache
   /// filesystem (native). Sans ça, chaque vignette ferait son propre
@@ -248,7 +337,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
       // On ne précharge que les docs dont l'image / PDF est sur NocoDB
       // (URL publique signed) — les uploads en cours (dataUrl en local)
       // n'ont pas besoin de fetch.
-      final url = doc.url?.trim() ?? '';
+      final url = documentPreviewUrl(doc);
       if (url.isEmpty) continue;
       // Limite aux types qu'on affiche en preview (image / pdf).
       if (doc.type != 'image' && doc.type != 'pdf') continue;
@@ -601,7 +690,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     );
     if (confirmed != true || !mounted) return;
     await _documentRepository.deleteDocument(doc.id);
-    await _loadDocuments(silent: true, refreshRemote: false);
+    await _refreshSingleDocument(doc.id);
     if (mounted) _showSnack('Document supprimé.');
   }
 
@@ -648,7 +737,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
           );
         },
         pageBuilder: (ctx, _, _) {
-          return _PreviewScreen(
+          return DocumentPreview(
             doc: doc,
             onDelete: () async {
               final nav = Navigator.of(ctx);
@@ -662,7 +751,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
                 title: newTitle,
                 tags: doc.tags,
               );
-              await _loadDocuments(silent: true, refreshRemote: false);
+              await _refreshSingleDocument(doc.id);
               if (mounted) _showSnack('Document mis à jour.');
             },
           );
@@ -679,7 +768,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     // version. On évite volontairement un pull distant ici pour ne pas faire
     // recharger tout l'espace document après chaque save.
     if (mounted) {
-      await _loadDocuments(silent: true, refreshRemote: false);
+      await _refreshSingleDocument(doc.id);
     }
   }
 
@@ -724,6 +813,12 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   /// Copie le fichier local du document vers un emplacement choisi par
   /// l'utilisateur (Files app, Téléchargements…) via file_picker.
   Future<void> _downloadDocument(DocItem doc) async {
+    try {
+      doc = await _documentRepository.fetchDocument(doc.id) ?? doc;
+    } catch (err) {
+      _showError('Lecture du document impossible : $err');
+      return;
+    }
     final fileName = _publicFileNameFor(doc);
     final mime = _mimeTypeFor(doc);
 
@@ -780,6 +875,30 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   ///   3. `doc.url` distante → cache auth-aware web ou natif.
   ///   4. null si rien ne marche (déclenche le snack d'erreur côté caller).
   Future<Uint8List?> _resolveDocumentBytes(DocItem doc) async {
+    if (kIsWeb &&
+        _mimeTypeFor(doc) == 'application/pdf' &&
+        hasLocalPdfOverlays(doc.annotationsJson)) {
+      final source = await _resolveRawDocumentBytes(doc);
+      if (source == null) throw StateError('PDF source indisponible');
+      return exportWebPdf(
+        source: source,
+        pages: decodeWebPdfOverlays(doc.annotationsJson),
+      );
+    }
+    if (_mimeTypeFor(doc) == 'application/pdf' &&
+        (hasLocalPdfOverlays(doc.annotationsJson) ||
+            (PdfInkService.instance.supported &&
+                await PdfInkService.instance.hasLegacySidecars(
+                  doc.localPath ?? '',
+                )))) {
+      throw StateError(
+        'Ce PDF contient des annotations locales non integrees : partage interrompu.',
+      );
+    }
+    return _resolveRawDocumentBytes(doc);
+  }
+
+  Future<Uint8List?> _resolveRawDocumentBytes(DocItem doc) async {
     final dataUrl = doc.dataUrl;
     if (dataUrl != null && dataUrl.isNotEmpty) {
       final comma = dataUrl.indexOf(',');
@@ -800,8 +919,8 @@ class _DocumentsScreenState extends State<DocumentsScreen>
         }
       }
     }
-    final url = doc.url;
-    if (url != null && url.isNotEmpty) {
+    final url = documentPreviewUrl(doc);
+    if (url.isNotEmpty) {
       if (kIsWeb) {
         return MediaCacheService.instance.webCachedFetch(
           url,
@@ -821,6 +940,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
 
   Future<void> _shareDocument(DocItem doc) async {
     try {
+      doc = await _documentRepository.fetchDocument(doc.id) ?? doc;
       final fileName = _publicFileNameFor(doc);
       final mime = _mimeTypeFor(doc);
       final bytes = await _resolveDocumentBytes(doc);
@@ -866,10 +986,13 @@ class _DocumentsScreenState extends State<DocumentsScreen>
         tags: doc.tags,
         title: '${doc.title} - copie',
       );
-      await _documentRepository.copyDocumentAnnotations(
-        sourceDocumentId: doc.id,
-        targetDocumentId: duplicate.id,
-      );
+      // Web PDF export already includes the local overlays in its bytes.
+      if (!(kIsWeb && _mimeTypeFor(doc) == 'application/pdf')) {
+        await _documentRepository.copyDocumentAnnotations(
+          sourceDocumentId: doc.id,
+          targetDocumentId: duplicate.id,
+        );
+      }
       await _loadDocuments(silent: true, refreshRemote: false);
       if (mounted) _showSnack('Document dupliqué.');
     } catch (err) {
@@ -1033,10 +1156,12 @@ class _DocumentsScreenState extends State<DocumentsScreen>
           tags: doc.tags,
           title: '${doc.title} - copie',
         );
-        await _documentRepository.copyDocumentAnnotations(
-          sourceDocumentId: doc.id,
-          targetDocumentId: duplicate.id,
-        );
+        if (!(kIsWeb && _mimeTypeFor(doc) == 'application/pdf')) {
+          await _documentRepository.copyDocumentAnnotations(
+            sourceDocumentId: doc.id,
+            targetDocumentId: duplicate.id,
+          );
+        }
         duplicated++;
       }
       if (!mounted) return;
@@ -1120,7 +1245,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
       title: trimmed,
       tags: doc.tags,
     );
-    await _loadDocuments(silent: true, refreshRemote: false);
+    await _refreshSingleDocument(doc.id);
     if (mounted) _showSnack('Document renommé.');
   }
 
@@ -1783,6 +1908,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _documentChangeSubscription?.cancel();
+    _syncEngineSubscription?.cancel();
     _keyboardFocus.dispose();
     super.dispose();
   }
@@ -2411,13 +2537,16 @@ class _UploadModalState extends State<_UploadModal> {
 //   * Le téléchargement aplatit l'annotation sur l'image (flat PNG)
 // ---------------------------------------------------------------------------
 
-class _PreviewScreen extends StatefulWidget {
+class DocumentPreview extends StatefulWidget {
   final DocItem doc;
+  final DocumentRepository? repository;
   final VoidCallback onDelete;
   final Future<void> Function(String newTitle) onSave;
   final VoidCallback onDownload;
 
-  const _PreviewScreen({
+  const DocumentPreview({
+    super.key,
+    this.repository,
     required this.doc,
     required this.onDelete,
     required this.onSave,
@@ -2425,13 +2554,17 @@ class _PreviewScreen extends StatefulWidget {
   });
 
   @override
-  State<_PreviewScreen> createState() => _PreviewScreenState();
+  State<DocumentPreview> createState() => _PreviewScreenState();
 }
 
-class _PreviewScreenState extends State<_PreviewScreen> {
+class _PreviewScreenState extends State<DocumentPreview> {
+  late DocItem _contentBaseline = widget.doc;
+  late final DocumentRepository _repository =
+      widget.repository ?? DocumentRepository();
   late TextEditingController _titleCtrl;
   late FocusNode _titleFocus;
   bool _saving = false;
+  bool _closePromptOpen = false;
   PdfControllerPinch? _pdfController;
   final GlobalKey<_ImageAnnotatorState> _annotatorKey =
       GlobalKey<_ImageAnnotatorState>();
@@ -2439,10 +2572,8 @@ class _PreviewScreenState extends State<_PreviewScreen> {
   // pages annotées en une fois (mode PDF multi-pages).
   final GlobalKey<_PdfAnnotatorWrapperState> _pdfWrapperKey =
       GlobalKey<_PdfAnnotatorWrapperState>();
-  // Clé du wrapper PDF web — symétrique de `_pdfWrapperKey` pour le
-  // path PWA. Permet à `_handleSave` d'appeler `saveAll(documentId)`
-  // qui persiste l'aplat de chaque page modifiée dans
-  // `documents.annotations_json` (sans toucher au PDF original).
+  // Web saves publish a complete PDF; old local overlays are migrated
+  // only after the replacement and its upload intent have committed.
   final GlobalKey<_WebPdfAnnotatorWrapperState> _webPdfWrapperKey =
       GlobalKey<_WebPdfAnnotatorWrapperState>();
 
@@ -2511,8 +2642,14 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     super.dispose();
   }
 
-  Future<void> _handleSave() async {
-    if (!_hasAnyUnsaved || _saving) return;
+  Future<bool> _handleSave() async {
+    if (_saving) return false;
+    if (!_hasAnyUnsaved &&
+        _pdfWrapperKey.currentState?.hasLegacyInk != true &&
+        _webPdfWrapperKey.currentState?.hasLegacyOverlays != true) {
+      return true;
+    }
+    _titleFocus.unfocus();
     setState(() => _saving = true);
     try {
       if (_hasUnsavedTitle) {
@@ -2522,25 +2659,90 @@ class _PreviewScreenState extends State<_PreviewScreen> {
         // prompt unsaved-changes restent actifs après un save réussi.
         _savedTitle = newTitle;
       }
-      if (_hasUnsavedAnnotation) {
+      final nativePdf = _pdfWrapperKey.currentState;
+      final webPdf = _webPdfWrapperKey.currentState;
+      if (webPdf != null &&
+          (_hasUnsavedAnnotation ||
+              _hasUnsavedRotation ||
+              webPdf.hasLegacyOverlays)) {
+        final expected = await _repository.fetchDocument(widget.doc.id);
+        if (expected == null ||
+            !samePdfEditingRevision(_contentBaseline, expected) ||
+            expected.annotationsJson != _contentBaseline.annotationsJson) {
+          throw StateError(
+            'Une autre version du PDF est disponible. Vos modifications restent ouvertes.',
+          );
+        }
+        await webPdf.savePdfDocument(
+          quarterTurns: _rotationQuarterTurns,
+          publish: (bytes) async {
+            _contentBaseline = await _repository.enqueueReplacementBytes(
+              documentId: widget.doc.id,
+              bytes: bytes,
+              fileName: publicDocumentFileName(
+                storedName: widget.doc.name,
+                title: _savedTitle,
+                mimeType: 'application/pdf',
+              ),
+              mimeType: 'application/pdf',
+              preservePdfSidecars: false,
+              expectedDocument: expected,
+            );
+          },
+        );
+        _savedRotationQuarterTurns = _rotationQuarterTurns;
+      }
+      if (nativePdf?.hasLegacyInk == true && nativePdf?.canSaveInk != true) {
+        throw StateError(
+          'PDF indisponible : annotations conservees sans modification.',
+        );
+      }
+      if (nativePdf?.canSaveInk == true &&
+          (_hasUnsavedAnnotation ||
+              _hasUnsavedRotation ||
+              nativePdf!.hasLegacyInk)) {
+        final expected = await _repository.fetchDocument(widget.doc.id);
+        if (hasLocalPdfOverlays(expected?.annotationsJson)) {
+          throw StateError(
+            'Ce PDF contient des annotations web historiques : conversion necessaire. Original conserve.',
+          );
+        }
+        if (expected == null ||
+            !samePdfEditingRevision(_contentBaseline, expected)) {
+          throw StateError(
+            'Une autre version du PDF est disponible. Vos traits restent ouverts.',
+          );
+        }
+        await nativePdf!.savePdfDocument(
+          quarterTurns: _rotationQuarterTurns,
+          publish: (path) async {
+            _contentBaseline = await _repository.enqueueReplacementFile(
+              documentId: widget.doc.id,
+              sourceFile: File(path),
+              fileName: publicDocumentFileName(
+                storedName: widget.doc.name,
+                title: _savedTitle,
+                mimeType: 'application/pdf',
+              ),
+              mimeType: 'application/pdf',
+              preservePdfSidecars: false,
+              expectedDocument: expected,
+            );
+          },
+        );
+        _savedRotationQuarterTurns = _rotationQuarterTurns;
+      } else if (_hasUnsavedAnnotation && webPdf == null) {
         final pdfWrapper = _pdfWrapperKey.currentState;
-        final webPdfWrapper = _webPdfWrapperKey.currentState;
         if (pdfWrapper != null) {
           // Mode PDF natif : persiste les traits page par page à côté du
           // PDF. Le fichier PDF original reste intact et multipage.
-          await pdfWrapper.saveAll();
-        } else if (webPdfWrapper != null) {
-          // Mode PDF WEB : aplatit chaque page modifiée et la stocke
-          // dans `documents.annotations_json` (Map<page, dataUrl>) —
-          // sans toucher au PDF original. Préserve la navigation
-          // multi-pages après save (demande utilisateur 2026-04-28 :
-          // "il doit toujours être possible de naviguer sur les pages
-          // du pdf même s'il y a un écrit dessus").
-          await webPdfWrapper.saveAll(documentId: widget.doc.id);
+          final current = await _repository.fetchDocument(widget.doc.id);
+          await pdfWrapper.saveAll(mirrorPdfPath: current?.localPath);
         } else {
           // Image simple (jpg/png) : aplat unique sans notion de page.
-          await _annotatorKey.currentState?.saveAnnotation();
           await _reuploadFlattenedImage();
+          _savedRotationQuarterTurns = _rotationQuarterTurns;
+          await _annotatorKey.currentState?.saveAnnotation();
         }
       }
       if (_hasUnsavedRotation) {
@@ -2548,12 +2750,14 @@ class _PreviewScreenState extends State<_PreviewScreen> {
         _savedRotationQuarterTurns = _rotationQuarterTurns;
       }
       if (mounted) setState(() {});
+      return !_hasAnyUnsaved;
     } catch (err) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(_saveErrorMessage(err))));
       }
+      return false;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -2562,12 +2766,14 @@ class _PreviewScreenState extends State<_PreviewScreen> {
   String _saveErrorMessage(Object error) {
     if (error is FileSystemException) {
       return 'Enregistrement impossible dans le stockage local. '
-          'Fermez le document puis réessayez.';
+          'Vos modifications restent ouvertes. Réessayez après avoir '
+          'vérifié l’espace disponible.';
     }
     return 'Enregistrement impossible : $error';
   }
 
   void _rotateClockwise() {
+    if (_saving) return;
     setState(() {
       // Conserver une valeur croissante évite que l'animation reparte en sens
       // inverse lors du passage du quatrième quart de tour au suivant.
@@ -2585,7 +2791,7 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     if (!kIsWeb && path.isNotEmpty && await File(path).exists()) {
       return File(path).readAsBytes();
     }
-    final url = widget.doc.url?.trim() ?? '';
+    final url = documentPreviewUrl(widget.doc);
     if (url.isEmpty) return null;
     if (kIsWeb) {
       return MediaCacheService.instance.webCachedFetch(
@@ -2601,8 +2807,10 @@ class _PreviewScreenState extends State<_PreviewScreen> {
   }
 
   Future<void> _saveRotation() async {
-    final delta = _pendingRotationQuarterTurns;
-    if (delta == 0) return;
+    if (!_hasUnsavedRotation) return;
+    // The preview retains its opening revision. Every save is therefore
+    // relative to that source, not to the last persisted rotation.
+    final delta = _rotationQuarterTurns % 4;
 
     if (_looksLikePdf()) {
       final fileName = publicDocumentFileName(
@@ -2625,7 +2833,7 @@ class _PreviewScreenState extends State<_PreviewScreen> {
             await File(previewPath).exists()) {
           nativeSourcePath = previewPath;
         }
-        final remoteUrl = widget.doc.url?.trim() ?? '';
+        final remoteUrl = documentPreviewUrl(widget.doc);
         if (nativeSourcePath.isEmpty && remoteUrl.isNotEmpty) {
           final cached = await MediaCacheService.instance.fetch(
             remoteUrl,
@@ -2638,19 +2846,23 @@ class _PreviewScreenState extends State<_PreviewScreen> {
       }
 
       if (nativeSourcePath.isNotEmpty) {
-        final rotatedPath = await rotationService.rotatePdfFile(
-          sourcePath: nativeSourcePath,
-          quarterTurns: delta,
-        );
+        final rotatedPath = delta == 0
+            ? nativeSourcePath
+            : await rotationService.rotatePdfFile(
+                sourcePath: nativeSourcePath,
+                quarterTurns: delta,
+              );
         if (rotatedPath != null) {
           final rotatedFile = File(rotatedPath);
           try {
             if (await rotatedFile.exists()) {
-              await DocumentRepository().enqueueReplacementFile(
+              _contentBaseline = await _repository.enqueueReplacementFile(
                 documentId: widget.doc.id,
                 sourceFile: rotatedFile,
                 fileName: fileName,
                 mimeType: 'application/pdf',
+                annotationSourcePath: _pdfWrapperKey.currentState?.pdfPath,
+                expectedDocument: _contentBaseline,
               );
               return;
             }
@@ -2674,12 +2886,14 @@ class _PreviewScreenState extends State<_PreviewScreen> {
       if (source == null || source.isEmpty) {
         throw StateError('fichier indisponible');
       }
-      final rotated = await _rotatePdf(source, delta);
-      await DocumentRepository().enqueueReplacementBytes(
+      final rotated = delta == 0 ? source : await _rotatePdf(source, delta);
+      _contentBaseline = await _repository.enqueueReplacementBytes(
         documentId: widget.doc.id,
         bytes: rotated,
         fileName: fileName,
         mimeType: 'application/pdf',
+        annotationSourcePath: _pdfWrapperKey.currentState?.pdfPath,
+        expectedDocument: _contentBaseline,
       );
       return;
     }
@@ -2693,10 +2907,7 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     if (annotator != null) {
       imageSource = await annotator.exportFlatPng() ?? source;
     }
-    final decoded = img.decodeImage(imageSource);
-    if (decoded == null) throw StateError('format image non reconnu');
-    final rotated = img.copyRotate(decoded, angle: delta * 90);
-    final bytes = Uint8List.fromList(img.encodePng(rotated));
+    final bytes = await rotateImageToPng(imageSource, delta);
     final originalName = publicDocumentFileName(
       storedName: widget.doc.name,
       title: widget.doc.title,
@@ -2704,11 +2915,12 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     );
     final dot = originalName.lastIndexOf('.');
     final base = dot > 0 ? originalName.substring(0, dot) : originalName;
-    await DocumentRepository().enqueueReplacementBytes(
+    _contentBaseline = await _repository.enqueueReplacementBytes(
       documentId: widget.doc.id,
       bytes: bytes,
       fileName: '$base.png',
       mimeType: 'image/png',
+      expectedDocument: _contentBaseline,
     );
   }
 
@@ -2764,70 +2976,84 @@ class _PreviewScreenState extends State<_PreviewScreen> {
   /// uniquement — la version serveur affichait le fichier original pristine.
   Future<void> _reuploadFlattenedImage() async {
     final annotator = _annotatorKey.currentState;
-    if (annotator == null) return;
-    try {
-      final bytes = await annotator.exportFlatPng();
-      if (bytes == null) return;
-      // Web : pas de filesystem → on enqueue directement les bytes via
-      // la variante `enqueueAnnotatedReuploadBytes` qui les encode en
-      // data URL côté SQLite et dans le payload de sync.
-      if (kIsWeb) {
-        await DocumentRepository().enqueueAnnotatedReuploadBytes(
-          documentId: widget.doc.id,
-          bytes: bytes,
-        );
-        return;
-      }
-      // Native : on écrit un fichier `.flat.png` à côté de l'original
-      // puis on enqueue par chemin disque (parité avec l'historique).
-      final localPath = widget.doc.localPath;
-      if (localPath == null || localPath.isEmpty) return;
-      final flatPath = '$localPath.flat.png';
-      await NativeFileProtection.instance.writeProtectedBytes(flatPath, bytes);
-      await DocumentRepository().enqueueAnnotatedReupload(
-        documentId: widget.doc.id,
-        flattenedPath: flatPath,
-      );
-    } catch (_) {
-      // Pas bloquant : l'annotation JSON est sauvée localement, le
-      // re-upload pourra être retenté au prochain Save.
+    if (annotator == null) throw StateError('annotations indisponibles');
+    var bytes = await annotator.exportFlatPng();
+    if (bytes == null) throw StateError('export des annotations impossible');
+    if (_rotationQuarterTurns % 4 != 0) {
+      bytes = await rotateImageToPng(bytes, _rotationQuarterTurns);
     }
+    _contentBaseline = await _repository.enqueueAnnotatedReuploadBytes(
+      documentId: widget.doc.id,
+      bytes: bytes,
+      expectedDocument: _contentBaseline,
+    );
   }
 
   Future<void> _handleClose() async {
+    if (_saving || _closePromptOpen) return;
     if (!_hasAnyUnsaved) {
       Navigator.pop(context);
       return;
     }
-    final choice = await showAppConfirmationDialog<_UnsavedChoice>(
-      context: context,
-      title: 'Modifications non enregistrées',
-      message: 'Vous avez des annotations en cours. Que souhaitez-vous faire ?',
-      tone: AppConfirmationTone.warning,
-      showCloseButton: true,
-      closeValue: _UnsavedChoice.cancel,
-      actions: const [
-        AppConfirmationAction(
-          label: 'Quitter sans enregistrer',
-          value: _UnsavedChoice.discard,
-          isDestructive: true,
-        ),
-        AppConfirmationAction(
-          label: 'Enregistrer',
-          value: _UnsavedChoice.save,
-          icon: LucideIcons.save,
-          isPrimary: true,
-        ),
-      ],
-    );
-    if (!mounted || choice == null || choice == _UnsavedChoice.cancel) return;
-    if (choice == _UnsavedChoice.save) {
-      await _handleSave();
+    _closePromptOpen = true;
+    try {
+      final choice = await showAppConfirmationDialog<_UnsavedChoice>(
+        context: context,
+        title: 'Modifications non enregistrées',
+        message: 'Des modifications sont en cours. Que souhaitez-vous faire ?',
+        tone: AppConfirmationTone.warning,
+        showCloseButton: true,
+        closeValue: _UnsavedChoice.cancel,
+        actions: const [
+          AppConfirmationAction(
+            label: 'Quitter sans enregistrer',
+            value: _UnsavedChoice.discard,
+            isDestructive: true,
+          ),
+          AppConfirmationAction(
+            label: 'Enregistrer',
+            value: _UnsavedChoice.save,
+            icon: LucideIcons.save,
+            isPrimary: true,
+          ),
+        ],
+      );
+      if (!mounted || choice == null || choice == _UnsavedChoice.cancel) return;
+      if (choice == _UnsavedChoice.save && !await _handleSave()) return;
+      if (mounted) Navigator.pop(context);
+    } finally {
+      _closePromptOpen = false;
     }
-    if (mounted) Navigator.pop(context);
   }
 
   Future<void> _handleDownloadWithAnnotation() async {
+    final webPdf = _webPdfWrapperKey.currentState;
+    if (webPdf != null && (_hasAnyUnsaved || webPdf.hasLegacyOverlays)) {
+      if (await _handleSave()) widget.onDownload();
+      return;
+    }
+    if (_looksLikePdf() &&
+        !PdfInkService.instance.supported &&
+        _hasUnsavedAnnotation) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Les annotations PDF ne sont pas encore integrees au fichier : telechargement interrompu.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (_looksLikePdf() &&
+        PdfInkService.instance.supported &&
+        (_hasAnyUnsaved || _pdfWrapperKey.currentState?.hasLegacyInk == true)) {
+      if (await _handleSave()) widget.onDownload();
+      return;
+    }
+    if (!_hasAnyUnsaved) {
+      widget.onDownload();
+      return;
+    }
     // For images with annotations : flatten the drawing on the image and let
     // the user save the merged PNG. For other types, delegate to the normal
     // download path.
@@ -2874,7 +3100,7 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     final maxHeight = (screenSize.height * 0.85).clamp(420.0, 900.0);
 
     return PopScope(
-      canPop: !_hasAnyUnsaved,
+      canPop: !_saving && !_hasAnyUnsaved,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         _handleClose();
@@ -2916,7 +3142,12 @@ class _PreviewScreenState extends State<_PreviewScreen> {
                   child: Column(
                     children: [
                       _buildToolbar(),
-                      Expanded(child: _buildPreviewBody()),
+                      Expanded(
+                        child: AbsorbPointer(
+                          absorbing: _saving,
+                          child: _buildPreviewBody(),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -2943,22 +3174,31 @@ class _PreviewScreenState extends State<_PreviewScreen> {
             child: Row(
               children: [
                 Flexible(
-                  child: TextField(
-                    controller: _titleCtrl,
-                    focusNode: _titleFocus,
-                    maxLines: 1,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                  child: ExcludeFocus(
+                    excluding: _saving,
+                    child: AbsorbPointer(
+                      absorbing: _saving,
+                      child: TextField(
+                        controller: _titleCtrl,
+                        focusNode: _titleFocus,
+                        // Flutter web can update readOnly after its DOM input
+                        // has been detached. Focus/pointer guards lock it there.
+                        readOnly: _saving && !kIsWeb,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        cursorColor: kBrandPurple,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(vertical: 6),
+                          border: InputBorder.none,
+                        ),
+                        onSubmitted: (_) => _handleSave(),
+                      ),
                     ),
-                    cursorColor: kBrandPurple,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      contentPadding: EdgeInsets.symmetric(vertical: 6),
-                      border: InputBorder.none,
-                    ),
-                    onSubmitted: (_) => _handleSave(),
                   ),
                 ),
                 if (_hasAnyUnsaved) ...[
@@ -2989,17 +3229,22 @@ class _PreviewScreenState extends State<_PreviewScreen> {
           _TopbarButton(
             icon: Icons.rotate_90_degrees_cw_rounded,
             tooltip: 'Pivoter le document de 90°',
-            onPressed: _rotateClockwise,
+            onPressed: _saving ? null : _rotateClockwise,
           ),
           const SizedBox(width: 4),
           _TopbarButton(
             icon: LucideIcons.download,
             tooltip: 'Télécharger',
-            onPressed: _handleDownloadWithAnnotation,
+            onPressed: _saving ? null : _handleDownloadWithAnnotation,
           ),
           const SizedBox(width: 4),
           _SaveButton(
-            enabled: _hasAnyUnsaved && !_saving,
+            enabled:
+                (_hasAnyUnsaved ||
+                    _pdfWrapperKey.currentState?.hasLegacyInk == true ||
+                    _webPdfWrapperKey.currentState?.hasLegacyOverlays ==
+                        true) &&
+                !_saving,
             saving: _saving,
             onPressed: _handleSave,
           ),
@@ -3008,13 +3253,13 @@ class _PreviewScreenState extends State<_PreviewScreen> {
             icon: LucideIcons.trash2,
             tooltip: 'Supprimer',
             color: Colors.red.shade300,
-            onPressed: widget.onDelete,
+            onPressed: _saving ? null : widget.onDelete,
           ),
           const SizedBox(width: 4),
           _TopbarButton(
             icon: LucideIcons.x,
             tooltip: 'Fermer',
-            onPressed: _handleClose,
+            onPressed: _saving ? null : _handleClose,
           ),
         ],
       ),
@@ -3096,7 +3341,7 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     // natif, bytes sur web), puis on active l'annotation dessus.
     if (isImage && doc.url != null && doc.url!.isNotEmpty) {
       return _RemoteImageAnnotatorWrapper(
-        url: doc.url!,
+        url: documentPreviewUrl(doc),
         annotatorKey: _annotatorKey,
         rotationQuarterTurns: _rotationQuarterTurns,
         onChanged: () => setState(() {}),
@@ -3234,7 +3479,8 @@ class _PreviewScreenState extends State<_PreviewScreen> {
       return InteractiveViewer(
         child: Center(
           child: RemoteImage(
-            url: doc.url!,
+            url: documentPreviewUrl(doc),
+            cacheKey: documentVisualCacheKey(doc),
             fit: BoxFit.contain,
             fallback: const Center(
               child: Icon(
@@ -3308,7 +3554,7 @@ class _TopbarButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
   final Color? color;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   const _TopbarButton({
     required this.icon,
@@ -3348,14 +3594,9 @@ class _TopbarButton extends StatelessWidget {
 /// `DocumentRepository.enqueueAnnotatedReuploadBytes` — déclenché depuis
 /// le bouton Save du `_PreviewScreen` via `exportFlatPng()`.
 ///
-/// Sauvegarde par page : à chaque appel de `saveAll(documentId:)`, on
-/// aplatit chaque page modifiée (PDF page + traits) en PNG et on
-/// l'écrit dans `documents.annotations_json` (map page -> dataUrl) via
-/// `DocumentRepository.enqueueAnnotatedPageBytes`. Le PDF original
-/// reste intact — la preview affiche l'overlay PNG sur les pages qui
-/// ont une entrée dans la map, sinon rendu PDF brut. Conséquence :
-/// la navigation multi-pages reste fonctionnelle après save, et les
-/// annotations restent localisées à la page où elles ont été dessinées.
+/// Les nouveaux traits web sont exportes en calque transparent et integres
+/// au PDF original dans un worker. Les anciens aplats locaux sont repris
+/// avec toutes leurs pages. Seul le commit du PDF complet acquitte le save.
 class _WebPdfAnnotatorWrapper extends StatefulWidget {
   const _WebPdfAnnotatorWrapper({
     required this.doc,
@@ -3376,6 +3617,12 @@ class _WebPdfAnnotatorWrapper extends StatefulWidget {
 
 class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
   PdfDocument? _doc;
+  Uint8List? _sourceBytes;
+  Uint8List? _currentOverlay;
+  final _legacyPages = <int>{};
+  final _pageAspects = <int, double>{};
+  bool hasLegacyOverlays = false;
+  bool _changingPage = false;
   int _currentPage = 1;
   int _totalPages = 1;
   Uint8List? _currentImage;
@@ -3390,11 +3637,10 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
   /// (1-indexé), valeur = bytes PNG aplati. Hydraté au boot depuis
   /// `widget.doc.annotationsJson` puis mis à jour quand l'ergo
   /// change de page (capture des strokes courants en aplat). Persisté
-  /// sur disque uniquement quand `saveAll(documentId:)` est appelé.
+  /// integres au PDF uniquement lors de son enregistrement explicite.
   final Map<int, Uint8List> _flatPagesByPage = {};
 
-  /// Pages dont l'aplat a changé depuis le dernier save — flushées
-  /// vers SQLite en bloc dans `saveAll`.
+  /// Pages modifiees depuis la derniere publication complete du PDF.
   final Set<int> _dirtyPages = {};
 
   /// True dès qu'une page a un dirty pending, OU si le live annotator
@@ -3409,34 +3655,27 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
   @override
   void initState() {
     super.initState();
-    _hydrateAnnotationsMap();
-    _open();
+    try {
+      _hydrateAnnotationsMap();
+      // Warm the worker while online; subsequent saves need no server/CDN.
+      unawaited(prepareWebPdfExport().catchError((Object _) {}));
+      _open();
+    } catch (error) {
+      _loading = false;
+      _error = 'Annotations illisibles : original conserve. $error';
+    }
   }
 
   /// Décode la map persistée dans `documents.annotations_json` pour
   /// repeupler [_flatPagesByPage] avec les bytes des pages déjà
   /// annotées (visibles dès le 1er affichage de la page).
   void _hydrateAnnotationsMap() {
-    final raw = widget.doc.annotationsJson;
-    if (raw == null || raw.isEmpty) return;
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return;
-      decoded.forEach((key, value) {
-        final page = int.tryParse(key.toString());
-        final dataUrl = value?.toString() ?? '';
-        if (page == null || page < 1) return;
-        if (!dataUrl.startsWith('data:')) return;
-        final comma = dataUrl.indexOf(',');
-        if (comma <= 0) return;
-        try {
-          _flatPagesByPage[page] = base64Decode(dataUrl.substring(comma + 1));
-        } catch (_) {}
-      });
-    } catch (_) {
-      // JSON corrompu — on repart d'une map vide. L'ergo perdra ses
-      // anciennes annotations mais c'était déjà cassé.
+    final pages = decodeWebPdfOverlays(widget.doc.annotationsJson);
+    for (final entry in pages.entries) {
+      _flatPagesByPage[entry.key] = entry.value.bytes;
+      _legacyPages.add(entry.key);
     }
+    hasLegacyOverlays = pages.isNotEmpty;
   }
 
   @override
@@ -3447,7 +3686,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
   }
 
   Future<void> _open() async {
-    final url = widget.doc.url;
+    final url = documentPreviewUrl(widget.doc);
     final dataUrl = widget.doc.dataUrl;
 
     Uint8List? bytes;
@@ -3493,13 +3732,20 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
       }
       lastBytesLookedLikePdf = true;
       try {
-        final doc = await PdfDocument.openData(data);
+        // PDF.js may transfer its buffer to its worker. Keep the opening
+        // source intact for repeated exports and offline retries.
+        final doc = await PdfDocument.openData(Uint8List.fromList(data));
         if (!mounted) {
           // ignore: discarded_futures
           doc.close();
           return true;
         }
+        if (_flatPagesByPage.keys.any((page) => page > doc.pagesCount)) {
+          await doc.close();
+          throw StateError('Annotation rattachee a une page absente');
+        }
         _doc = doc;
+        _sourceBytes = data;
         _totalPages = doc.pagesCount;
         await _renderCurrent();
         return true;
@@ -3512,7 +3758,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     if (await tryOpenBytes(bytes)) return;
 
     // Cache miss / data URL absente / bytes invalides → fetch via cache.
-    if (url != null && url.isNotEmpty) {
+    if (url.isNotEmpty) {
       bytes = await MediaCacheService.instance.webCachedFetch(
         url,
         headers: MediaCacheService.authHeaders(),
@@ -3559,9 +3805,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     });
   }
 
-  /// Rend la page courante. Si la page a une annotation déjà sauvée
-  /// dans [_flatPagesByPage], on l'utilise directement (l'utilisateur
-  /// retrouve ses traits) — sinon on rasterise le PDF brut.
+  /// Rend le PDF original et prepare son calque local separement.
   Future<void> _renderCurrent() async {
     final doc = _doc;
     if (doc == null) return;
@@ -3572,38 +3816,38 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
       _currentImage = null;
     });
 
-    // 1. Si la page courante a un aplat sauvegardé → on l'affiche
-    //    directement. L'_ImageAnnotator partira d'un canvas vierge
-    //    par-dessus (les strokes ont été baked dans l'aplat).
-    final cachedFlat = _flatPagesByPage[pageNumber];
-    if (cachedFlat != null) {
-      if (!mounted || ticket != _renderTicket || pageNumber != _currentPage) {
-        return;
-      }
-      setState(() {
-        _currentImage = cachedFlat;
-        _loading = false;
-      });
-      return;
-    }
-
+    PdfPage? page;
     try {
-      final page = await doc.getPage(pageNumber);
+      page = await doc.getPage(pageNumber);
+      _pageAspects[pageNumber] = page.width / page.height;
+      var cachedFlat = _flatPagesByPage[pageNumber];
+      if (cachedFlat != null) {
+        if (_legacyPages.contains(pageNumber)) {
+          cachedFlat = await normalizeLegacyWebPdfPage(
+            cachedFlat,
+            _pageAspects[pageNumber]!,
+          );
+          _flatPagesByPage[pageNumber] = cachedFlat;
+          _legacyPages.remove(pageNumber);
+        }
+      }
       // Render à 2x la taille naturelle pour un peu de netteté sur les
       // écrans Retina sans exploser la mémoire.
+      final scale = math.min(2.0, 4096 / math.max(page.width, page.height));
       final raster = await page.render(
-        width: page.width * 2,
-        height: page.height * 2,
+        width: page.width * scale,
+        height: page.height * scale,
         format: PdfPageImageFormat.png,
       );
-      await page.close();
       if (!mounted || ticket != _renderTicket || pageNumber != _currentPage) {
         return;
       }
       setState(() {
         _currentImage = raster?.bytes;
+        _currentOverlay = _flatPagesByPage[pageNumber];
         _loading = false;
       });
+      widget.onChanged();
     } catch (e) {
       if (!mounted || ticket != _renderTicket || pageNumber != _currentPage) {
         return;
@@ -3612,79 +3856,92 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
         _loading = false;
         _error = 'Rendu page $pageNumber impossible : $e';
       });
+    } finally {
+      await page?.close();
     }
   }
 
   /// Capture les strokes courants en aplat PNG et les stocke en
   /// mémoire pour la page courante. Marque la page dirty si l'aplat
   /// a changé. Appelé avant chaque navigation et avant chaque save.
-  Future<void> _captureCurrentPageFlat() async {
+  Future<bool> _captureCurrentPageFlat({bool throwOnFailure = false}) async {
     final live = _liveAnnotatorKey.currentState;
-    if (live == null) return;
-    if (!live.hasUnsavedChanges) return;
+    if (live == null || !live.hasUnsavedChanges) return true;
     try {
-      final flat = await live.exportFlatPng();
-      if (flat == null) return;
+      final flat = await live.exportPdfOverlayPng();
+      if (flat == null) throw StateError('export des annotations impossible');
       _flatPagesByPage[_currentPage] = flat;
       _dirtyPages.add(_currentPage);
+      return true;
     } catch (_) {
-      // Silent — l'ergo réessayera au save.
+      if (throwOnFailure) rethrow;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Impossible de conserver les annotations. '
+              'La page reste ouverte, réessayez.',
+            ),
+          ),
+        );
+      }
+      return false;
     }
   }
 
-  /// Persiste tous les aplats de pages modifiées dans
-  /// `documents.annotations_json` via `enqueueAnnotatedPageBytes`. Ne
-  /// touche PAS au PDF original (qui reste navigable). Appelé par
-  /// `_PreviewScreen._handleSave`.
-  Future<void> saveAll({required String documentId}) async {
-    // 1. Capture la page courante depuis l'annotator live.
-    await _captureCurrentPageFlat();
-    // 2. Persiste chaque page dirty.
-    for (final page in _dirtyPages.toList()) {
-      final bytes = _flatPagesByPage[page];
-      if (bytes == null) continue;
-      try {
-        await DocumentRepository().enqueueAnnotatedPageBytes(
-          documentId: documentId,
-          pageNumber: page,
-          bytes: bytes,
-        );
-      } catch (_) {
-        // Silent — au prochain save l'ergo retentera.
-      }
+  /// Prepare un PDF complet depuis la source d'ouverture, puis publie
+  /// atomiquement sa revision et son intention d'upload.
+  Future<void> savePdfDocument({
+    required int quarterTurns,
+    required Future<void> Function(Uint8List) publish,
+  }) async {
+    if (_sourceBytes == null || _error != null || _loading || _changingPage) {
+      throw StateError('PDF pas encore disponible. Modifications conservees.');
     }
+    await _captureCurrentPageFlat(throwOnFailure: true);
+    final bytes = await exportWebPdf(
+      source: _sourceBytes!,
+      pages: _flatPagesByPage.map(
+        (page, bytes) => MapEntry(
+          page,
+          WebPdfPageSnapshot(
+            bytes,
+            legacyViewport: _legacyPages.contains(page),
+          ),
+        ),
+      ),
+      quarterTurns: quarterTurns,
+    );
+    await publish(bytes);
     _dirtyPages.clear();
+    hasLegacyOverlays = false;
     // Reset le hash du live annotator pour faire disparaître le
     // badge "Modifié" même si on reste sur la même page.
-    _liveAnnotatorKey.currentState?.saveAnnotation();
+    await _liveAnnotatorKey.currentState?.saveAnnotation();
     if (mounted) {
       setState(() {});
       widget.onChanged();
     }
   }
 
-  Future<void> _goPrev() async {
-    if (_currentPage <= 1) return;
-    await _captureCurrentPageFlat();
-    setState(() {
-      _currentPage -= 1;
-      _currentImage = null;
-      _loading = true;
-      _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
-    });
-    await _renderCurrent();
-  }
+  Future<void> _goPrev() => _goToPage(_currentPage - 1);
+  Future<void> _goNext() => _goToPage(_currentPage + 1);
 
-  Future<void> _goNext() async {
-    if (_currentPage >= _totalPages) return;
-    await _captureCurrentPageFlat();
-    setState(() {
-      _currentPage += 1;
-      _currentImage = null;
-      _loading = true;
-      _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
-    });
-    await _renderCurrent();
+  Future<void> _goToPage(int page) async {
+    if (_changingPage || _loading || page < 1 || page > _totalPages) return;
+    setState(() => _changingPage = true);
+    try {
+      if (!await _captureCurrentPageFlat() || !mounted) return;
+      setState(() {
+        _currentPage = page;
+        _currentImage = null;
+        _loading = true;
+        _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
+      });
+      await _renderCurrent();
+    } finally {
+      if (mounted) setState(() => _changingPage = false);
+    }
   }
 
   @override
@@ -3707,21 +3964,26 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     return Column(
       children: [
         Expanded(
-          child: _currentImage == null
-              ? const SizedBox.shrink()
-              : _ImageAnnotator(
-                  key: _liveAnnotatorKey,
-                  imageBytes: _currentImage,
-                  rotationQuarterTurns: widget.rotationQuarterTurns,
-                  onChanged: widget.onChanged,
-                  onPageSwipe: (delta) {
-                    if (delta > 0 && _currentPage < _totalPages) {
-                      unawaited(_goNext());
-                    } else if (delta < 0 && _currentPage > 1) {
-                      unawaited(_goPrev());
-                    }
-                  },
-                ),
+          child: AbsorbPointer(
+            absorbing: _changingPage,
+            child: _currentImage == null
+                ? const SizedBox.shrink()
+                : _ImageAnnotator(
+                    key: _liveAnnotatorKey,
+                    imageBytes: _currentImage,
+                    pdfOverlayBytes: _currentOverlay,
+                    pageAspectRatio: _pageAspects[_currentPage],
+                    rotationQuarterTurns: widget.rotationQuarterTurns,
+                    onChanged: widget.onChanged,
+                    onPageSwipe: (delta) {
+                      if (delta > 0 && _currentPage < _totalPages) {
+                        unawaited(_goNext());
+                      } else if (delta < 0 && _currentPage > 1) {
+                        unawaited(_goPrev());
+                      }
+                    },
+                  ),
+          ),
         ),
         if (_totalPages > 1)
           Container(
@@ -3735,7 +3997,9 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
                     LucideIcons.chevronLeft,
                     color: Colors.white,
                   ),
-                  onPressed: _currentPage > 1 ? _goPrev : null,
+                  onPressed: !_changingPage && !_loading && _currentPage > 1
+                      ? _goPrev
+                      : null,
                   tooltip: 'Page précédente',
                 ),
                 const SizedBox(width: 12),
@@ -3749,7 +4013,10 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
                     LucideIcons.chevronRight,
                     color: Colors.white,
                   ),
-                  onPressed: _currentPage < _totalPages ? _goNext : null,
+                  onPressed:
+                      !_changingPage && !_loading && _currentPage < _totalPages
+                      ? _goNext
+                      : null,
                   tooltip: 'Page suivante',
                 ),
               ],
@@ -3783,6 +4050,7 @@ class _RemotePdfAnnotatorWrapper extends StatefulWidget {
 
 class _RemotePdfAnnotatorWrapperState
     extends State<_RemotePdfAnnotatorWrapper> {
+  int _loadGeneration = 0;
   String? _pdfPath;
   bool _loading = true;
   String? _error;
@@ -3796,8 +4064,8 @@ class _RemotePdfAnnotatorWrapperState
   @override
   void didUpdateWidget(covariant _RemotePdfAnnotatorWrapper oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.doc.id != widget.doc.id ||
-        oldWidget.doc.url != widget.doc.url) {
+    if (documentVisualCacheKey(oldWidget.doc) !=
+        documentVisualCacheKey(widget.doc)) {
       _pdfPath = null;
       _error = null;
       _loading = true;
@@ -3853,7 +4121,9 @@ class _RemotePdfAnnotatorWrapperState
   }
 
   Future<void> _load() async {
-    final url = widget.doc.url?.trim() ?? '';
+    final generation = ++_loadGeneration;
+    final document = widget.doc;
+    final url = documentPreviewUrl(document);
     if (url.isEmpty) {
       if (!mounted) return;
       setState(() {
@@ -3872,14 +4142,14 @@ class _RemotePdfAnnotatorWrapperState
       url,
       headers: MediaCacheService.authHeaders(),
     );
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
 
     if (file == null || !await file.exists()) {
       final diagnosis = await MediaCacheService.instance.diagnose(
         url,
         headers: MediaCacheService.authHeaders(),
       );
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _loading = false;
         _error = _messageForDiagnosis(diagnosis);
@@ -3887,7 +4157,9 @@ class _RemotePdfAnnotatorWrapperState
       return;
     }
 
-    if (!await _looksLikePdfFile(file)) {
+    final validPdf = await _looksLikePdfFile(file);
+    if (!mounted || generation != _loadGeneration) return;
+    if (!validPdf) {
       setState(() {
         _loading = false;
         _error = 'Le fichier reçu ne ressemble pas à un PDF valide.';
@@ -3896,10 +4168,17 @@ class _RemotePdfAnnotatorWrapperState
     }
 
     unawaited(
-      DocumentRepository().storeLocalDocumentPath(
-        documentId: widget.doc.id,
-        localFilePath: file.path,
-      ),
+      DocumentRepository()
+          .storeLocalDocumentPath(
+            expectedDocument: document,
+            localFilePath: file.path,
+          )
+          .catchError((Object error) {
+            debugPrint(
+              '[docs preview] cache binding failed (${error.runtimeType})',
+            );
+            return false;
+          }),
     );
 
     setState(() {
@@ -3988,6 +4267,13 @@ class _PdfAnnotatorWrapper extends StatefulWidget {
 }
 
 class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
+  bool hasLegacyInk = false;
+  final Map<int, List<Map<String, dynamic>>> _embeddedPages = {};
+  final Map<int, double> _pageAspects = {};
+  Size _viewport = Size.zero;
+  Size? _legacyViewport;
+  bool get canSaveInk =>
+      PdfInkService.instance.supported && _doc != null && _error == null;
   PdfDocument? _doc;
   int _currentPage = 1;
   int _totalPages = 1;
@@ -4007,6 +4293,68 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
 
   String get pdfPath => widget.pdfPath;
 
+  Future<void> _ensurePageStrokes(int number) async {
+    if (_memoryStrokesByPage.containsKey(number)) return;
+    var json = _embeddedPages[number];
+    if (json == null) {
+      final legacy = File('${widget.pdfPath}.page$number.png.annotation.json');
+      if (await legacy.exists()) {
+        final raw = (jsonDecode(await legacy.readAsString()) as List)
+            .cast<Map<String, dynamic>>();
+        json = migrateLegacyPdfInk(
+          raw,
+          viewport: _legacyViewport ?? _viewport,
+          aspectRatio: _pageAspects[number]!,
+          quarterTurns: 0,
+        );
+      }
+    }
+    final strokes = <_AnnotStroke>[];
+    for (final value in json ?? <Map<String, dynamic>>[]) {
+      final stroke = _AnnotStroke.fromJson(value);
+      if (stroke == null) {
+        throw const FormatException('Annotation PDF illisible');
+      }
+      strokes.add(stroke);
+    }
+    _memoryStrokesByPage[number] = strokes;
+  }
+
+  Future<void> savePdfDocument({
+    required int quarterTurns,
+    required Future<void> Function(String path) publish,
+  }) async {
+    if (!canSaveInk) throw StateError('PDF pas encore disponible');
+    _captureCurrentPage();
+    for (var number = 1; number <= _totalPages; number++) {
+      if (!_pageAspects.containsKey(number)) {
+        final page = await _doc!.getPage(number);
+        _pageAspects[number] = page.width / page.height;
+        await page.close();
+      }
+      await _ensurePageStrokes(number);
+    }
+    final output = await PdfInkService.instance.write(
+      sourcePath: widget.pdfPath,
+      pages: _memoryStrokesByPage.map(
+        (page, strokes) =>
+            MapEntry(page, strokes.map((stroke) => stroke.toJson()).toList()),
+      ),
+      quarterTurns: quarterTurns,
+    );
+    try {
+      await publish(output);
+    } finally {
+      try {
+        await File(output).delete();
+      } catch (_) {}
+    }
+    _dirtyPages.clear();
+    hasLegacyInk = false;
+    await _liveAnnotatorKey.currentState?.saveAnnotation();
+    if (mounted) widget.onChanged();
+  }
+
   /// True dès qu'au moins une page a été modifiée depuis le dernier save.
   bool get hasUnsavedChanges {
     if (_dirtyPages.isNotEmpty) return true;
@@ -4018,34 +4366,40 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
 
   /// Sauvegarde toutes les pages modifiées sur disque (JSON annotation par
   /// page). Appelé par _PreviewScreen._handleSave.
-  Future<void> saveAll() async {
+  Future<void> saveAll({String? mirrorPdfPath}) async {
     // 1. Capture la page courante depuis le live annotator.
     _captureCurrentPage();
     // 2. Persiste chaque page dirty sur disque.
-    for (final page in _dirtyPages.toList()) {
-      final pngPath = _pagePngPaths[page] ?? '${widget.pdfPath}.page$page.png';
-      final jsonPath = '$pngPath.annotation.json';
-      final strokes = _memoryStrokesByPage[page] ?? const [];
-      try {
-        final f = File(jsonPath);
-        if (strokes.isEmpty) {
-          if (await f.exists()) await f.delete();
-        } else {
-          final json = jsonEncode(strokes.map((s) => s.toJson()).toList());
-          await NativeFileProtection.instance.writeProtectedString(
-            jsonPath,
-            json,
-          );
+    await persistDirtyDocumentPages(
+      dirtyPages: _dirtyPages,
+      persistPage: (page) async {
+        final pngPath =
+            _pagePngPaths[page] ?? '${widget.pdfPath}.page$page.png';
+        final jsonPath = '$pngPath.annotation.json';
+        final strokes = _memoryStrokesByPage[page] ?? const [];
+        final paths = {
+          jsonPath,
+          if (mirrorPdfPath != null && mirrorPdfPath.isNotEmpty)
+            '$mirrorPdfPath.page$page.png.annotation.json',
+        };
+        for (final path in paths) {
+          final f = File(path);
+          if (strokes.isEmpty) {
+            if (await f.exists()) await f.delete();
+          } else {
+            final json = jsonEncode(strokes.map((s) => s.toJson()).toList());
+            await NativeFileProtection.instance.writeProtectedString(
+              path,
+              json,
+            );
+          }
         }
-      } catch (_) {
-        // silent — l'utilisateur pourra retenter.
-      }
-    }
-    _dirtyPages.clear();
+      },
+    );
     // Reset le hash de l'annotator courant pour que le badge "Modifié"
     // disparaisse aussi côté UI.
-    _liveAnnotatorKey.currentState?.saveAnnotation();
-    widget.onChanged();
+    await _liveAnnotatorKey.currentState?.saveAnnotation();
+    if (mounted) widget.onChanged();
   }
 
   /// Copie les strokes live du `_ImageAnnotator` courant dans la map mémoire.
@@ -4066,8 +4420,8 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
 
   bool _strokesEqual(List<_AnnotStroke> a, List<_AnnotStroke> b) {
     if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].points.length != b[i].points.length) return false;
+    for (var index = 0; index < a.length; index++) {
+      if (!identical(a[index], b[index])) return false;
     }
     return true;
   }
@@ -4102,7 +4456,27 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
   Future<void> _openDoc() async {
     try {
       final doc = await PdfDocument.openFile(widget.pdfPath);
-      if (!mounted) return;
+      if (!mounted) {
+        await doc.close();
+        return;
+      }
+      if (PdfInkService.instance.supported) {
+        try {
+          hasLegacyInk = await PdfInkService.instance.hasLegacySidecars(
+            widget.pdfPath,
+          );
+          _embeddedPages.addAll(
+            await PdfInkService.instance.read(widget.pdfPath),
+          );
+        } catch (_) {
+          await doc.close();
+          rethrow;
+        }
+      }
+      if (!mounted) {
+        await doc.close();
+        return;
+      }
       setState(() {
         _doc = doc;
         _totalPages = doc.pagesCount;
@@ -4133,28 +4507,40 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
       var pngPath = _pagePngPaths[pageNumber];
       if (pngPath == null) {
         final page = await doc.getPage(pageNumber);
-        final rendered = await page.render(
-          width: page.width * 2,
-          height: page.height * 2,
-          format: PdfPageImageFormat.png,
-          backgroundColor: '#FFFFFF',
-        );
-        await page.close();
-        if (rendered?.bytes == null || !mounted) {
-          setState(() => _rendering = false);
-          return;
+        _pageAspects[pageNumber] = page.width / page.height;
+        try {
+          if (PdfInkService.instance.supported) {
+            await _ensurePageStrokes(pageNumber);
+            pngPath = await PdfInkService.instance.render(
+              sourcePath: widget.pdfPath,
+              page: pageNumber,
+              width: math.min(page.width * 2, 2048),
+              omitManagedInk: true,
+            );
+          } else {
+            final rendered = await page.render(
+              width: page.width * 2,
+              height: page.height * 2,
+              format: PdfPageImageFormat.png,
+              backgroundColor: '#FFFFFF',
+            );
+            if (rendered == null) throw StateError('Rendu PDF vide');
+            pngPath = '${widget.pdfPath}.page$pageNumber.png';
+            await NativeFileProtection.instance.writeProtectedBytes(
+              pngPath,
+              rendered.bytes,
+            );
+          }
+        } finally {
+          await page.close();
         }
-        pngPath = '${widget.pdfPath}.page$pageNumber.png';
-        await NativeFileProtection.instance.writeProtectedBytes(
-          pngPath,
-          rendered!.bytes,
-        );
         _pagePngPaths[pageNumber] = pngPath;
       }
       if (!mounted) return;
       setState(() {
         _rendering = false;
       });
+      widget.onChanged();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -4165,7 +4551,15 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      _viewport = constraints.biggest;
+      _legacyViewport ??= _viewport;
+      return _buildContent(context);
+    },
+  );
+
+  Widget _buildContent(BuildContext context) {
     if (_error != null) {
       return Container(
         color: Color(0xFF0E1116),
@@ -4190,6 +4584,9 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
           child: _ImageAnnotator(
             key: _liveAnnotatorKey,
             imagePath: pngPath,
+            pageAspectRatio: PdfInkService.instance.supported
+                ? _pageAspects[_currentPage]
+                : null,
             rotationQuarterTurns: widget.rotationQuarterTurns,
             onChanged: widget.onChanged,
             onPageSwipe: (delta) {
@@ -4453,6 +4850,9 @@ class _RemoteImageAnnotatorWrapperState
 }
 
 class _ImageAnnotator extends StatefulWidget {
+  final double? pageAspectRatio;
+  final Uint8List? pdfOverlayBytes;
+
   /// Chemin disque de l'image — mode natif (`dart:io File`).
   final String? imagePath;
 
@@ -4487,6 +4887,8 @@ class _ImageAnnotator extends StatefulWidget {
     this.onPageSwipe,
     this.initialStrokes,
     this.autoPersistToDisk = true,
+    this.pageAspectRatio,
+    this.pdfOverlayBytes,
   }) : assert(
          imagePath != null || imageBytes != null,
          '_ImageAnnotator: provide imagePath OR imageBytes',
@@ -4628,34 +5030,30 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   /// Sauvegarde le JSON des strokes sur disque. Appelé via GlobalKey depuis
   /// _PreviewScreen.
   Future<void> saveAnnotation() async {
-    try {
-      // Mode "piloté par le parent" (ex: PDF multi-pages) → ne touche pas
-      // au disque, mais met juste à jour le hash pour indiquer que les
-      // modifs courantes sont considérées comme sauvegardées.
-      // Idem en mode web (`_webMode`) : pas de filesystem, le re-upload
-      // de l'image flattenée se fait via le bouton Save du _PreviewScreen.
-      if (!widget.autoPersistToDisk || _webMode) {
-        if (!mounted) return;
-        setState(() => _savedHash = _hashStrokes(_strokes));
-        widget.onChanged();
-        return;
-      }
-      final f = File(_annotationPath);
-      if (_strokes.isEmpty) {
-        if (await f.exists()) await f.delete();
-      } else {
-        final json = jsonEncode(_strokes.map((s) => s.toJson()).toList());
-        await NativeFileProtection.instance.writeProtectedString(
-          _annotationPath,
-          json,
-        );
-      }
+    // Mode "piloté par le parent" (ex: PDF multi-pages) → ne touche pas
+    // au disque, mais met juste à jour le hash pour indiquer que les
+    // modifs courantes sont considérées comme sauvegardées.
+    // Idem en mode web (`_webMode`) : pas de filesystem, le re-upload
+    // de l'image flattenée se fait via le bouton Save du _PreviewScreen.
+    if (!widget.autoPersistToDisk || _webMode) {
       if (!mounted) return;
       setState(() => _savedHash = _hashStrokes(_strokes));
       widget.onChanged();
-    } catch (_) {
-      // silent
+      return;
     }
+    final f = File(_annotationPath);
+    if (_strokes.isEmpty) {
+      if (await f.exists()) await f.delete();
+    } else {
+      final json = jsonEncode(_strokes.map((s) => s.toJson()).toList());
+      await NativeFileProtection.instance.writeProtectedString(
+        _annotationPath,
+        json,
+      );
+    }
+    if (!mounted) return;
+    setState(() => _savedHash = _hashStrokes(_strokes));
+    widget.onChanged();
   }
 
   /// Export l'image + l'annotation aplatie en PNG (bytes).
@@ -4672,6 +5070,52 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
       return byteData?.buffer.asUint8List();
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Export only web ink, not the rendered PDF background. This preserves
+  /// vector text and avoids baking native editable ink into a second layer.
+  Future<Uint8List?> exportPdfOverlayPng() async {
+    if (_canvasSize.isEmpty) return null;
+    final ratio = math.min(
+      2.5,
+      4096 / math.max(_canvasSize.width, _canvasSize.height),
+    );
+    final width = (_canvasSize.width * ratio).round();
+    final height = (_canvasSize.height * ratio).round();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    ui.Codec? codec;
+    ui.Image? previous;
+    ui.Image? output;
+    ui.Picture? picture;
+    try {
+      if (widget.pdfOverlayBytes != null) {
+        codec = await ui.instantiateImageCodec(widget.pdfOverlayBytes!);
+        previous = (await codec.getNextFrame()).image;
+        canvas.drawImageRect(
+          previous,
+          Rect.fromLTWH(
+            0,
+            0,
+            previous.width.toDouble(),
+            previous.height.toDouble(),
+          ),
+          Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+          Paint(),
+        );
+      }
+      canvas.scale(ratio);
+      _AnnotPainter(strokes: List.of(_strokes)).paint(canvas, _canvasSize);
+      picture = recorder.endRecording();
+      output = await picture.toImage(width, height);
+      final data = await output.toByteData(format: ui.ImageByteFormat.png);
+      return data?.buffer.asUint8List();
+    } finally {
+      output?.dispose();
+      picture?.dispose();
+      previous?.dispose();
+      codec?.dispose();
     }
   }
 
@@ -4746,6 +5190,9 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
           tool: _tool,
           color: _color,
           strokeWidth: _strokeWidth,
+          widthFraction: widget.pageAspectRatio != null && _canvasSize.width > 0
+              ? _strokeWidth / _canvasSize.width
+              : null,
           points: [normalized],
         ),
       ];
@@ -4939,7 +5386,13 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
                   constraints.maxHeight,
                 );
                 final turns = _normalizedRotationQuarterTurns;
-                final surfaceSize = turns.isOdd
+                final surfaceSize = widget.pageAspectRatio != null
+                    ? pdfInkCanvasSize(
+                        viewportSize,
+                        widget.pageAspectRatio!,
+                        turns,
+                      )
+                    : turns.isOdd
                     ? Size(viewportSize.height, viewportSize.width)
                     : viewportSize;
                 _canvasSize = surfaceSize;
@@ -5009,6 +5462,10 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
         fit: StackFit.expand,
         children: [
           Positioned.fill(child: img),
+          if (widget.pdfOverlayBytes != null)
+            Positioned.fill(
+              child: Image.memory(widget.pdfOverlayBytes!, fit: BoxFit.fill),
+            ),
           Positioned.fill(
             child: CustomPaint(painter: _AnnotPainter(strokes: _strokes)),
           ),
@@ -5095,19 +5552,16 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
 
   static int _hashStrokes(List<_AnnotStroke> strokes) {
     if (strokes.isEmpty) return 0;
-    // Hash approximatif mais stable : nb de strokes + nb total de points.
-    final nPoints = strokes.fold<int>(0, (acc, s) => acc + s.points.length);
-    return Object.hash(
-      strokes.length,
-      nPoints,
-      strokes.isNotEmpty ? strokes.last.points.length : 0,
-    );
+    // Strokes are replaced, never mutated. Identity detects equal-point-count
+    // edits without scanning every pencil point on every parent rebuild.
+    return Object.hashAll(strokes);
   }
 }
 
 enum _AnnotTool { pen, eraser }
 
 class _AnnotStroke {
+  final double? widthFraction;
   final _AnnotTool tool;
   final Color color;
   final double strokeWidth;
@@ -5118,6 +5572,7 @@ class _AnnotStroke {
     required this.color,
     required this.strokeWidth,
     required this.points,
+    this.widthFraction,
   });
 
   _AnnotStroke copyWith({List<Offset>? points}) => _AnnotStroke(
@@ -5125,12 +5580,14 @@ class _AnnotStroke {
     color: color,
     strokeWidth: strokeWidth,
     points: points ?? this.points,
+    widthFraction: widthFraction,
   );
 
   Map<String, dynamic> toJson() => {
     'tool': tool.name,
     'color': color.toARGB32(),
     'strokeWidth': strokeWidth,
+    if (widthFraction != null) 'widthFraction': widthFraction,
     'points': points.map((p) => [p.dx, p.dy]).toList(),
   };
 
@@ -5151,6 +5608,7 @@ class _AnnotStroke {
         tool: tool,
         color: color,
         strokeWidth: strokeWidth,
+        widthFraction: (json['widthFraction'] as num?)?.toDouble(),
         points: points,
       );
     } catch (_) {
@@ -5171,11 +5629,14 @@ class _AnnotPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (final stroke in strokes) {
+      final width = stroke.widthFraction == null
+          ? stroke.strokeWidth
+          : stroke.widthFraction! * size.width;
       final paint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
-        ..strokeWidth = stroke.strokeWidth
+        ..strokeWidth = width
         ..isAntiAlias = true;
 
       if (stroke.tool == _AnnotTool.eraser) {
@@ -5193,7 +5654,7 @@ class _AnnotPainter extends CustomPainter {
         if (pts.isNotEmpty) {
           canvas.drawCircle(
             pts.first,
-            stroke.strokeWidth / 2,
+            width / 2,
             Paint()
               ..color = paint.color
               ..isAntiAlias = true,

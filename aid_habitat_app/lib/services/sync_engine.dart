@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'connectivity_service.dart';
 import 'data_service.dart';
 import 'nocodb_sync_service.dart';
+import 'nocodb_api_client.dart';
 import 'sync_repository.dart';
 
 /// Centralized sync engine with exponential backoff, automatic retry,
@@ -123,6 +124,7 @@ class SyncEngine {
   bool _disposed = false;
   bool _started = false;
   bool _running = false;
+  int _lifecycle = 0;
   bool _rerunRequested = false;
   bool _pullAfterSyncRequested = false;
   int _consecutiveFailures = 0;
@@ -167,6 +169,7 @@ class SyncEngine {
   /// base et repartiront au prochain `start()`.
   void stop() {
     if (_disposed) return;
+    _lifecycle += 1;
     _started = false;
     _retryTimer?.cancel();
     _retryTimer = null;
@@ -182,6 +185,7 @@ class SyncEngine {
   }
 
   void dispose() {
+    _lifecycle += 1;
     _started = false;
     _disposed = true;
     _retryTimer?.cancel();
@@ -280,8 +284,11 @@ class SyncEngine {
     if (_disposed || _pullRunning) return false;
     if (_isOffline()) return false;
     _pullRunning = true;
+    final lifecycle = _lifecycle;
+    final session = SyncSessionScope();
     try {
-      final didRefresh = await _workspacePuller();
+      final didRefresh = await session.run(_workspacePuller);
+      if (lifecycle != _lifecycle || !session.isCurrent) return false;
       if (didRefresh && !_disposed) {
         _emitState(lastSyncAt: DateTime.now());
       }
@@ -291,7 +298,7 @@ class SyncEngine {
       // (foreground/reconnect/pull-to-refresh) retentera.
       return false;
     } finally {
-      _pullRunning = false;
+      if (lifecycle == _lifecycle) _pullRunning = false;
     }
   }
 
@@ -448,9 +455,11 @@ class SyncEngine {
   Future<void> _runSync() async {
     if (_disposed || !_started || _running) return;
     _running = true;
+    final lifecycle = _lifecycle;
 
     // Refresh pending count for UI.
     final pendingBefore = await _refreshPendingCount();
+    if (lifecycle != _lifecycle) return;
     _emitState(isSyncing: true, pendingCount: pendingBefore);
 
     try {
@@ -462,6 +471,7 @@ class SyncEngine {
       final prepareRemoteSession = _remoteSessionPreparer;
       if (pendingBefore > 0 && prepareRemoteSession != null) {
         final sessionReady = await prepareRemoteSession();
+        if (lifecycle != _lifecycle) return;
         if (_disposed || !_started) {
           _running = false;
           return;
@@ -480,7 +490,9 @@ class SyncEngine {
       }
 
       final result = await _syncService.pushPendingChanges();
+      if (lifecycle != _lifecycle) return;
       final pendingAfter = await _refreshPendingCount();
+      if (lifecycle != _lifecycle) return;
 
       if (result.failedOperations > 0) {
         _consecutiveFailures += 1;
@@ -509,9 +521,12 @@ class SyncEngine {
         // ne clear l'erreur QUE si la queue est vraiment vide (aucune
         // op `failed` résiduelle). Sinon on synthétise un message qui
         // invite à ouvrir les détails.
-        final hasFailedLeftover =
-            (await _syncRepository.fetchTopFailingOperation()) != null;
-        final hasPendingRetry = pendingAfter > 0 && !hasFailedLeftover;
+        final topFailure = await _syncRepository.fetchTopFailingOperation();
+        final hasFailedLeftover = topFailure != null;
+        if (lifecycle != _lifecycle) return;
+        final hasConflicts = result.conflictCount > 0;
+        final hasPendingRetry =
+            pendingAfter > result.conflictCount && !hasFailedLeftover;
         if (hasPendingRetry) {
           _consecutiveFailures += 1;
         } else {
@@ -520,9 +535,13 @@ class SyncEngine {
         _emitState(
           isSyncing: false,
           pendingCount: pendingAfter,
-          clearError: !hasFailedLeftover,
+          clearError: !hasFailedLeftover && !hasConflicts,
           lastError: hasFailedLeftover
-              ? 'Opération(s) en échec — touche « Détails » pour voir.'
+              ? topFailure['entityType'] == 'sync_ownership'
+                    ? topFailure['lastError']
+                    : 'Opération(s) en échec — touche « Détails » pour voir.'
+              : hasConflicts
+              ? 'Conflit de synchronisation : ouvrez le dossier concerne.'
               : null,
           lastSyncAt: DateTime.now(),
           nextRetryAt: null,
@@ -554,8 +573,10 @@ class SyncEngine {
         }
       }
     } catch (e) {
+      if (lifecycle != _lifecycle) return;
       _consecutiveFailures += 1;
       final pendingAfter = await _refreshPendingCount();
+      if (lifecycle != _lifecycle) return;
       _running = false;
       final isTransient = isTransientErrorLike(e);
       _emitState(

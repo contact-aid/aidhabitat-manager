@@ -897,16 +897,16 @@ class AuthService {
   }
 
   Future<void> signOut() async {
+    SyncEngine().stop();
+    AppConfig.clearAppSessionToken();
     final db = await _database.database;
     _clearPendingRemoteCredentials();
     _remoteSessionNeedsRefresh = false;
     await _clearSessionRowOnly(db);
-    AppConfig.clearAppSessionToken();
     // L'iPad interne est offline-first : un logout ne doit pas pouvoir
     // effacer des saisies terrain ou une queue `sync_operations` encore
     // en attente. Le reset volontaire des données reste disponible via
     // `DataService.wipeLocalDataForResync()`.
-    SyncEngine().stop();
   }
 
   Future<bool> isUsingBootstrapPassword(String userId) async {

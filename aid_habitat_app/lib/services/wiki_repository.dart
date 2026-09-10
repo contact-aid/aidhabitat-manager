@@ -47,6 +47,14 @@ class WikiRepository {
 
     await db.transaction((txn) async {
       for (final item in remoteItems) {
+        final unconfirmed = await txn.query(
+          'sync_operations',
+          columns: ['id'],
+          where: 'entity_type = ? AND entity_local_id = ? AND status != ?',
+          whereArgs: ['wiki_item', item.id, 'completed'],
+          limit: 1,
+        );
+        if (unconfirmed.isNotEmpty) continue;
         final existing = await txn.query(
           'wiki_items',
           columns: ['sync_state', 'updated_at', 'pending_delete'],
@@ -60,24 +68,7 @@ class WikiRepository {
             continue;
           }
           final syncState = existing.first['sync_state'] as String?;
-          if (syncState != null && syncState != SyncState.synced.name) {
-            // Stratégie LWW (last-writer-wins) — fix 2026-05-07.
-            // Avant : skip aveugle dès que la row était `pendingSync`,
-            // ce qui bloquait définitivement la propagation cross-
-            // device dès qu'une op restait orpheline en `failed`/
-            // `pendingSync`. Désormais, on accepte le merge si la
-            // version remote est strictement plus récente que la
-            // version locale (timestamps ISO-8601). Voir
-            // `_isRemoteUpdatedAtNewer` plus bas.
-            final localUpdatedAt = existing.first['updated_at'] as String?;
-            final remoteIsNewer = _isRemoteUpdatedAtNewer(
-              remoteUpdatedAt: item.updatedAt,
-              localUpdatedAt: localUpdatedAt,
-            );
-            if (!remoteIsNewer) {
-              continue;
-            }
-          }
+          if (syncState != SyncState.synced.name) continue;
         }
 
         final now = DateTime.now().toIso8601String();
@@ -105,7 +96,12 @@ class WikiRepository {
       final placeholders = List.filled(remoteIds.length, '?').join(',');
       final deleted = await txn.delete(
         'wiki_items',
-        where: 'sync_state = ? AND id NOT IN ($placeholders)',
+        where:
+            'sync_state = ? AND pending_delete = 0 '
+            'AND id NOT IN ($placeholders) AND NOT EXISTS ('
+            'SELECT 1 FROM sync_operations op WHERE op.entity_type = '
+            "'wiki_item' AND op.entity_local_id = wiki_items.id "
+            "AND op.status != 'completed')",
         whereArgs: [SyncState.synced.name, ...remoteIds],
       );
       if (deleted > 0) {
@@ -219,10 +215,15 @@ class WikiRepository {
     if (rows.isEmpty) return;
 
     final now = DateTime.now().toIso8601String();
-    final wasSynced =
-        (rows.first['sync_state'] as String?) == SyncState.synced.name;
-
     await db.transaction((txn) async {
+      final activeCreates = await txn.query(
+        'sync_operations',
+        columns: ['id'],
+        where:
+            'entity_type = ? AND entity_local_id = ? '
+            'AND operation_type = ? AND status = ?',
+        whereArgs: ['wiki_item', itemId, 'create', 'running'],
+      );
       await txn.delete(
         'sync_operations',
         where:
@@ -238,7 +239,7 @@ class WikiRepository {
         ],
       );
 
-      if (!wasSynced || itemId.startsWith('local_draft_')) {
+      if (itemId.startsWith('local_draft_') && activeCreates.isEmpty) {
         await txn.delete('wiki_items', where: 'id = ?', whereArgs: [itemId]);
         return;
       }
@@ -310,12 +311,17 @@ class WikiRepository {
         updates['pending_image_data_url'] = await OfflineVault.instance
             .sealString(imageDataUrl);
       }
-      await txn.update(
+      final changed = await txn.update(
         'wiki_items',
         updates,
-        where: 'id = ?',
+        where: 'id = ? AND pending_delete = 0',
         whereArgs: [item.id],
       );
+      if (changed != 1) {
+        throw StateError(
+          'Cette fiche a change ou a ete supprimee. Rouvrez-la.',
+        );
+      }
 
       // If the row is still a local draft (never synced yet), fold the
       // edit into the existing `create` op rather than enqueueing an
@@ -335,7 +341,8 @@ class WikiRepository {
           ],
           limit: 1,
         );
-        if (existingOps.isNotEmpty) {
+        if (existingOps.isNotEmpty &&
+            existingOps.first['status'] != SyncOperationStatus.running.name) {
           final opId = existingOps.first['id'] as String;
           final oldPayloadRaw = await OfflineVault.instance.openString(
             existingOps.first['payload_json'] as String,
@@ -585,22 +592,6 @@ class WikiRepository {
         (row['pending_image_data_url'] as String?) ?? '',
       ),
     );
-  }
-
-  /// Compare deux timestamps ISO-8601 pour décider si la version remote
-  /// est strictement plus récente que la version locale. Renvoie `false`
-  /// si timestamp manquant/invalide (= refuse le merge, comportement
-  /// safe). Cf. parité avec note_repository / document_repository.
-  bool _isRemoteUpdatedAtNewer({
-    required String? remoteUpdatedAt,
-    required String? localUpdatedAt,
-  }) {
-    if (remoteUpdatedAt == null || remoteUpdatedAt.isEmpty) return false;
-    if (localUpdatedAt == null || localUpdatedAt.isEmpty) return true;
-    final remote = DateTime.tryParse(remoteUpdatedAt);
-    final local = DateTime.tryParse(localUpdatedAt);
-    if (remote == null || local == null) return false;
-    return remote.isAfter(local);
   }
 }
 

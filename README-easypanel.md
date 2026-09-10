@@ -21,8 +21,9 @@ Guide étape par étape pour déployer `aid'habitat-manager` sur Easypanel
 - Domaines DNS configurables (idéalement 2 sous-domaines :
   `api.aidhabitat.fr` + `app.aidhabitat.fr`)
 - Flutter SDK installé en local (déjà le cas) pour compiler le web
-- Docker installé en local pour build/tester les images (optionnel —
-  Easypanel peut builder à partir du Git directement)
+- Docker installé en local pour build/tester les images (optionnel :
+  le mode API recommandé utilise l'image publiée par le pipeline ;
+  un build Git direct doit transmettre `APP_BUILD_SHA`, voir § 3a)
 
 ## Architecture cible
 
@@ -30,7 +31,7 @@ Guide étape par étape pour déployer `aid'habitat-manager` sur Easypanel
 Internet → Easypanel VPS
               ├─ Container "aidhabitat-web"  (nginx, sert le bundle Flutter web)
               │     domaine : https://app.aidhabitat.fr
-              ├─ Container "aidhabitat-api"  (Node 20 + Express)
+              ├─ Container "aidhabitat-api"  (Node 24 LTS + Express)
               │     domaine : https://api.aidhabitat.fr
               │     volume  : /data → persistence (auth-store, chunks)
               └─ Container "nocodb"          (déjà en place)
@@ -60,13 +61,27 @@ taille — ~5-8 MB attendu.
 ```bash
 cd "/Users/aidhabitat/Downloads/aid'habitat-manager"
 
-# Image backend
-docker build -f Dockerfile.api -t aidhabitat-api:latest .
+# Image backend : SHA complet obligatoire du commit réellement construit.
+# Pour une image de release, partir d'un checkout propre de ce commit.
+API_BUILD_SHA="$(git rev-parse HEAD)"
+docker build -f Dockerfile.api \
+  --build-arg APP_BUILD_SHA="$API_BUILD_SHA" \
+  -t aidhabitat-api:latest .
 
 # Image frontend (depuis le dossier aid_habitat_app)
 cd aid_habitat_app
 docker build -f Dockerfile.web -t aidhabitat-web:latest .
 ```
+
+`Dockerfile.api` refuse un `APP_BUILD_SHA` absent ou différent d'un SHA
+hexadécimal complet de 40 caractères. L'argument est embarqué dans l'image
+comme variable `APP_BUILD_SHA`, puis exposé sous `buildSha` par
+`/api/health/live` et `/api/health/ready`. Un arbre de travail modifié n'est
+pas identifié par le seul SHA de `HEAD` : ne pas présenter son image comme
+la version exacte de ce commit.
+
+Ces commandes sont documentées pour une exécution ultérieure. L'image
+Docker n'a pas été construite ni exécutée lors de cette mise à jour du guide.
 
 Test local optionnel :
 ```bash
@@ -81,10 +96,23 @@ docker run --rm -p 8080:80 aidhabitat-web:latest
 Dans Easypanel UI :
 1. **Create Service** → **App** → nom : `aidhabitat-api`
 2. **Source** : 2 options
-   - **Build from Git** : pointe vers ton repo GitHub, Dockerfile path :
-     `Dockerfile.api`. Easypanel build à chaque push.
-   - **Docker image** : push manuellement l'image vers un registry
-     (Docker Hub privé, ou registry Easypanel intégré si disponible).
+   - **Docker image (recommandé)** : utiliser
+     `ghcr.io/<propriétaire-github>/aidhabitat-api:latest`, en remplaçant
+     `<propriétaire-github>` par le propriétaire du dépôt. Le workflow
+     `build-deploy-api.yml` teste le code sous Node 24, construit l'image
+     avec `APP_BUILD_SHA=${{ github.sha }}`, la publie, puis appelle le
+     webhook du service configuré pour tirer cette image. Configurer les
+     identifiants de registry si le package est privé (voir ci-dessous).
+     Ce mode conserve les contrôles de version active du pipeline.
+   - **Build from Git (alternative)** : utiliser `Dockerfile.api` et
+     transmettre **obligatoirement** `APP_BUILD_SHA` comme **argument de
+     build Docker**, avec les 40 caractères du SHA du commit effectivement
+     extrait par Easypanel. Le mettre seulement dans les variables runtime
+     du service ne satisfait pas l'argument requis pendant le build.
+     Vérifier que l'intégration de build peut fournir le SHA exact à chaque
+     reconstruction ; une valeur statique devient fausse au commit suivant.
+     Si ce passage d'argument n'est pas disponible, utiliser l'image publiée
+     ci-dessus. Le build direct ne remplace pas les vérifications du pipeline.
 3. **Port** : `3001`
 4. **Domains** : ajoute `api.aidhabitat.fr` (HTTPS auto via Let's Encrypt)
 5. **Volumes** : monte un volume nommé `aidhabitat-data` sur `/data`
@@ -95,6 +123,7 @@ Dans Easypanel UI :
    |---|---|---|
    | `NODE_ENV` | `production` | |
    | `API_PORT` | `3001` | (déjà dans Dockerfile) |
+   | `APP_BUILD_SHA` | SHA embarqué dans l'image | Ne pas surcharger au runtime ; fourni par l'argument de build obligatoire |
    | `AIDHABITAT_DATA_DIR_PATH` | `/data` | (déjà dans Dockerfile) |
    | `NOCODB_API_URL` | `http://nocodb:8080/` | URL **interne** Docker (1ms) au lieu de l'URL publique |
    | `NOCODB_API_TOKEN` | `eyJhbGc...` | depuis NocoDB UI → Settings → API Tokens |
@@ -148,7 +177,7 @@ Deux workflows sont préparés dans `.github/workflows/` :
 | Workflow | Trigger | Que fait |
 |---|---|---|
 | `build-deploy-web.yml` | push sur main qui touche `aid_habitat_app/**` | Build Flutter web + push image Docker `aidhabitat-web` sur ghcr.io + trigger redéploiement Easypanel |
-| `build-deploy-api.yml` | push sur main qui touche `server/**` ou `shared/**` | Build image Docker `aidhabitat-api` sur ghcr.io + trigger redéploiement Easypanel |
+| `build-deploy-api.yml` | push sur main qui touche les chemins API surveillés, notamment `server/**` ou `shared/**` | Tests Node 24, build avec SHA complet, publication de l'image, webhook, puis vérification du SHA actif et de la readiness |
 
 ### Secrets GitHub à configurer
 
@@ -158,11 +187,20 @@ Va sur **GitHub repo → Settings → Secrets and variables → Actions → New 
 |---|---|---|
 | `AIDHABITAT_API_BASE_URL` | `https://api.aidhabitat.fr` | URL publique de l'API, injectée comme `--dart-define` au build Flutter |
 | `EASYPANEL_WEB_WEBHOOK` | (URL fournie par Easypanel UI) | Webhook trigger redéploiement du service `aidhabitat-web` (Settings → Deploy → Webhook URL) |
-| `EASYPANEL_API_WEBHOOK` | (URL fournie par Easypanel UI) | Webhook trigger redéploiement du service `aidhabitat-api` (idem côté service api) |
+| `EASYPANEL_API_WEBHOOK` | (URL fournie par Easypanel UI) | Obligatoire pour le workflow API ; déclenche le redéploiement du service `aidhabitat-api` |
 
-Si tu omets les 2 webhooks Easypanel, le build/push réussit quand même —
-tu devras juste cliquer "Deploy" manuellement dans Easypanel UI pour pull
-la dernière image. Avec les webhooks, c'est full auto.
+Le workflow API échoue si `EASYPANEL_API_WEBHOOK` manque ou si le webhook
+échoue, même si l'image a déjà été publiée. Un webhook accepté ne suffit
+pas à déclarer le déploiement réussi : le workflow attend au maximum cinq
+minutes que `/api/health/live` renvoie le SHA complet attendu et que
+`/api/health/ready` réponde HTTP 200 avec le même SHA et l'état `ready`.
+Les redirections sont refusées ; les délais couvrent aussi la lecture du
+corps des réponses. L'outil ne journalise ni URL ni contenu serveur.
+
+La variable GitHub Actions optionnelle `API_HEALTH_BASE_URL` désigne
+l'origine HTTPS publique à vérifier, par défaut `https://api.aidhabitat.fr`.
+Elle ne doit contenir ni identifiants, ni chemin, ni query, ni fragment.
+Elle doit viser le même service que le webhook API.
 
 ### Visibilité du package ghcr.io
 
@@ -286,6 +324,20 @@ Si problème grave sur Easypanel pendant la migration :
   surchargeable)
 
 ## Vérifications post-déploiement
+
+Pour l'API, exécuter depuis le checkout du commit qui vient d'être déployé :
+
+```bash
+API_HEALTH_BASE_URL=https://api.aidhabitat.fr \
+EXPECTED_BUILD_SHA="$(git rev-parse HEAD)" \
+API_READINESS_TIMEOUT_MS=300000 \
+node tools/wait-api-readiness.mjs
+```
+
+Cette commande ne déclenche pas de déploiement ; elle vérifie la version
+active et la disponibilité du backend. Un SHA absent ou différent, une
+readiness indisponible ou un délai dépassé produisent un code de sortie
+non nul. Les vérifications suivantes sont complémentaires :
 
 ```bash
 # Backend répond

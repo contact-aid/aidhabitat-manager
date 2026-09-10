@@ -129,6 +129,20 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   /// quand la composition du foyer change.
   int _currentOccupantIndex = 0;
   Timer? _saveTimer;
+  Timer? _saveRetryTimer;
+  static const _saveRetryDelays = [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+  ];
+  int _saveRetryCount = 0;
+  bool _showSaveError = false;
+  Future<void>? _saveInFlight;
+  bool _disposed = false;
+  late Map<String, dynamic> _savedPatient;
+  late Map<String, dynamic> _savedAdmin;
+  Map<String, dynamic>? _observedPatient;
+  Map<String, dynamic>? _observedAdmin;
 
   // (Les anciens Sets d'édition repliée ont été retirés : les boutons et
   // menus déroulants du relevé de visite restent maintenant toujours
@@ -341,6 +355,15 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     _envoiRapport = widget.dossier.envoiRapport;
     _personnesPresentesVisite = widget.dossier.personnesPresentesVisite;
     _occupants = _buildOccupantsFromPatient(p, _numberPeople);
+    // Compare serialized form values, including legacy fallbacks, not SQLite.
+    _savedPatient = _buildPatientSaveMap();
+    _savedAdmin = _buildAdminSaveMap();
+    _observedPatient = widget.dossier.patientEditBaseline == null
+        ? null
+        : Map.of(widget.dossier.patientEditBaseline!);
+    _observedAdmin = widget.dossier.dossierEditBaseline == null
+        ? null
+        : Map.of(widget.dossier.dossierEditBaseline!);
   }
 
   List<Occupant> _buildOccupantsFromPatient(Patient p, int count) {
@@ -415,7 +438,11 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     // If the parent pushes a fresh dossier (e.g. after an external edit) AND
     // there is no pending local edit to preserve, re-hydrate so the form
     // mirrors the latest patient/housing data from SQLite.
-    if (_saveTimer?.isActive == true) return;
+    if (_saveTimer?.isActive == true ||
+        _saveInFlight != null ||
+        _hasPendingSave) {
+      return;
+    }
     final oldP = oldWidget.dossier.patient;
     final newP = widget.dossier.patient;
     final numberPeopleChanged = oldP.numberPeople != newP.numberPeople;
@@ -445,10 +472,11 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
 
   @override
   void dispose() {
+    _disposed = true;
     _refSub?.cancel();
-    final hadPendingSave = _saveTimer?.isActive ?? false;
     _saveTimer?.cancel();
-    if (hadPendingSave) {
+    _saveRetryTimer?.cancel();
+    if (_hasPendingSave) {
       unawaited(_save());
     }
     super.dispose();
@@ -460,6 +488,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
 
   void _scheduleSave() {
     _saveTimer?.cancel();
+    _resetSaveRetry();
     // Debounce uniformisé sur kSaveDebounceText (400 ms) — laisse les
     // pauses naturelles entre lettres passer sans déclencher un save
     // mid-mot. Avant 150 ms, des frappes "BALS" ressortaient parfois
@@ -467,15 +496,114 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     _saveTimer = Timer(kSaveDebounceText, _save);
   }
 
+  void _setSaveError(bool visible) {
+    if (_disposed || !mounted || _showSaveError == visible) return;
+    setState(() => _showSaveError = visible);
+  }
+
+  void _resetSaveRetry() {
+    _saveRetryTimer?.cancel();
+    _saveRetryTimer = null;
+    _saveRetryCount = 0;
+    _setSaveError(false);
+  }
+
+  void _retrySave() {
+    if (_disposed || !mounted || _saveInFlight != null) return;
+    _resetSaveRetry();
+    unawaited(_save());
+  }
+
   void _markChanged() {
     setState(() {});
     _scheduleSave();
   }
 
-  Future<void> _save() async {
-    // Pas de `setState(_saving = true/false)` — voir dossier_screen.dart
-    // pour le rationale (rebuild lourd à chaque keystroke avec save à
-    // 0 ms). `SaveStatusIndicator` est de toute façon vide.
+  Map<String, dynamic> _diff(
+    Map<String, dynamic> snapshot,
+    Map<String, dynamic> saved,
+  ) => {
+    for (final entry in snapshot.entries)
+      if (entry.value != saved[entry.key]) entry.key: entry.value,
+  };
+
+  bool get _hasPendingSave =>
+      _diff(_buildPatientSaveMap(), _savedPatient).isNotEmpty ||
+      _diff(_buildAdminSaveMap(), _savedAdmin).isNotEmpty;
+
+  Future<void> _save() {
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    _saveRetryTimer?.cancel();
+    _saveRetryTimer = null;
+    // Assign the shared future before draining, even for an empty diff.
+    final repository = widget.repository;
+    final patientId = widget.dossier.patient.id;
+    final dossierId = widget.dossier.id;
+    return _saveInFlight ??= Future<void>.microtask(
+      () => _drainPendingSaves(repository, patientId, dossierId),
+    );
+  }
+
+  Future<void> _drainPendingSaves(
+    DossierRepository repository,
+    String patientId,
+    String dossierId,
+  ) async {
+    try {
+      while (true) {
+        // Freeze both blocks before awaiting; later edits belong to the next pass.
+        final patient = _buildPatientSaveMap();
+        final admin = _buildAdminSaveMap();
+        final patientDiff = _diff(patient, _savedPatient);
+        final adminDiff = _diff(admin, _savedAdmin);
+        if (patientDiff.isEmpty && adminDiff.isEmpty) {
+          _saveTimer?.cancel();
+          _saveTimer = null;
+          _resetSaveRetry();
+          return;
+        }
+
+        if (patientDiff.isNotEmpty) {
+          await repository.updatePatient(
+            patientId,
+            patientDiff,
+            observedFields: _observedPatient,
+          );
+          _observedPatient?.addAll(patientDiff);
+          _savedPatient = patient;
+        }
+        if (adminDiff.isNotEmpty) {
+          await repository.updateDossierFields(
+            dossierId,
+            adminDiff,
+            observedFields: _observedAdmin,
+          );
+          _observedAdmin?.addAll(adminDiff);
+          _savedAdmin = admin;
+        }
+        if (!_disposed && mounted) widget.onPatientChanged?.call();
+      }
+    } catch (e, st) {
+      // Keep unconfirmed differences, with one bounded retry timer. Cancel any
+      // debounce scheduled during await so it cannot bypass the backoff.
+      // ignore: avoid_print
+      print('[beneficiary_tab] _save failed: $e\n$st');
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      if (!_disposed && mounted) {
+        if (_saveRetryCount < _saveRetryDelays.length) {
+          _saveRetryTimer = Timer(_saveRetryDelays[_saveRetryCount++], _save);
+        } else {
+          _setSaveError(true);
+        }
+      }
+    } finally {
+      _saveInFlight = null;
+    }
+  }
+
+  Map<String, dynamic> _buildPatientSaveMap() {
     final primary = _occupants.isNotEmpty ? _occupants.first : const Occupant();
     final secondary = _occupants.length > 1 ? _occupants[1] : const Occupant();
     final primaryPrincipalFunds = _parseRetirementFunds(
@@ -484,7 +612,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final primaryComplementaryFunds = _parseRetirementFunds(
       primary.caissesRetraiteComplementaires,
     );
-    await widget.repository.updatePatient(widget.dossier.patient.id, {
+    return {
       'first_name': primary.firstName,
       'last_name': primary.lastName,
       'birth_date': primary.birthDate,
@@ -527,17 +655,14 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           ? ''
           : primaryComplementaryFunds.first,
       'occupants_json': jsonEncode(_occupants.map((o) => o.toJson()).toList()),
-    });
-    await widget.repository.updateDossierFields(widget.dossier.id, {
-      'compte_anah': _compteAnah,
-      'envoi_rapport': _envoiRapport,
-      'personnes_presentes_visite': _personnesPresentesVisite,
-    });
-    // Notify the parent (VisitReportScreen) so it re-fetches the dossier
-    // and propagates the fresh patient data (name / city / …) to every
-    // other tab and to any view listening to the same dossier.
-    widget.onPatientChanged?.call();
+    };
   }
+
+  Map<String, dynamic> _buildAdminSaveMap() => {
+    'compte_anah': _compteAnah,
+    'envoi_rapport': _envoiRapport,
+    'personnes_presentes_visite': _personnesPresentesVisite,
+  };
 
   /// Aggregate household fiscal revenue = sum of every occupant's RFR.
   /// Falls back to the legacy single [_fiscalRevenue] value if no occupant
@@ -591,6 +716,26 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
         // au bord supérieur de la card — même traitement que le bandeau
         // "Bénéficiaire" de l'écran dossier.
         _buildQuickNav(),
+        if (_showSaveError)
+          Semantics(
+            liveRegion: true,
+            child: MaterialBanner(
+              leading: Icon(
+                LucideIcons.alertCircle,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              content: const Text(
+                'Impossible d’enregistrer les modifications sur cet appareil.',
+              ),
+              actions: [
+                TextButton.icon(
+                  onPressed: _retrySave,
+                  icon: const Icon(LucideIcons.rotateCw, size: 18),
+                  label: const Text('Réessayer'),
+                ),
+              ],
+            ),
+          ),
         // La sous-section active gère elle-même son scroll interne +
         // épingle ses points de pagination en bas du cadre. On lui
         // donne directement l'espace restant via Expanded.

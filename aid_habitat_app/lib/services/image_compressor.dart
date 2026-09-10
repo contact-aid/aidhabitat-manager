@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:image/image.dart' as img;
+import 'package:flutter/foundation.dart' show compute;
+
+import 'image_compression_worker.dart';
 
 /// Cible : 1600 px max de large. Au-delà, on resize en gardant le ratio.
 /// Aligné sur l'ancien réglage `image_picker.maxWidth` qui produisait des
@@ -57,9 +59,9 @@ class CompressedImage {
 /// bénéfice (300-700 KB → ~150 KB) compense largement le délai au
 /// niveau de la sync Mac→iPad.
 ///
-/// Tournant sur l'isolate principal (web n'a pas d'isolates utilisables).
-/// Pour des photos > 10 MB sur web, on pourrait basculer sur
-/// `compute()` mais on n'en a pas l'usage aujourd'hui.
+/// Sur les cibles natives, le travail CPU est déporté via `compute` pour ne
+/// pas bloquer l'isolate d'interface. Le même chemin reste compilable sur le
+/// web, où `compute` exécute toutefois le callback sur l'event loop principal.
 Future<CompressedImage> compressImageForUpload({
   required Uint8List bytes,
   required String fileName,
@@ -113,8 +115,17 @@ Future<CompressedImage> compressImageForUpload({
   }
 
   try {
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) {
+    final workerResult = await compute(
+      compressImageInWorker,
+      ImageCompressionWorkerRequest(
+        bytes: bytes,
+        maxWidthPx: maxWidthPx,
+        jpegQuality: jpegQuality,
+        fastResize: fastResize,
+      ),
+      debugLabel: 'image-upload-compression',
+    );
+    if (!workerResult.decoded || workerResult.encodedBytes == null) {
       // Format que le package `image` ne sait pas décoder (ex. HEIC sur
       // certains builds web). On tombe sur les bytes d'origine — le
       // serveur acceptera et stockera tel quel.
@@ -126,19 +137,7 @@ Future<CompressedImage> compressImageForUpload({
       );
     }
 
-    img.Image working = decoded;
-    if (working.width > maxWidthPx) {
-      working = img.copyResize(
-        working,
-        width: maxWidthPx,
-        interpolation: fastResize
-            ? img.Interpolation.linear
-            : img.Interpolation.cubic,
-      );
-    }
-
-    final encoded = img.encodeJpg(working, quality: jpegQuality);
-    final result = Uint8List.fromList(encoded);
+    final result = workerResult.encodedBytes!;
 
     // Garde-fou : si pour une raison X le re-encodage produit un fichier
     // PLUS GROS (rare, peut arriver sur des PNG très simples genre QR

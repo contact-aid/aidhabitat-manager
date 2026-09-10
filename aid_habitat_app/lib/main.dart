@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show PlatformDispatcher;
 
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kDebugMode, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -13,6 +14,7 @@ import 'components/brand_colors.dart';
 import 'components/soft_transitions.dart';
 import 'models/types.dart';
 import 'screens/login_screen.dart';
+import 'screens/database_unavailable_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/note_window_screen.dart';
 import 'services/app_config.dart';
@@ -31,6 +33,7 @@ import 'services/note_window_web_stub.dart'
     as note_window_web;
 
 Future<void> main(List<String> args) async {
+  final startedAt = DateTime.now();
   WidgetsFlutterBinding.ensureInitialized();
 
   // ── Handlers d'erreurs globaux (fix 2026-05-15) ─────────────────
@@ -205,13 +208,29 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  await bootStep('DataService.initialize', DataService().initialize());
-  // Drop stale sync operations that pre-date the current app version —
-  // otherwise their frozen payloads would be pushed to NocoDB at startup
-  // and overwrite fresh remote data with obsolete values.
+  try {
+    await DataService().initialize().timeout(const Duration(seconds: 8));
+  } catch (_) {
+    // Do not start auth, pulls or editors against an inaccessible local store.
+    runApp(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: DatabaseUnavailableScreen(onRetry: () => main(args)),
+      ),
+    );
+    return;
+  }
+  // On iOS the previous process is gone: recover its interrupted writes now,
+  // not after 72 hours. A fixed startup cutoff excludes writes started by this
+  // process even if this boot step resumes after its timeout. Web/desktop can
+  // have another active process or tab, so retain their conservative cutoff.
   await bootStep(
     'purgeStaleSyncOperations',
-    DataService().purgeStaleSyncOperations(),
+    DataService().purgeStaleSyncOperations(
+      interruptedBefore: !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+          ? startedAt
+          : null,
+    ),
   );
   await bootStep('AuthService.initialize', AuthService().initialize());
   // Restore any Express API session token persisted from a previous login

@@ -1,20 +1,25 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
-import '../components/brand_colors.dart';
 import '../models/types.dart';
 import '../services/data_service.dart';
+import '../services/dossier_repository.dart';
 
 class ConflictResolutionScreen extends StatefulWidget {
-  final Dossier localDossier;
-  final VoidCallback onResolved;
-
   const ConflictResolutionScreen({
     super.key,
     required this.localDossier,
     required this.onResolved,
+    this.loadReviews,
+    this.resolveReview,
   });
+
+  final Dossier localDossier;
+  final VoidCallback onResolved;
+  final Future<List<SyncConflictReview>> Function()? loadReviews;
+  final Future<void> Function(SyncConflictReview, bool)? resolveReview;
 
   @override
   State<ConflictResolutionScreen> createState() =>
@@ -22,448 +27,258 @@ class ConflictResolutionScreen extends StatefulWidget {
 }
 
 class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
-  final _dataService = DataService();
-  Dossier? _remoteDossier;
+  List<SyncConflictReview> _reviews = [];
   bool _loading = true;
-  String? _error;
   bool _resolving = false;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _fetchRemote();
+    _load();
   }
 
-  Future<void> _fetchRemote() async {
+  Future<void> _load() async {
+    if (_resolving) return;
     setState(() {
       _loading = true;
       _error = null;
     });
-    final remote =
-        await _dataService.fetchRemoteDossierById(widget.localDossier.id);
-    if (!mounted) return;
-    setState(() {
-      _remoteDossier = remote;
-      _loading = false;
-      if (remote == null) _error = 'Impossible de r\u00e9cup\u00e9rer la version distante.';
-    });
-  }
-
-  Future<void> _keepLocal() async {
-    setState(() => _resolving = true);
-    await _dataService.resolveConflictKeepLocal(widget.localDossier);
-    if (!mounted) return;
-    widget.onResolved();
-  }
-
-  Future<void> _takeRemote() async {
-    if (_remoteDossier == null) return;
-    setState(() => _resolving = true);
-    await _dataService.resolveConflictTakeRemote(_remoteDossier!);
-    if (!mounted) return;
-    widget.onResolved();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          children: [
-            _buildHeader(),
-            const SizedBox(height: 24),
-            if (_loading)
-              const Expanded(
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_error != null)
-              Expanded(child: _buildError())
-            else
-              Expanded(child: _buildComparison()),
-            const SizedBox(height: 24),
-            if (!_loading && _error == null) _buildActions(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHeader() {
-    final patient = widget.localDossier.patient;
-    return Row(
-      children: [
-        // Bouton retour aligné sur celui du VAD (uniformisation
-        // 2026-05-13) : 44×44 transparent, chevronLeft 24px ink-700.
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: _resolving ? null : () => Navigator.pop(context),
-            borderRadius: BorderRadius.circular(999),
-            child: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-              ),
-              alignment: Alignment.center,
-              child: const Icon(
-                LucideIcons.chevronLeft,
-                size: 24,
-                color: Color(0xFF2B323A), // ink-700
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${patient.lastName.toUpperCase()} ${patient.firstName}',
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Conflit de synchronisation',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                      color: Colors.red,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildError() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.cloud_off, size: 48, color: Color(0xFF8A939D)),
-          const SizedBox(height: 16),
-          Text(
-            _error!,
-            style: TextStyle(fontSize: 15, color: Color(0xFF2B323A)),
-          ),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: _fetchRemote,
-            icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('R\u00e9essayer'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildComparison() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: _VersionCard(
-            title: 'Version locale',
-            subtitle: 'Vos modifications non synchronis\u00e9es',
-            color: Colors.orange,
-            icon: Icons.phone_android,
-            dossier: widget.localDossier,
-          ),
-        ),
-        const SizedBox(width: 24),
-        Expanded(
-          child: _VersionCard(
-            title: 'Version distante',
-            subtitle: 'Derni\u00e8re version sur le serveur',
-            color: Colors.blue,
-            icon: Icons.cloud,
-            dossier: _remoteDossier!,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildActions() {
-    return Row(
-      children: [
-        Expanded(
-          child: SizedBox(
-            height: 52,
-            child: OutlinedButton.icon(
-              onPressed: _resolving ? null : _keepLocal,
-              icon: _resolving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.phone_android, size: 20),
-              label: const Text('Garder ma version'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.orange.shade700,
-                side: BorderSide(color: Colors.orange.shade300),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: SizedBox(
-            height: 52,
-            child: FilledButton.icon(
-              onPressed: _resolving ? null : _takeRemote,
-              icon: _resolving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.cloud_download, size: 20),
-              label: const Text('Prendre la version distante'),
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.blue.shade600,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Version card — displays one side of the diff
-// ---------------------------------------------------------------------------
-
-class _VersionCard extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final Color color;
-  final IconData icon;
-  final Dossier dossier;
-
-  const _VersionCard({
-    required this.title,
-    required this.subtitle,
-    required this.color,
-    required this.icon,
-    required this.dossier,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final patient = dossier.patient;
-    final housing = dossier.housing;
-    final tp = patient.trustedPerson;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withAlpha(80)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Card header
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: color.withAlpha(15),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(15),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: color, size: 22),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: color,
-                        ),
-                      ),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: color.withAlpha(180),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Card body
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _sectionTitle('B\u00e9n\u00e9ficiaire'),
-                  _field('Nom', '${patient.lastName} ${patient.firstName}'),
-                  _field(
-                    'Date de naissance',
-                    _formatDate(patient.birthDate),
-                  ),
-                  _field(
-                    'Adresse',
-                    '${patient.address}, ${patient.zipCode} ${patient.city}',
-                  ),
-                  _field('T\u00e9l\u00e9phone', patient.phone),
-                  _field('E-mail', patient.email),
-                  _field('Situation familiale', patient.familySituation),
-                  _field('Cat\u00e9gorie revenus', patient.incomeCategory),
-                  const SizedBox(height: 16),
-
-                  _sectionTitle('Personne de confiance'),
-                  _field('Nom', tp.name.isEmpty ? '\u2014' : tp.name),
-                  _field(
-                    'T\u00e9l\u00e9phone',
-                    tp.phone.isEmpty ? '\u2014' : tp.phone,
-                  ),
-                  const SizedBox(height: 16),
-
-                  _sectionTitle('Logement'),
-                  _field(
-                    'Type',
-                    housing.type == HousingType.APARTMENT
-                        ? 'Appartement'
-                        : 'Maison',
-                  ),
-                  _field(
-                    'Ann\u00e9e',
-                    housing.year?.toString() ?? '\u2014',
-                  ),
-                  _field(
-                    'Surface',
-                    housing.surface != null
-                        ? '${housing.surface} m\u00b2'
-                        : '\u2014',
-                  ),
-                  _field('Chauffage', _heatingLabel(housing.heating)),
-                  if (housing.accessibilityNotes.isNotEmpty)
-                    _field('Accessibilit\u00e9', housing.accessibilityNotes),
-                  const SizedBox(height: 16),
-
-                  _sectionTitle('Dossier'),
-                  _field('Statut', dossier.status.label),
-                  _field(
-                    'Visite',
-                    dossier.visitDate != null
-                        ? _formatDate(dossier.visitDate!)
-                        : '\u2014',
-                  ),
-                  if (dossier.autonomyNotes.isNotEmpty)
-                    _field('Autonomie', dossier.autonomyNotes),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _sectionTitle(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: kBrandDarkPurple,
-        ),
-      ),
-    );
-  }
-
-  Widget _field(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 130,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Color(0xFF5C6670),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value.isEmpty ? '\u2014' : value,
-              style: const TextStyle(fontSize: 13, color: Colors.black87),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _formatDate(String raw) {
     try {
-      return DateFormat('dd/MM/yyyy').format(DateTime.parse(raw));
+      final reviews =
+          await (widget.loadReviews?.call() ??
+              DataService().reviewDossierConflicts(widget.localDossier.id));
+      if (!mounted) return;
+      setState(() {
+        _reviews = reviews;
+        _loading = false;
+      });
     } catch (_) {
-      return raw;
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error =
+            'Comparaison indisponible. Vos modifications restent sur cet appareil.';
+      });
     }
   }
 
-  String _heatingLabel(HeatingMode mode) {
-    return switch (mode) {
-      HeatingMode.ELECTRIC => '\u00c9lectrique',
-      HeatingMode.GAS => 'Gaz',
-      HeatingMode.WOOD => 'Bois',
-      HeatingMode.OIL => 'Fioul',
-      HeatingMode.OTHER => 'Autre',
-    };
+  Future<void> _resolve(SyncConflictReview review, bool keepLocal) async {
+    if (_resolving || _loading || _error != null) return;
+    setState(() {
+      _resolving = true;
+      _error = null;
+    });
+    try {
+      if (widget.resolveReview != null) {
+        await widget.resolveReview!(review, keepLocal);
+      } else {
+        await DataService().resolveReviewedConflict(
+          review,
+          keepLocal: keepLocal,
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _reviews.remove(review);
+        _resolving = false;
+      });
+      if (_reviews.isEmpty) widget.onResolved();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _resolving = false;
+        _error =
+            'Choix non applique. Rechargez la comparaison avant de reessayer.';
+      });
+    }
   }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_resolving,
+    child: Scaffold(
+      appBar: AppBar(
+        title: const Text('Conflits de synchronisation'),
+        automaticallyImplyLeading: false,
+        leading: IconButton(
+          tooltip: 'Retour',
+          onPressed: _resolving ? null : () => Navigator.pop(context),
+          icon: const Icon(LucideIcons.chevronLeft),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Actualiser',
+            onPressed: _loading || _resolving ? null : _load,
+            icon: const Icon(LucideIcons.refreshCw),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                Text(
+                  '${widget.localDossier.patient.firstName} ${widget.localDossier.patient.lastName}',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                if (_reviews.isEmpty && _error == null)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Text('Aucun conflit resoluble sur cette fiche.'),
+                  ),
+                for (final review in _reviews) _buildReview(review),
+              ],
+            ),
+    ),
+  );
+
+  Widget _buildReview(SyncConflictReview review) {
+    final title = switch (review.entityType) {
+      'patient' => 'Beneficiaire',
+      'housing' => 'Logement',
+      'mesures_anthropometriques' => 'Mesures',
+      'observations_synthese' => 'Observations de synthese',
+      'diagnostic_sanitaires' => 'Diagnostic sanitaires',
+      _ => 'Dossier',
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          for (final key in review.localValues.keys)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    _fieldLabels[key] ?? key,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final local = _value('Cet iPad', review.localValues[key]);
+                      final remote = _value(
+                        'Serveur',
+                        review.remoteValues[key],
+                      );
+                      return constraints.maxWidth < 600
+                          ? Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                local,
+                                const SizedBox(height: 8),
+                                remote,
+                              ],
+                            )
+                          : Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: local),
+                                const SizedBox(width: 20),
+                                Expanded(child: remote),
+                              ],
+                            );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _resolving || _error != null
+                    ? null
+                    : () => _resolve(review, true),
+                icon: const Icon(LucideIcons.uploadCloud),
+                label: const Text('Conserver mes changements'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _resolving || _error != null
+                    ? null
+                    : () => _resolve(review, false),
+                icon: const Icon(LucideIcons.downloadCloud),
+                label: const Text('Prendre ces valeurs du serveur'),
+              ),
+            ],
+          ),
+          if (_resolving) const LinearProgressIndicator(),
+          const SizedBox(height: 20),
+          const Divider(),
+        ],
+      ),
+    );
+  }
+
+  Widget _value(String title, dynamic value) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+      SelectableText(
+        value == null || value == ''
+            ? 'Non renseigne'
+            : value is Map || value is List
+            ? const JsonEncoder.withIndent('  ').convert(value)
+            : value.toString(),
+      ),
+    ],
+  );
 }
+
+const _fieldLabels = {
+  'firstName': 'Prenom',
+  'lastName': 'Nom',
+  'phone': 'Telephone',
+  'email': 'E-mail',
+  'address': 'Adresse',
+  'city': 'Commune',
+  'zipCode': 'Code postal',
+  'familySituation': 'Situation familiale',
+  'occupationStatus': 'Statut d\'occupation',
+  'occupant1BirthDate': 'Date de naissance',
+  'trustedPerson': 'Personne de confiance',
+  'occupants': 'Occupants',
+  'incomeCategory': 'Categorie de revenus',
+  'fiscalRevenue': 'Revenu fiscal',
+  'numberPeople': 'Nombre de personnes',
+  'surface': 'Surface',
+  'typology': 'Type de logement',
+  'roomsBreakdown': 'Pieces par niveau',
+  'heatingDetails': 'Chauffage',
+  'status': 'Statut',
+  'visitDate': 'Date de visite',
+  'ergoId': 'Ergotherapeute',
+  'beneficiaryPrepared': 'Beneficiaire prepare',
+  'compteAnah': 'Compte ANAH',
+  'natureAccompagnement': 'Accompagnement',
+  'envoiRapport': 'Envoi du rapport',
+  'personnesPresentesVisite': 'Personnes presentes',
+  'deboutHauteurCoude': 'Hauteur du coude debout',
+  'assisHauteurAssise': "Hauteur d'assise",
+  'assisProfondeurGenoux': 'Profondeur aux genoux',
+  'assisHauteurCoudes': 'Hauteur des coudes assis',
+  'observations': 'Observations',
+  'observationEquipements': 'Observations sur les equipements',
+  'projetSouhaitUsage': "Projet et souhaits de l'usager",
+  'resumePreconisations': 'Resume des preconisations',
+  'sdbInstances': 'Salles de bain',
+  'wcInstances': 'WC',
+};

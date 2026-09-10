@@ -6,6 +6,29 @@ final tz.Location _parisLocation = () {
   return tz.getLocation('Europe/Paris');
 }();
 
+/// Picker values are French wall time, irrespective of the device timezone.
+/// Send an explicit instant so NocoDB cannot reinterpret it as UTC wall time.
+/// Use DateTime.utc as a wall-time carrier to avoid device DST normalization.
+String serializeVisitDateTime(DateTime wallTime) {
+  final paris = tz.TZDateTime(
+    _parisLocation,
+    wallTime.year,
+    wallTime.month,
+    wallTime.day,
+    wallTime.hour,
+    wallTime.minute,
+    wallTime.second,
+  );
+  if (paris.year != wallTime.year ||
+      paris.month != wallTime.month ||
+      paris.day != wallTime.day ||
+      paris.hour != wallTime.hour ||
+      paris.minute != wallTime.minute) {
+    throw const FormatException('Heure de visite inexistante en Europe/Paris');
+  }
+  return paris.toUtc().toIso8601String();
+}
+
 DateTime? parseVisitDateTime(String? raw) {
   final value = raw?.trim() ?? '';
   if (value.isEmpty) return null;

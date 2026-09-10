@@ -579,15 +579,27 @@ class _DossierScreenState extends State<DossierScreen> {
     );
     if (pickedTime == null || !mounted) return;
 
-    final nextValue = DateFormat("yyyy-MM-dd'T'HH:mm:ss").format(
-      DateTime(
-        pickedDate.year,
-        pickedDate.month,
-        pickedDate.day,
-        pickedTime.hour,
-        pickedTime.minute,
-      ),
-    );
+    String nextValue;
+    try {
+      nextValue = serializeVisitDateTime(
+        DateTime.utc(
+          pickedDate.year,
+          pickedDate.month,
+          pickedDate.day,
+          pickedTime.hour,
+          pickedTime.minute,
+        ),
+      );
+    } on FormatException {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Cette heure n'existe pas le jour du changement d'heure.",
+          ),
+        ),
+      );
+      return;
+    }
     if (nextValue == previousValue) return;
 
     setState(() => _visitDate = nextValue);

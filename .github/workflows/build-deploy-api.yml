@@ -10,7 +10,10 @@
 #
 # Secrets requis (à configurer sur GitHub → repo → Settings → Secrets):
 #   - EASYPANEL_API_WEBHOOK : URL de webhook Easypanel pour redéployer
-#       le service "aidhabitat-api". Optionnel.
+#       le service "aidhabitat-api". Obligatoire pour ce workflow.
+# Variable optionnelle API_HEALTH_BASE_URL : origine HTTPS publique de l'API
+#   (sans identifiants, chemin ni query), par defaut https://api.aidhabitat.fr.
+# Le webhook accepte ne suffit pas : SHA actif attendu + readiness sont verifies.
 #
 # Permissions : `packages: write` pour push sur ghcr.io.
 # ---------------------------------------------------------------------------
@@ -27,6 +30,11 @@ on:
       - 'package-lock.json'
       - 'Dockerfile.api'
       - '.dockerignore'
+      - 'tools/release-artifact-check.mjs'
+      - 'tools/release-artifact-check.test.mjs'
+      - 'tools/wait-api-readiness.mjs'
+      - 'tools/wait-api-readiness.test.mjs'
+      - 'tools/api-health-version.test.mjs'
       - '.github/workflows/build-deploy-api.yml'
   workflow_dispatch:
 
@@ -40,6 +48,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -55,7 +64,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies
@@ -64,8 +73,20 @@ jobs:
       - name: Verify synchronization contracts
         run: npm run test:sync-contract
 
+      - name: Verify server regressions
+        run: npm run test:server
+
       - name: Verify critical flows
         run: npm run check:critical
+
+      - name: Verify release safeguards
+        run: node --test tools/release-artifact-check.test.mjs tools/wait-api-readiness.test.mjs tools/api-health-version.test.mjs
+
+      - name: Validate API health target
+        env:
+          API_HEALTH_BASE_URL: ${{ vars.API_HEALTH_BASE_URL || 'https://api.aidhabitat.fr' }}
+          EXPECTED_BUILD_SHA: ${{ github.sha }}
+        run: node tools/wait-api-readiness.mjs validate
 
       - name: Syntax check server
         run: |
@@ -113,6 +134,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_BUILD_SHA=${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,scope=api,mode=max
 
@@ -128,21 +151,25 @@ jobs:
             exit 1
           fi
           echo "Triggering Easypanel redeploy…"
-          response=$(curl -sS -o /tmp/easypanel-resp -w "%{http_code}" \
-            -X POST "$EASYPANEL_WEBHOOK")
-          echo "Easypanel response: HTTP $response"
-          cat /tmp/easypanel-resp || true
-          if [ "$response" -lt 200 ] || [ "$response" -ge 300 ]; then
-            echo "::warning::Easypanel webhook returned non-2xx — déploiement à vérifier manuellement"
-          fi
+          node tools/release-artifact-check.mjs post-webhook EASYPANEL_WEBHOOK
+
+      - name: Wait for expected API version and readiness
+        timeout-minutes: 6
+        env:
+          API_HEALTH_BASE_URL: ${{ vars.API_HEALTH_BASE_URL || 'https://api.aidhabitat.fr' }}
+          EXPECTED_BUILD_SHA: ${{ github.sha }}
+          API_READINESS_TIMEOUT_MS: '300000'
+        run: node tools/wait-api-readiness.mjs
 
       # --------------------------------------------------------------
       # 6. Résumé pour le job log
       # --------------------------------------------------------------
       - name: Summary
         run: |
-          echo "## ✅ API deployment" >> $GITHUB_STEP_SUMMARY
+          echo "## API active version and readiness verified" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Image: \`ghcr.io/${{ github.repository_owner }}/aidhabitat-api:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Tags: \`${{ steps.meta.outputs.tags }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Active SHA verified: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Readiness: HTTP 200 with matching SHA" >> $GITHUB_STEP_SUMMARY

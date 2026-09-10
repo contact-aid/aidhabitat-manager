@@ -1,8 +1,12 @@
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../models/types.dart';
 import 'local_database.dart';
 import 'offline_vault.dart';
+import 'sync_operation_ownership.dart';
 
 const Set<String> _kReportPrerequisiteEntityTypes = {
   'dossier',
@@ -29,15 +33,41 @@ class SyncRepository {
   SyncRepository({
     LocalDatabase? database,
     Future<Database> Function()? databaseProvider,
-  }) : _database = _SyncDatabaseHandle(
+  }) : _enforceOwnership = true,
+       _database = _SyncDatabaseHandle(
          databaseProvider ??
              () => (database ?? LocalDatabase.instance).database,
        );
 
   final _SyncDatabaseHandle _database;
+  final bool _enforceOwnership;
 
-  Future<List<SyncOperation>> fetchRunnableOperations() async {
+  /// For focused persistence tests that deliberately have no authentication.
+  @visibleForTesting
+  SyncRepository.forTesting({
+    LocalDatabase? database,
+    Future<Database> Function()? databaseProvider,
+  }) : _enforceOwnership = false,
+       _database = _SyncDatabaseHandle(
+         databaseProvider ??
+             () => (database ?? LocalDatabase.instance).database,
+       );
+
+  Future<int> countConflictingOperations() async {
     final db = await _database.database;
+    return Sqflite.firstIntValue(
+          await db.rawQuery(
+            "SELECT COUNT(*) FROM sync_operations WHERE status = 'conflict'",
+          ),
+        ) ??
+        0;
+  }
+
+  Future<List<SyncOperation>> fetchRunnableOperations({
+    bool includePayloads = true,
+  }) async {
+    final db = await _database.database;
+    // Read metadata for unconfirmed operations to preserve per-entity order.
     // Seules les opérations `pending` sont directement exécutables.
     // Les échecs transitoires sont explicitement réhabilités en `pending`
     // par `rehabilitateTransientFailures()` avant chaque cycle. Les échecs
@@ -51,8 +81,7 @@ class SyncRepository {
     // en RAM → SqliteException(7) : out of memory. Reporté
     // 2026-04-29 : « SqfliteFfiException(sqlite_error: 7, out of
     // memory) … SELECT * FROM sync_operations WHERE status IN (?, ?) ».
-    // payload_json est lu lazily PAR OP via `fetchPayloadJson` quand
-    // `_processOperation` le réclame.
+    // The sync worker requests metadata only, then loads one active payload.
     final rows = await db.query(
       'sync_operations',
       columns: const [
@@ -66,14 +95,26 @@ class SyncRepository {
         'created_at',
         'updated_at',
       ],
-      where: 'status = ?',
-      whereArgs: [SyncOperationStatus.pending.name],
-      orderBy: 'created_at ASC',
+      where: 'status != ?',
+      whereArgs: [SyncOperationStatus.completed.name],
+      orderBy: 'created_at ASC, id ASC',
     );
 
     final now = DateTime.now();
     final eligibleRows = <Map<String, Object?>>[];
+    final blockedEntities = <String>{};
     for (final row in rows) {
+      final key = '${row['entity_type']}:${row['entity_local_id']}';
+      if (blockedEntities.contains(key)) continue;
+      if (row['status'] != SyncOperationStatus.pending.name) {
+        blockedEntities.add(key);
+        continue;
+      }
+      if (_enforceOwnership &&
+          !await SyncOperationOwnership.mayClaim(db, row['id'] as String)) {
+        blockedEntities.add(key);
+        continue;
+      }
       // Une génération PDF différée ne doit jamais doubler les écritures
       // locales encore en file. Le serveur lit NocoDB pour construire le PDF :
       // si un upload photo / une note / une saisie dossier est encore pending
@@ -87,7 +128,7 @@ class SyncRepository {
           db,
           dossierId: dossierId,
           patientId: patientId,
-          statuses: const ['pending', 'failed'],
+          statuses: const ['pending', 'running', 'failed', 'conflict'],
         );
         if (blockers > 0) continue;
       }
@@ -100,29 +141,32 @@ class SyncRepository {
       if (attempts >= 1 && updatedAt != null) {
         final backoffSeconds = _computeOpBackoffSeconds(attempts);
         if (now.difference(updatedAt).inSeconds < backoffSeconds) {
+          blockedEntities.add(key);
           continue;
         }
       }
       eligibleRows.add(row);
     }
 
-    // Lit le `payload_json` UN PAR UN pour les ops éligibles → max 1
-    // payload en RAM à la fois côté ce loader (le sync engine va de
-    // toute façon les itérer en série après).
+    // Keep the compatibility loader for callers inspecting queued mutations.
     final out = <SyncOperation>[];
     for (final row in eligibleRows) {
       final id = row['id'] as String;
-      final payloadRows = await db.query(
-        'sync_operations',
-        columns: const ['payload_json'],
-        where: 'id = ?',
-        whereArgs: [id],
-        limit: 1,
-      );
-      if (payloadRows.isEmpty) continue;
-      final payloadJson = await OfflineVault.instance.openString(
-        payloadRows.first['payload_json'] as String,
-      );
+      final payloadRows = includePayloads
+          ? await db.query(
+              'sync_operations',
+              columns: const ['payload_json'],
+              where: 'id = ?',
+              whereArgs: [id],
+              limit: 1,
+            )
+          : <Map<String, Object?>>[];
+      if (includePayloads && payloadRows.isEmpty) continue;
+      final payloadJson = includePayloads
+          ? await OfflineVault.instance.openString(
+              payloadRows.first['payload_json'] as String,
+            )
+          : '';
       out.add(
         SyncOperation(
           id: id,
@@ -141,12 +185,157 @@ class SyncRepository {
     return out;
   }
 
+  Future<SyncOperation?> loadRunnablePayload(SyncOperation snapshot) async {
+    final db = await _database.database;
+    final rows = await db.query(
+      'sync_operations',
+      columns: const ['payload_json', 'updated_at'],
+      where: 'id = ? AND status = ? AND operation_type = ?',
+      whereArgs: [snapshot.id, 'pending', snapshot.operationType],
+      limit: 1,
+    );
+    if (rows.isEmpty ||
+        DateTime.tryParse(rows.single['updated_at'] as String? ?? '') !=
+            snapshot.updatedAt) {
+      return null;
+    }
+    return SyncOperation(
+      id: snapshot.id,
+      entityType: snapshot.entityType,
+      entityLocalId: snapshot.entityLocalId,
+      operationType: snapshot.operationType,
+      payloadJson: await OfflineVault.instance.openString(
+        rows.single['payload_json'] as String,
+      ),
+      status: snapshot.status,
+      attemptCount: snapshot.attemptCount,
+      lastError: snapshot.lastError,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+    );
+  }
+
   Future<void> markRunning(String operationId) async {
     await _updateOperation(
       operationId: operationId,
       status: SyncOperationStatus.running,
       clearError: true,
     );
+  }
+
+  Future<bool> markPreparationFailure(SyncOperation snapshot) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership &&
+          !await SyncOperationOwnership.mayClaim(txn, snapshot.id)) {
+        return false;
+      }
+      final rows = await txn.query(
+        'sync_operations',
+        columns: const ['updated_at'],
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? '
+            'AND operation_type = ? AND status = ?',
+        whereArgs: [
+          snapshot.id,
+          snapshot.entityType,
+          snapshot.entityLocalId,
+          snapshot.operationType,
+          'pending',
+        ],
+        limit: 1,
+      );
+      if (rows.isEmpty ||
+          DateTime.tryParse(rows.single['updated_at'] as String) !=
+              snapshot.updatedAt) {
+        return false;
+      }
+      final rawUpdatedAt = rows.single['updated_at'];
+      final changed = await txn.update(
+        'sync_operations',
+        {
+          'status': 'failed',
+          'last_error':
+              'Lecture de la sauvegarde locale impossible. '
+              'Les données sont conservées ; une vérification est nécessaire.',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND status = ? AND updated_at = ?',
+        whereArgs: [snapshot.id, 'pending', rawUpdatedAt],
+      );
+      if (changed != 1) return false;
+      await _updateEntitySyncState(
+        db: txn,
+        entityType: snapshot.entityType,
+        entityLocalId: snapshot.entityLocalId,
+        syncState: SyncState.syncError,
+      );
+      return true;
+    });
+  }
+
+  /// A queued snapshot may have been replaced while another entity uploaded.
+  /// Claim only the exact pending mutation that this worker has loaded.
+  Future<bool> tryMarkRunning(SyncOperation operation) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership &&
+          !await SyncOperationOwnership.mayClaim(txn, operation.id)) {
+        return false;
+      }
+      final blockers = await txn.query(
+        'sync_operations',
+        columns: const ['id'],
+        where:
+            'entity_type = ? AND entity_local_id = ? AND id != ? '
+            'AND status NOT IN (?, ?)',
+        whereArgs: [
+          operation.entityType,
+          operation.entityLocalId,
+          operation.id,
+          'pending',
+          'completed',
+        ],
+        limit: 1,
+      );
+      if (blockers.isNotEmpty) return false;
+      final rows = await txn.query(
+        'sync_operations',
+        columns: const ['payload_json', 'updated_at'],
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? '
+            'AND operation_type = ? AND status = ?',
+        whereArgs: [
+          operation.id,
+          operation.entityType,
+          operation.entityLocalId,
+          operation.operationType,
+          SyncOperationStatus.pending.name,
+        ],
+        limit: 1,
+      );
+      if (rows.isEmpty) return false;
+      final row = rows.single;
+      if (DateTime.tryParse(row['updated_at'] as String? ?? '') !=
+          operation.updatedAt) {
+        return false;
+      }
+      final payload = await OfflineVault.instance.openString(
+        row['payload_json'] as String,
+      );
+      if (payload != operation.payloadJson) return false;
+      await txn.update(
+        'sync_operations',
+        {
+          'status': SyncOperationStatus.running.name,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [operation.id],
+      );
+      return true;
+    });
   }
 
   /// Marque une op comme `completed` UNIQUEMENT si elle est encore
@@ -157,31 +346,152 @@ class SyncRepository {
   /// `pending` avec sa payload fraîche, le SyncEngine la repushera au
   /// prochain cycle, et l'utilisateur ne perd PAS sa frappe. C'est le
   /// fix de la race « Bro → B » (avril 2026).
-  Future<void> markCompleted({
+  Future<bool> markCompleted({
     required String operationId,
     required String entityType,
     required String entityLocalId,
+  }) => _markCompleted(
+    operationId: operationId,
+    entityType: entityType,
+    entityLocalId: entityLocalId,
+  );
+
+  Future<bool> markCompletedForPayload(SyncOperation operation) =>
+      _markCompleted(
+        operationId: operation.id,
+        entityType: operation.entityType,
+        entityLocalId: operation.entityLocalId,
+        expectedPayloadJson: operation.payloadJson,
+      );
+
+  Future<bool> _markCompleted({
+    required String operationId,
+    required String entityType,
+    required String entityLocalId,
+    String? expectedPayloadJson,
   }) async {
-    final updated = await _updateOperation(
-      operationId: operationId,
-      status: SyncOperationStatus.completed,
-      clearError: true,
-      expectedStatus: SyncOperationStatus.running,
-    );
-    if (updated == 0) {
-      // L'op a été remplacée par une nouvelle version `pending` pendant
-      // le PATCH en vol. Ne PAS marquer l'entité `synced` — il y a une
-      // mutation locale plus récente à pousser. On laisse la nouvelle
-      // op `pending` faire son travail au prochain cycle.
-      return;
-    }
     final db = await _database.database;
-    await _updateEntitySyncState(
-      db: db,
-      entityType: entityType,
-      entityLocalId: entityLocalId,
-      syncState: SyncState.synced,
-    );
+    return db.transaction((txn) async {
+      if (expectedPayloadJson != null) {
+        final rows = await txn.query(
+          'sync_operations',
+          columns: const ['payload_json'],
+          where:
+              'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
+          whereArgs: [operationId, entityType, entityLocalId, 'running'],
+          limit: 1,
+        );
+        if (rows.isEmpty ||
+            await OfflineVault.instance.openString(
+                  rows.single['payload_json'] as String,
+                ) !=
+                expectedPayloadJson) {
+          return false;
+        }
+      }
+      final updated = await txn.update(
+        'sync_operations',
+        {
+          'status': SyncOperationStatus.completed.name,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? '
+            'AND status = ?',
+        whereArgs: [
+          operationId,
+          entityType,
+          entityLocalId,
+          SyncOperationStatus.running.name,
+        ],
+      );
+      if (updated == 0) return false;
+
+      // Completing one mutation does not acknowledge the entity's whole queue.
+      // Keep this read and the entity update in the same transaction.
+      final remaining = await txn.query(
+        'sync_operations',
+        columns: const ['status'],
+        distinct: true,
+        where: 'entity_type = ? AND entity_local_id = ? AND status != ?',
+        whereArgs: [
+          entityType,
+          entityLocalId,
+          SyncOperationStatus.completed.name,
+        ],
+      );
+      final states = remaining.map((row) => row['status']).toSet();
+      final state = states.contains('conflict')
+          ? SyncState.conflict
+          : states.contains(SyncOperationStatus.failed.name)
+          ? SyncState.syncError
+          : states.isNotEmpty
+          ? SyncState.pendingSync
+          : SyncState.synced;
+      await _updateEntitySyncState(
+        db: txn,
+        entityType: entityType,
+        entityLocalId: entityLocalId,
+        syncState: state,
+      );
+      return true;
+    });
+  }
+
+  /// Persist a server version only while this exact payload owns the reply.
+  /// Entity acknowledgement belongs exclusively to markCompleted's transaction.
+  Future<void> storeRemoteUpdatedAt(
+    SyncOperation operation,
+    String? value,
+  ) async {
+    if (value == null) return;
+    final db = await _database.database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        columns: const ['payload_json'],
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
+        whereArgs: [
+          operation.id,
+          operation.entityType,
+          operation.entityLocalId,
+          'running',
+        ],
+        limit: 1,
+      );
+      if (rows.isEmpty ||
+          await OfflineVault.instance.openString(
+                rows.single['payload_json'] as String,
+              ) !=
+              operation.payloadJson) {
+        return;
+      }
+      final table = switch (operation.entityType) {
+        'patient' => 'patients',
+        'housing' => 'housings',
+        'dossier' || 'contexte_de_vie' => 'dossiers',
+        'mesures_anthropometriques' ||
+        'observations_synthese' ||
+        'diagnostic_sanitaires' => operation.entityType,
+        _ => null,
+      };
+      if (table == null) return;
+      await txn.update(
+        table,
+        {'remote_updated_at': value},
+        where: switch (operation.entityType) {
+          'housing' =>
+            'local_id IN (SELECT housing_local_id FROM dossiers WHERE local_id = ?)',
+          'mesures_anthropometriques' ||
+          'observations_synthese' ||
+          'diagnostic_sanitaires' => 'dossier_local_id = ?',
+          _ => 'local_id = ?',
+        },
+        whereArgs: [operation.entityLocalId],
+      );
+    });
   }
 
   /// Marque une op comme `failed` UNIQUEMENT si elle est encore
@@ -198,43 +508,51 @@ class SyncRepository {
     required String error,
   }) async {
     final db = await _database.database;
-    final rows = await db.query(
-      'sync_operations',
-      columns: ['attempt_count'],
-      where: 'id = ? AND status = ?',
-      whereArgs: [operationId, SyncOperationStatus.running.name],
-      limit: 1,
-    );
-    if (rows.isEmpty) {
-      // L'op a été remplacée pendant le PATCH — laisser le row `pending`
-      // tel quel, il sera retenté au prochain cycle.
-      return;
-    }
-    final attempts = rows.first['attempt_count'] as int? ?? 0;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        columns: ['attempt_count'],
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
+        whereArgs: [
+          operationId,
+          entityType,
+          entityLocalId,
+          SyncOperationStatus.running.name,
+        ],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        // L'op a été remplacée pendant le PATCH — laisser le row `pending`
+        // tel quel, il sera retenté au prochain cycle.
+        return;
+      }
+      final attempts = rows.first['attempt_count'] as int? ?? 0;
 
-    final updated = await db.update(
-      'sync_operations',
-      {
-        'status': SyncOperationStatus.failed.name,
-        'attempt_count': attempts + 1,
-        'last_error': error,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ? AND status = ?',
-      whereArgs: [operationId, SyncOperationStatus.running.name],
-    );
-    if (updated == 0) {
-      // Race : la transition pending→running a été annulée juste avant
-      // notre UPDATE. Identique au cas `rows.isEmpty` ci-dessus.
-      return;
-    }
+      final updated = await txn.update(
+        'sync_operations',
+        {
+          'status': SyncOperationStatus.failed.name,
+          'attempt_count': attempts + 1,
+          'last_error': error,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND status = ?',
+        whereArgs: [operationId, SyncOperationStatus.running.name],
+      );
+      if (updated == 0) {
+        // Race : la transition pending→running a été annulée juste avant
+        // notre UPDATE. Identique au cas `rows.isEmpty` ci-dessus.
+        return;
+      }
 
-    await _updateEntitySyncState(
-      db: db,
-      entityType: entityType,
-      entityLocalId: entityLocalId,
-      syncState: SyncState.syncError,
-    );
+      await _updateEntitySyncState(
+        db: txn,
+        entityType: entityType,
+        entityLocalId: entityLocalId,
+        syncState: SyncState.syncError,
+      );
+    });
   }
 
   /// Backoff par opération après échec transitoire. Progression :
@@ -251,13 +569,14 @@ class SyncRepository {
   /// compteur) : inclut aussi bien les ops retentables immédiatement
   /// que celles en cours de backoff — l'utilisateur doit voir qu'il y
   /// a encore du travail en file même si rien n'est exécuté tout de
-  /// suite. Ne compte pas les ops `completed` ni `conflict`.
+  /// suite. Seules les operations `completed` sont exclues : un envoi en
+  /// cours ou un conflit ne doit pas autoriser un rechargement destructif.
   Future<int> countPendingOperations() async {
     final db = await _database.database;
     final rows = await db.rawQuery(
       'SELECT COUNT(*) AS cnt FROM sync_operations '
-      'WHERE status IN (?, ?)',
-      [SyncOperationStatus.pending.name, SyncOperationStatus.failed.name],
+      'WHERE status != ?',
+      [SyncOperationStatus.completed.name],
     );
     if (rows.isEmpty) return 0;
     final v = rows.first['cnt'];
@@ -278,7 +597,7 @@ class SyncRepository {
       db,
       dossierId: dossierId,
       patientId: patientId,
-      statuses: const ['pending', 'failed'],
+      statuses: const ['pending', 'running', 'failed'],
     );
   }
 
@@ -567,81 +886,120 @@ class SyncRepository {
     required String error,
   }) async {
     final db = await _database.database;
-    final rows = await db.query(
-      'sync_operations',
-      columns: ['attempt_count'],
-      where: 'id = ? AND status = ?',
-      whereArgs: [operationId, SyncOperationStatus.running.name],
-      limit: 1,
-    );
-    if (rows.isEmpty) {
-      // L'op a été remplacée par une version `pending` plus récente
-      // pendant le PATCH en vol — ne pas écraser. La nouvelle version
-      // contient déjà la donnée la plus récente et sera retentée.
-      return;
-    }
-    final attempts = rows.first['attempt_count'] as int? ?? 0;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        columns: ['attempt_count'],
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
+        whereArgs: [
+          operationId,
+          entityType,
+          entityLocalId,
+          SyncOperationStatus.running.name,
+        ],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        // L'op a été remplacée par une version `pending` plus récente
+        // pendant le PATCH en vol — ne pas écraser. La nouvelle version
+        // contient déjà la donnée la plus récente et sera retentée.
+        return;
+      }
+      final attempts = rows.first['attempt_count'] as int? ?? 0;
 
-    final updated = await db.update(
-      'sync_operations',
-      {
-        'status': SyncOperationStatus.pending.name,
-        'attempt_count': attempts + 1,
-        'last_error': error,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ? AND status = ?',
-      whereArgs: [operationId, SyncOperationStatus.running.name],
-    );
-    if (updated == 0) {
-      return;
-    }
+      final updated = await txn.update(
+        'sync_operations',
+        {
+          'status': SyncOperationStatus.pending.name,
+          'attempt_count': attempts + 1,
+          'last_error': error,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND status = ?',
+        whereArgs: [operationId, SyncOperationStatus.running.name],
+      );
+      if (updated == 0) {
+        return;
+      }
 
-    // On laisse sync_state sur `pendingSync` (c'est le statut "en cours
-    // de sync" normal) plutôt que `syncError` pour ne pas alarmer l'UI.
-    await _updateEntitySyncState(
-      db: db,
-      entityType: entityType,
-      entityLocalId: entityLocalId,
-      syncState: SyncState.pendingSync,
-    );
+      // On laisse sync_state sur `pendingSync` (c'est le statut "en cours
+      // de sync" normal) plutôt que `syncError` pour ne pas alarmer l'UI.
+      await _updateEntitySyncState(
+        db: txn,
+        entityType: entityType,
+        entityLocalId: entityLocalId,
+        syncState: SyncState.pendingSync,
+      );
+    });
   }
 
-  Future<void> markConflict({
+  Future<bool> markConflict({
     required String operationId,
     required String entityType,
     required String entityLocalId,
     required String error,
+    required String expectedPayloadJson,
+    Map<String, dynamic>? remoteData,
   }) async {
     final db = await _database.database;
-    final updated = await db.update(
-      'sync_operations',
-      {
-        'status': 'conflict',
-        'last_error': error,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ? AND status = ?',
-      whereArgs: [operationId, SyncOperationStatus.running.name],
-    );
-    if (updated == 0) {
-      // L'op a été remplacée pendant le PATCH par une version `pending`
-      // plus récente — la nouvelle version va re-PATCHer avec la
-      // dernière donnée locale et résoudra (ou pas) le conflit serveur
-      // de son côté. Ne pas marquer l'entité en `conflict` ici : on
-      // ferait clignoter l'UI à tort.
-      return;
-    }
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
+        whereArgs: [operationId, entityType, entityLocalId, 'running'],
+      );
+      if (rows.isEmpty) return false;
+      final currentPayload = await OfflineVault.instance.openString(
+        rows.single['payload_json'] as String,
+      );
+      if (currentPayload != expectedPayloadJson) return false;
+      final payload = jsonDecode(currentPayload) as Map<String, dynamic>;
+      payload['conflict'] = {
+        'remote': remoteData,
+        'detectedAt': DateTime.now().toIso8601String(),
+      };
+      final updated = await txn.update(
+        'sync_operations',
+        {
+          'status': 'conflict',
+          'payload_json': await OfflineVault.instance.sealString(
+            jsonEncode(payload),
+          ),
+          'last_error': error,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
+        whereArgs: [
+          operationId,
+          entityType,
+          entityLocalId,
+          SyncOperationStatus.running.name,
+        ],
+      );
+      if (updated == 0) {
+        // L'op a été remplacée pendant le PATCH par une version `pending`
+        // plus récente — la nouvelle version va re-PATCHer avec la
+        // dernière donnée locale et résoudra (ou pas) le conflit serveur
+        // de son côté. Ne pas marquer l'entité en `conflict` ici : on
+        // ferait clignoter l'UI à tort.
+        return false;
+      }
 
-    await _updateEntitySyncState(
-      db: db,
-      entityType: entityType,
-      entityLocalId: entityLocalId,
-      syncState: SyncState.conflict,
-    );
+      await _updateEntitySyncState(
+        db: txn,
+        entityType: entityType,
+        entityLocalId: entityLocalId,
+        syncState: SyncState.conflict,
+      );
+      return true;
+    });
   }
 
   Future<void> storeDocumentRemoteData({
+    required String operationId,
     required String documentLocalId,
     required String remotePath,
     required String publicUrl,
@@ -654,8 +1012,27 @@ class SyncRepository {
         'remote_public_url': publicUrl,
         'updated_at': DateTime.now().toIso8601String(),
       },
-      where: 'local_id = ?',
-      whereArgs: [documentLocalId],
+      where:
+          'local_id = ? AND pending_delete = 0 '
+          'AND EXISTS (SELECT 1 FROM sync_operations '
+          'WHERE id = ? AND entity_type = ? AND entity_local_id = ? '
+          'AND operation_type = ? AND status = ?) '
+          'AND NOT EXISTS (SELECT 1 FROM sync_operations '
+          'WHERE id != ? AND entity_type = ? AND entity_local_id = ? '
+          'AND operation_type = ? AND status != ?)',
+      whereArgs: [
+        documentLocalId,
+        operationId,
+        'document',
+        documentLocalId,
+        'upload_file',
+        SyncOperationStatus.running.name,
+        operationId,
+        'document',
+        documentLocalId,
+        'upload_file',
+        SyncOperationStatus.completed.name,
+      ],
     );
   }
 
@@ -686,33 +1063,47 @@ class SyncRepository {
     String? remoteDossierId,
   }) async {
     final db = await _database.database;
-    final now = DateTime.now().toIso8601String();
-
-    await db.update(
-      'patients',
-      {
-        'remote_patient_id': remotePatientId,
-        'sync_state': SyncState.synced.name,
-        'remote_updated_at': now,
-        'updated_at': now,
-      },
-      where: 'local_id = ?',
-      whereArgs: [patientLocalId],
-    );
-
-    if (dossierLocalId.isNotEmpty && remoteDossierId != null) {
-      await db.update(
-        'dossiers',
-        {
-          'remote_dossier_id': remoteDossierId,
-          'sync_state': SyncState.synced.name,
-          'remote_updated_at': now,
-          'updated_at': now,
-        },
+    await db.transaction((txn) async {
+      await txn.update(
+        'patients',
+        {'remote_patient_id': remotePatientId},
         where: 'local_id = ?',
-        whereArgs: [dossierLocalId],
+        whereArgs: [patientLocalId],
       );
-    }
+      if (dossierLocalId.isNotEmpty && remoteDossierId != null) {
+        await txn.update(
+          'dossiers',
+          {'remote_dossier_id': remoteDossierId},
+          where: 'local_id = ?',
+          whereArgs: [dossierLocalId],
+        );
+      }
+      // The create reply acknowledges initial values, not later local edits.
+      // It supplies identities only; never invent a remote clock from now().
+      for (final entity in ['patient', 'housing']) {
+        final localId = entity == 'patient' ? patientLocalId : dossierLocalId;
+        final remaining = await txn.query(
+          'sync_operations',
+          columns: ['status'],
+          where: 'entity_type = ? AND entity_local_id = ? AND status != ?',
+          whereArgs: [entity, localId, 'completed'],
+        );
+        final states = remaining.map((row) => row['status']).toSet();
+        final state = states.contains('conflict')
+            ? SyncState.conflict
+            : states.contains('failed')
+            ? SyncState.syncError
+            : states.isNotEmpty
+            ? SyncState.pendingSync
+            : SyncState.synced;
+        await _updateEntitySyncState(
+          db: txn,
+          entityType: entity,
+          entityLocalId: localId,
+          syncState: state,
+        );
+      }
+    });
   }
 
   /// Look up the remote patient ID for a given local patient ID.
@@ -776,9 +1167,11 @@ class SyncRepository {
   /// Retourne le nombre d'opérations réparées.
   Future<int> purgeStalePendingOperations({
     Duration maxRunningAge = const Duration(hours: 72),
+    DateTime? interruptedBefore,
   }) async {
     final db = await _database.database;
-    final cutoff = DateTime.now().subtract(maxRunningAge).toIso8601String();
+    final cutoff = (interruptedBefore ?? DateTime.now().subtract(maxRunningAge))
+        .toIso8601String();
     final now = DateTime.now().toIso8601String();
     // 1) Réhabilite les `failed` → `pending` (au lieu de DELETE qui
     //    perdait les modifs offline pour toujours).
@@ -853,6 +1246,22 @@ class SyncRepository {
   /// Renvoie null si aucune op n'est en `failed`.
   Future<Map<String, String?>?> fetchTopFailingOperation() async {
     final db = await _database.database;
+    if (_enforceOwnership) {
+      final ownership = await SyncOperationOwnership.blockedCounts(db);
+      if (ownership.hasActiveSession && ownership.blocksDispatch) {
+        return {
+          'entityType': 'sync_ownership',
+          'lastError':
+              ownership.historicalUnattributed +
+                      ownership.reviewRequired +
+                      ownership.missingOwnership >
+                  0
+              ? 'Des sauvegardes locales attendent une vérification de leur auteur.'
+              : 'Des sauvegardes attendent la reconnexion de leur auteur.',
+          'attemptCount': '0',
+        };
+      }
+    }
     final rows = await db.query(
       'sync_operations',
       columns: [
@@ -978,71 +1387,28 @@ class SyncRepository {
     );
   }
 
-  Future<void> clearPendingOperationsForEntity(String entityLocalId) async {
+  /// Boot must retain conflicts, including older operations without a snapshot.
+  /// Restore their entity indicators, but never requeue or acknowledge them.
+  Future<int> restoreConflictedEntities() async {
     final db = await _database.database;
-    await db.delete(
-      'sync_operations',
-      where: 'entity_local_id = ? AND status IN (?, ?)',
-      whereArgs: [
-        entityLocalId,
-        SyncOperationStatus.pending.name,
-        SyncOperationStatus.failed.name,
-      ],
-    );
-  }
-
-  /// Débloque les entités historiquement marquées `conflict` dans les
-  /// tables `dossiers` / `patients` / `housings` / `documents` /
-  /// `note_pages`. Pour chacune :
-  ///   1. Reset son `sync_state` à `synced` (le prochain pull NocoDB
-  ///      pourra alors appliquer le merge sans skipper la ligne).
-  ///   2. Réhabilite les anciennes ops `conflict` en `pending` pour que leur
-  ///      payload local soit rejoué avant le prochain pull.
-  ///
-  /// Renvoie le nombre TOTAL de lignes débloquées (somme des updates
-  /// sur les 5 tables — utile pour le log de boot).
-  ///
-  /// Demande utilisateur 2026-04-30 : « il ne faut aucun bouton ni
-  /// intervention tout doit se faire tout seul en backend » →
-  /// l'écran de résolution de conflit n'est plus nécessaire, on
-  /// résout désormais automatiquement le conflit en conservant la mutation
-  /// locale. Aucun payload n'est supprimé au démarrage.
-  Future<int> unstickConflictedEntities() async {
-    final db = await _database.database;
-    var total = 0;
-    const tables = [
-      'dossiers',
-      'patients',
-      'housings',
-      'documents',
-      'note_pages',
-    ];
-    for (final table in tables) {
-      final updated = await db.update(
-        table,
-        {'sync_state': SyncState.synced.name},
-        where: 'sync_state = ?',
-        whereArgs: [SyncState.conflict.name],
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        columns: ['entity_type', 'entity_local_id'],
+        where: 'status = ?',
+        whereArgs: ['conflict'],
+        distinct: true,
       );
-      total += updated;
-    }
-    // Les anciens builds laissaient parfois une opération en `conflict`.
-    // La supprimer perdrait la seule copie sérialisée de la saisie terrain.
-    // On la remet en attente : le drain la poussera avant le pull et le
-    // mécanisme 409 force-local résoudra le conflit sans intervention.
-    await db.update(
-      'sync_operations',
-      {
-        'status': SyncOperationStatus.pending.name,
-        'attempt_count': 0,
-        'last_error': null,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'status = ?',
-      // Valeur héritée d'anciennes versions, absente de l'enum actuelle.
-      whereArgs: const ['conflict'],
-    );
-    return total;
+      for (final row in rows) {
+        await _updateEntitySyncState(
+          db: txn,
+          entityType: row['entity_type'] as String,
+          entityLocalId: row['entity_local_id'] as String,
+          syncState: SyncState.conflict,
+        );
+      }
+      return rows.length;
+    });
   }
 
   /// Met à jour le statut d'une `sync_operation`. Si [expectedStatus] est
@@ -1084,11 +1450,22 @@ class SyncRepository {
   }
 
   Future<void> _updateEntitySyncState({
-    required Database db,
+    required DatabaseExecutor db,
     required String entityType,
     required String entityLocalId,
     required SyncState syncState,
   }) async {
+    // Housing mutations are keyed by dossier id, not by housings.local_id.
+    if (entityType == 'housing') {
+      await db.update(
+        'housings',
+        {'sync_state': syncState.name},
+        where:
+            'local_id IN (SELECT housing_local_id FROM dossiers WHERE local_id = ?)',
+        whereArgs: [entityLocalId],
+      );
+      return;
+    }
     // Bindings entity_type → table:colonne. Avant ce mapping complet,
     // les types `patient` / `housing` / `contexte_de_vie` /
     // `diagnostic_sanitaires` / `visit_recommendations` n'avaient PAS

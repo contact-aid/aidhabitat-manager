@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io' show File;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
@@ -20,9 +19,9 @@ import 'package:sqflite/sqflite.dart';
 // au niveau applicatif via `OfflineVault`.
 import 'package:sqflite_sqlcipher/sqflite.dart' as sqlcipher;
 
-import 'native_file_protection.dart';
 import 'offline_vault.dart';
 import 'secure_session_storage.dart';
+import 'sync_operation_ownership.dart';
 
 class LocalDatabase {
   LocalDatabase._();
@@ -33,14 +32,20 @@ class LocalDatabase {
   static final LocalDatabase instance = LocalDatabase._();
   static const _dbName = 'aid_habitat_offline.db';
   static const _debugFallbackDbName = 'aid_habitat_offline.debug_fallback.db';
-  static const _dbVersion = 21;
+  static const _dbVersion = 24;
 
   Database? _database;
+  Future<Database>? _opening;
   bool _forceDebugPlaintextFallback = false;
   bool _webOfflineVaultMigrationChecked = false;
 
-  Future<Database> get database async {
-    if (_database != null) return _database!;
+  Future<Database> get database {
+    if (_opening != null) return _opening!;
+    if (_database != null) return Future.value(_database!);
+    return _opening ??= _openDatabase().whenComplete(() => _opening = null);
+  }
+
+  Future<Database> _openDatabase() async {
     final dbPath = await getDatabasesPath();
     final encryptedPath = p.join(dbPath, _dbName);
     final fallbackPath = p.join(dbPath, _debugFallbackDbName);
@@ -80,7 +85,20 @@ class LocalDatabase {
         onUpgrade: _onUpgrade,
       );
     }
-    await _sealExistingWebOfflineVaultData(_database!);
+    try {
+      await _sealExistingWebOfflineVaultData(_database!);
+      await _database!.transaction(SyncOperationOwnership.installTriggers);
+    } catch (_) {
+      final failedDatabase = _database;
+      _database = null;
+      _webOfflineVaultMigrationChecked = false;
+      try {
+        await failedDatabase?.close();
+      } catch (_) {
+        // Preserve the preparation error; never reuse a partially ready handle.
+      }
+      rethrow;
+    }
     return _database!;
   }
 
@@ -91,6 +109,13 @@ class LocalDatabase {
       throw StateError('La base de test doit être fournie au constructeur');
     }
     await _onCreate(db, _dbVersion);
+    await SyncOperationOwnership.installTriggers(db);
+  }
+
+  @visibleForTesting
+  Future<void> upgradeSchemaForTesting(int oldVersion) async {
+    await _onUpgrade(_database!, oldVersion, _dbVersion);
+    await SyncOperationOwnership.installTriggers(_database!);
   }
 
   /// Vrai quand on est sur une cible où `sqflite_sqlcipher` peut
@@ -121,23 +146,33 @@ class LocalDatabase {
         message.contains('Impossible de stocker la master key SQLCipher');
   }
 
-  Future<void> _sealExistingWebOfflineVaultData(Database db) async {
-    if (!kIsWeb || _webOfflineVaultMigrationChecked) return;
-    _webOfflineVaultMigrationChecked = true;
+  @visibleForTesting
+  Future<void> sealWebOfflineVaultForTesting(
+    Future<String> Function(String) sealString,
+  ) => _sealExistingWebOfflineVaultData(
+    _database!,
+    force: true,
+    sealString: sealString,
+  );
 
-    const marker = '__offline_vault_web_v1';
-    try {
-      final done = await db.query(
-        'reference_sync_meta',
-        columns: const ['last_synced_at'],
-        where: 'table_name = ?',
-        whereArgs: const [marker],
-        limit: 1,
-      );
-      if (done.isNotEmpty) return;
-    } catch (_) {
-      // La table existe depuis v4, mais on ne bloque jamais le boot si
-      // une base legacy partiellement migrée ne l'a pas encore.
+  Future<void> _sealExistingWebOfflineVaultData(
+    Database db, {
+    bool force = false,
+    Future<String> Function(String)? sealString,
+  }) async {
+    if ((!kIsWeb && !force) || _webOfflineVaultMigrationChecked) return;
+
+    const marker = '__offline_vault_web_v2';
+    final done = await db.query(
+      'reference_sync_meta',
+      columns: const ['last_synced_at'],
+      where: 'table_name = ?',
+      whereArgs: const [marker],
+      limit: 1,
+    );
+    if (done.isNotEmpty) {
+      _webOfflineVaultMigrationChecked = true;
+      return;
     }
 
     await _sealTextColumns(
@@ -145,36 +180,49 @@ class LocalDatabase {
       table: 'documents',
       idColumn: 'local_id',
       columns: const ['local_file_data_url', 'annotations_json'],
+      sealString: sealString,
     );
     await _sealTextColumns(
       db,
       table: 'note_pages',
       idColumn: 'local_id',
       columns: const ['text_content', 'drawing_json'],
+      sealString: sealString,
     );
     await _sealTextColumns(
       db,
       table: 'sync_operations',
       idColumn: 'id',
       columns: const ['payload_json'],
+      sealString: sealString,
     );
     await _sealTextColumns(
       db,
       table: 'wiki_items',
       idColumn: 'id',
       columns: const ['pending_image_data_url'],
+      sealString: sealString,
+    );
+    await _sealTextColumns(
+      db,
+      table: SyncOperationOwnership.historyTableName,
+      idColumn: 'id',
+      columns: const ['payload_json'],
+      sealString: sealString,
     );
     await _sealTextColumns(
       db,
       table: 'app_users',
       idColumn: 'local_id',
       columns: const ['pending_photo_data_url'],
+      sealString: sealString,
     );
     await _sealTextColumns(
       db,
       table: 'access_members',
       idColumn: 'email',
       columns: const ['generated_password', 'pending_password'],
+      sealString: sealString,
     );
     await _sealBlobColumn(
       db,
@@ -183,15 +231,11 @@ class LocalDatabase {
       column: 'bytes',
     );
 
-    try {
-      await db.insert('reference_sync_meta', {
-        'table_name': marker,
-        'last_synced_at': DateTime.now().toIso8601String(),
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-    } catch (_) {
-      // Best effort : les nouvelles écritures restent chiffrées même si le
-      // marqueur n'a pas pu être écrit.
-    }
+    await db.insert('reference_sync_meta', {
+      'table_name': marker,
+      'last_synced_at': DateTime.now().toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    _webOfflineVaultMigrationChecked = true;
   }
 
   Future<void> _sealTextColumns(
@@ -199,31 +243,40 @@ class LocalDatabase {
     required String table,
     required String idColumn,
     required List<String> columns,
+    Future<String> Function(String)? sealString,
   }) async {
-    try {
-      final rows = await db.query(table, columns: [idColumn, ...columns]);
-      for (final row in rows) {
-        final id = row[idColumn];
-        if (id == null) continue;
-        final updates = <String, Object?>{};
-        for (final column in columns) {
-          final value = row[column] as String?;
-          if (value == null || value.isEmpty) continue;
-          final sealed = await OfflineVault.instance.sealString(value);
-          if (sealed != value) updates[column] = sealed;
-        }
-        if (updates.isNotEmpty) {
-          await db.update(
-            table,
-            updates,
-            where: '$idColumn = ?',
-            whereArgs: [id],
-          );
-        }
+    Object? lastId;
+    while (true) {
+      final rows = await db.query(
+        table,
+        columns: [idColumn, ...columns],
+        where: lastId == null ? null : '$idColumn > ?',
+        whereArgs: lastId == null ? null : [lastId],
+        orderBy: idColumn,
+        limit: 1,
+      );
+      if (rows.isEmpty) break;
+      final row = rows.single;
+      final id = row[idColumn];
+      if (id == null) throw StateError('Missing vault migration row identity');
+      lastId = id;
+      final updates = <String, Object?>{};
+      for (final column in columns) {
+        final value = row[column] as String?;
+        if (value == null || value.isEmpty) continue;
+        final sealed = await (sealString ?? OfflineVault.instance.sealString)(
+          value,
+        );
+        if (sealed != value) updates[column] = sealed;
       }
-    } catch (_) {
-      // Table/colonne absente sur une base legacy : la migration applicative
-      // reste best-effort et les futures écritures seront chiffrées.
+      if (updates.isNotEmpty) {
+        await db.update(
+          table,
+          updates,
+          where: '$idColumn = ?',
+          whereArgs: [id],
+        );
+      }
     }
   }
 
@@ -233,113 +286,64 @@ class LocalDatabase {
     required String idColumn,
     required String column,
   }) async {
-    try {
-      final rows = await db.query(table, columns: [idColumn, column]);
-      for (final row in rows) {
-        final id = row[idColumn];
-        final value = row[column];
-        if (id == null || value == null) continue;
-        final raw = value is List<int>
-            ? value
-            : value is Uint8List
-            ? value
-            : null;
-        if (raw == null || raw.isEmpty) continue;
-        await db.update(
-          table,
-          {column: await OfflineVault.instance.sealBytes(raw)},
-          where: '$idColumn = ?',
-          whereArgs: [id],
-        );
-      }
-    } catch (_) {
-      // Best-effort pour les mêmes raisons que _sealTextColumns.
+    Object? lastId;
+    while (true) {
+      final rows = await db.query(
+        table,
+        columns: [idColumn, column],
+        where: lastId == null ? null : '$idColumn > ?',
+        whereArgs: lastId == null ? null : [lastId],
+        orderBy: idColumn,
+        limit: 1,
+      );
+      if (rows.isEmpty) break;
+      final row = rows.single;
+      final id = row[idColumn];
+      if (id == null) throw StateError('Missing vault migration row identity');
+      lastId = id;
+      final value = row[column];
+      if (value == null) continue;
+      final raw = value is List<int>
+          ? value
+          : value is Uint8List
+          ? value
+          : null;
+      if (raw == null || raw.isEmpty) continue;
+      await db.update(
+        table,
+        {column: await OfflineVault.instance.sealBytes(raw)},
+        where: '$idColumn = ?',
+        whereArgs: [id],
+      );
     }
   }
 
-  /// Ouvre la base via SQLCipher avec la master key stockée dans
-  /// `SecureSessionStorage`. Gère la **migration depuis une base en
-  /// clair pré-fix** : si on détecte un fichier non-chiffrable avec la
-  /// clé (= installé avant le fix P0 #4 Layer 2), on le supprime et on
-  /// recrée vide. Les données se re-tireront depuis NocoDB au prochain
-  /// pull — perte = uniquement les écritures locales non encore sync.
-  Future<Database> _openEncrypted(String fullPath) async {
-    final masterKey = await SecureSessionStorage.instance.ensureMasterKey();
-
-    Future<Database> openWithKey() => sqlcipher.openDatabase(
+  /// Opening/migration errors must never rename or recreate the offline store.
+  /// Its WAL may hold the only copy of unsent work. Legacy plaintext recovery
+  /// requires a separate, verified migration, not an automatic empty database.
+  Future<Database> _openEncrypted(
+    String fullPath, {
+    Future<String> Function()? readKey,
+    Future<Database> Function(String path, String key)? opener,
+  }) async {
+    final masterKey =
+        await (readKey ?? SecureSessionStorage.instance.ensureMasterKey)();
+    if (opener != null) return opener(fullPath, masterKey);
+    return sqlcipher.openDatabase(
       fullPath,
       password: masterKey,
       version: _dbVersion,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
-
-    try {
-      return await openWithKey();
-    } catch (firstError) {
-      // SQLCipher refuse d'ouvrir : soit fichier corrompu, soit base
-      // legacy en clair (= installé avant ce fix). Comme on ne peut
-      // pas distinguer les deux côté Dart, on tente la migration
-      // pragmatique « wipe + recreate ». La perte est limitée car
-      // NocoDB est la source de vérité.
-      // Refonte 2026-05-16 (audit P0 #3) : AVANT de supprimer la DB
-      // legacy, on la BACKUP dans un fichier `.bak.<timestamp>` à côté.
-      // Sans ce backup, toutes les modifs offline non encore synchronisées
-      // étaient perdues — le commentaire historique disait « La perte
-      // est limitée car NocoDB est la source de vérité » mais c'est
-      // faux pour les ops `pending` jamais poussées. Désormais, un
-      // support tech peut récupérer manuellement le fichier `.bak`
-      // en cas de drame (corruption WAL, master key invalidée, etc.).
-      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-      debugPrint(
-        '[security] SQLCipher openDatabase a échoué : $firstError. '
-        'Backup du fichier legacy en .bak.$timestamp puis recréation chiffrée.',
-      );
-      try {
-        final legacyFile = File(fullPath);
-        if (await legacyFile.exists()) {
-          // Backup avant suppression. `rename` est atomique sur le même
-          // filesystem — pas de risque de corruption pendant la copie.
-          final backupPath = '$fullPath.bak.$timestamp';
-          await legacyFile.rename(backupPath);
-          await NativeFileProtection.instance.protectPath(backupPath);
-          debugPrint('[security] DB legacy sauvée → $backupPath');
-        }
-        // Les fichiers WAL/SHM contiennent des transactions non commit —
-        // on les déplace aussi (au lieu de delete) pour préserver toute
-        // donnée non encore flushée dans le main file.
-        for (final suffix in ['-journal', '-wal', '-shm']) {
-          final sideCar = File('$fullPath$suffix');
-          if (await sideCar.exists()) {
-            final sideCarBackup = '$fullPath$suffix.bak.$timestamp';
-            await sideCar.rename(sideCarBackup);
-            await NativeFileProtection.instance.protectPath(sideCarBackup);
-          }
-        }
-      } catch (backupError) {
-        debugPrint(
-          '[security] backup DB legacy échoué : $backupError — '
-          'tentative de delete en dernier recours pour débloquer le boot.',
-        );
-        // Si on ne peut pas backup (disk full, permission denied), on
-        // tombe sur l'ancien comportement delete pour ne pas bloquer
-        // l'app au démarrage. Mieux : app utilisable + perte partielle
-        // que app cassée définitivement.
-        try {
-          final legacyFile = File(fullPath);
-          if (await legacyFile.exists()) await legacyFile.delete();
-          for (final suffix in ['-journal', '-wal', '-shm']) {
-            final sideCar = File('$fullPath$suffix');
-            if (await sideCar.exists()) await sideCar.delete();
-          }
-        } catch (_) {
-          /* best-effort */
-        }
-      }
-      // Deuxième tentative — création fraîche chiffrée.
-      return await openWithKey();
-    }
   }
+
+  @visibleForTesting
+  Future<Database> openEncryptedForTesting(
+    String path, {
+    required Future<String> Function() readKey,
+    required Future<Database> Function(String path, String key) opener,
+  }) => _openEncrypted(path, readKey: readKey, opener: opener);
 
   // ---------------------------------------------------------------------------
   // Incremental migrations — each step preserves existing data.
@@ -411,7 +415,34 @@ class LocalDatabase {
     if (oldVersion < 21) {
       await _migrateV20ToV21(db);
     }
+    if (oldVersion < 22) {
+      await _createConflictHistory(db);
+    }
+    if (oldVersion < 23) {
+      for (final table in const [
+        'mesures_anthropometriques',
+        'observations_synthese',
+        'diagnostic_sanitaires',
+      ]) {
+        await _addColumnIfMissing(db, table, 'remote_updated_at', 'TEXT');
+      }
+    }
+    if (oldVersion < 24) {
+      await SyncOperationOwnership.installSchemaAndSeed(db);
+    }
   }
+
+  Future<void> _createConflictHistory(Database db) => db.execute('''
+    CREATE TABLE IF NOT EXISTS sync_conflict_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_id TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_local_id TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  ''');
 
   /// v20 -> v21 : suppression offline-first des éléments Bibliothèque.
   /// Même principe que les documents : on masque localement la ligne
@@ -1026,6 +1057,7 @@ class LocalDatabase {
       dossier_local_id TEXT NOT NULL UNIQUE,
       sdb_instances_json TEXT,
       wc_instances_json TEXT,
+      remote_updated_at TEXT,
       updated_at TEXT NOT NULL,
       sync_state TEXT NOT NULL DEFAULT 'synced'
     )
@@ -1041,6 +1073,7 @@ class LocalDatabase {
       assis_profondeur_genoux REAL,
       assis_hauteur_coudes REAL,
       observations TEXT,
+      remote_updated_at TEXT,
       updated_at TEXT NOT NULL,
       sync_state TEXT NOT NULL DEFAULT 'synced'
     )
@@ -1054,6 +1087,7 @@ class LocalDatabase {
       observation_equipements TEXT,
       projet_souhait_usage TEXT,
       resume_preconisations TEXT,
+      remote_updated_at TEXT,
       updated_at TEXT NOT NULL,
       sync_state TEXT NOT NULL DEFAULT 'synced'
     )
@@ -1334,6 +1368,8 @@ class LocalDatabase {
       )
     ''');
 
+    await _createConflictHistory(db);
+
     // Reference data tables (offline cache)
     await db.execute(_createWikiItemsSQL);
     await db.execute(_createRetirementFundsSQL);
@@ -1374,6 +1410,8 @@ class LocalDatabase {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_access_members_sync ON access_members(sync_state)',
     );
+
+    await SyncOperationOwnership.installSchemaAndSeed(db);
 
     // No initial seed — the workspace is populated from NocoDB at first login.
   }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
@@ -9,7 +10,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/types.dart';
+import 'document_content_url.dart';
 import 'document_file_naming.dart';
+import 'document_revision_store.dart';
 import 'local_database.dart';
 import 'media_cache_service.dart';
 import 'native_file_protection.dart';
@@ -73,17 +76,25 @@ class DocumentRepositoryChange {
   const DocumentRepositoryChange({
     required this.patientId,
     this.dossierId,
+    this.documentId,
     required this.reason,
   });
 
   final String patientId;
   final String? dossierId;
+  final String? documentId;
   final String reason;
 }
 
 class DocumentRepository {
-  DocumentRepository({LocalDatabase? database})
-    : _database = database ?? LocalDatabase.instance;
+  DocumentRepository({
+    LocalDatabase? database,
+    DocumentRevisionStore? revisionStore,
+    Future<File?> Function(String url)? remoteFileFetcher,
+    this.prefetchRemoteAssets = true,
+  }) : _database = database ?? LocalDatabase.instance,
+       _revisionStore = revisionStore ?? DocumentRevisionStore(),
+       _remoteFileFetcher = remoteFileFetcher;
 
   static final StreamController<DocumentRepositoryChange> _changesController =
       StreamController<DocumentRepositoryChange>.broadcast();
@@ -92,16 +103,32 @@ class DocumentRepository {
       _changesController.stream;
 
   final LocalDatabase _database;
+  final DocumentRevisionStore _revisionStore;
+  final Future<File?> Function(String url)? _remoteFileFetcher;
+  final bool prefetchRemoteAssets;
+
+  Future<DocItem?> fetchDocument(String documentId) async {
+    final db = await _database.database;
+    final rows = await db.query(
+      'documents',
+      where: 'local_id = ? AND pending_delete = 0',
+      whereArgs: [documentId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : _mapRow(rows.single);
+  }
 
   void _notifyChanged({
     required String patientId,
     String? dossierId,
+    String? documentId,
     required String reason,
   }) {
     _changesController.add(
       DocumentRepositoryChange(
         patientId: patientId,
         dossierId: dossierId,
+        documentId: documentId,
         reason: reason,
       ),
     );
@@ -388,6 +415,7 @@ class DocumentRepository {
     _notifyChanged(
       patientId: patientId,
       dossierId: dossierId,
+      documentId: localId,
       reason: 'import_remote_only',
     );
     return await _mapRow(row);
@@ -548,6 +576,7 @@ class DocumentRepository {
     _notifyChanged(
       patientId: patientId,
       dossierId: dossierId,
+      documentId: resolvedLocalId,
       reason: 'import_bytes',
     );
     return await _mapRow(row);
@@ -630,7 +659,11 @@ class DocumentRepository {
     });
 
     SyncEngine().notify();
-    _notifyChanged(patientId: patientId, reason: 'import_file');
+    _notifyChanged(
+      patientId: patientId,
+      documentId: localId,
+      reason: 'import_file',
+    );
 
     return await _mapRow(row);
   }
@@ -672,7 +705,7 @@ class DocumentRepository {
     final db = await _database.database;
     final rows = await db.query(
       'documents',
-      columns: ['annotations_json'],
+      columns: ['patient_local_id', 'dossier_local_id', 'annotations_json'],
       where: 'local_id = ?',
       whereArgs: [documentId],
       limit: 1,
@@ -711,6 +744,12 @@ class DocumentRepository {
       },
       where: 'local_id = ?',
       whereArgs: [documentId],
+    );
+    _notifyChanged(
+      patientId: rows.first['patient_local_id'] as String? ?? '',
+      dossierId: rows.first['dossier_local_id'] as String?,
+      documentId: documentId,
+      reason: 'annotate_page',
     );
   }
 
@@ -780,433 +819,247 @@ class DocumentRepository {
     }
   }
 
-  Future<void> enqueueAnnotatedReuploadBytes({
+  Future<DocItem> enqueueAnnotatedReuploadBytes({
     required String documentId,
     required Uint8List bytes,
-  }) async {
-    final db = await _database.database;
-    final rows = await db.query(
-      'documents',
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    final row = rows.first;
-    final patientId = row['patient_local_id'] as String;
-    final title = row['title'] as String? ?? 'Document';
-    final originalName = row['file_name'] as String? ?? 'document.bin';
-    final flatName = '${p.basenameWithoutExtension(originalName)}-annoté.png';
-    final dataUrl = 'data:image/png;base64,${base64Encode(bytes)}';
-    final dataUrlAtRest = await OfflineVault.instance.sealString(dataUrl);
-    final now = DateTime.now().toIso8601String();
-    final tagsJson = row['tags_json'] as String? ?? '[]';
-    final tags = (jsonDecode(tagsJson) as List<dynamic>).cast<String>();
+    DocItem? expectedDocument,
+  }) => _replaceDocumentContent(
+    documentId: documentId,
+    bytes: bytes,
+    mimeType: 'image/png',
+    annotated: true,
+    expectedDocument: expectedDocument,
+  );
 
-    // Annule toute upload encore en attente/en cours/en échec pour ce doc :
-    // on remplace par la version annotée la plus récente.
-    await db.delete(
-      'sync_operations',
-      where: 'entity_local_id = ? AND entity_type = ? AND status IN (?, ?, ?)',
-      whereArgs: [
-        documentId,
-        'document',
-        SyncOperationStatus.pending.name,
-        SyncOperationStatus.running.name,
-        SyncOperationStatus.failed.name,
-      ],
-    );
-
-    // Persiste le data URL côté SQLite local pour que la vignette du
-    // doc reflète immédiatement la version annotée même avant que la
-    // sync remote ne s'achève.
-    //
-    // CRITIQUE : on met aussi à jour `file_ext`, `mime_type` et
-    // `file_name` pour que le doc bascule de "pdf" à "image" côté
-    // app. Sans ça, la preview à la réouverture essayait de
-    // décoder les bytes PNG comme un PDF (`PdfDocument.openData`)
-    // → erreur dans le viewer + impossible de re-voir le rapport
-    // annoté. L'aplatissage produit un PNG (limitation actuelle :
-    // pas de lib d'écriture PDF en Flutter), donc on aligne les
-    // métadonnées sur ce qui est vraiment stocké.
-    await db.update(
-      'documents',
-      {
-        'local_file_data_url': dataUrlAtRest,
-        'file_ext': 'png',
-        'mime_type': 'image/png',
-        'file_name': flatName,
-        'sync_state': SyncState.pendingSync.name,
-        'updated_at': now,
-      },
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-    );
-
-    await db.insert('sync_operations', {
-      'id': 'sync_${documentId}_${DateTime.now().microsecondsSinceEpoch}',
-      'entity_type': 'document',
-      'entity_local_id': documentId,
-      'operation_type': 'upload_file',
-      'payload_json': await OfflineVault.instance.sealString(
-        jsonEncode({
-          'patientLocalId': patientId,
-          'documentLocalId': documentId,
-          'dataUrl': dataUrl,
-          'title': title,
-          'fileName': flatName,
-          'mimeType': 'image/png',
-          'tags': tags,
-        }),
-      ),
-      'status': SyncOperationStatus.pending.name,
-      'attempt_count': 0,
-      'last_error': null,
-      'created_at': now,
-      'updated_at': now,
-    });
-
-    SyncEngine().notify();
-  }
-
-  /// Remplace le contenu d'un document par de nouveaux bytes en conservant
-  /// son identifiant. Utilisé notamment après une rotation : l'aperçu local
-  /// est actualisé immédiatement, puis la même version est poussée en fond.
-  Future<void> enqueueReplacementBytes({
+  /// Publish a new local revision and its upload intent in one transaction.
+  Future<DocItem> enqueueReplacementBytes({
     required String documentId,
     required Uint8List bytes,
     required String fileName,
     required String mimeType,
-  }) async {
-    final db = await _database.database;
-    final rows = await db.query(
-      'documents',
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    final row = rows.first;
-    final patientId = row['patient_local_id'] as String;
-    final title = row['title'] as String? ?? 'Document';
-    final tags = (jsonDecode(row['tags_json'] as String? ?? '[]') as List)
-        .cast<String>();
-    final publicFileName = publicDocumentFileName(
-      storedName: fileName,
-      title: title,
-      mimeType: mimeType,
-    );
-    final extension = documentFileExtension(
-      storedName: publicFileName,
-      mimeType: mimeType,
-    ).replaceFirst('.', '').toLowerCase();
-    // Le natif synchronise le fichier protégé par son chemin. Éviter une
-    // seconde copie Base64 chiffrée dans SQLite réduit fortement le coût d'un
-    // PDF tourné ; le navigateur conserve le data URL faute de filesystem.
-    final dataUrl = kIsWeb
-        ? 'data:$mimeType;base64,${base64Encode(bytes)}'
-        : null;
-    final now = DateTime.now().toIso8601String();
-    String? localPath;
-    if (!kIsWeb) {
-      final appDir = await getApplicationDocumentsDirectory();
-      final existingPath = row['local_file_path'] as String?;
-      localPath = resolveReplacementDocumentPath(
-        applicationDocumentsPath: appDir.path,
-        existingPath: existingPath,
-        patientId: patientId,
-        documentId: documentId,
-        fileName: publicFileName,
-        mimeType: mimeType,
-      );
+    String? annotationSourcePath,
+    bool preservePdfSidecars = true,
+    DocItem? expectedDocument,
+  }) => _replaceDocumentContent(
+    documentId: documentId,
+    bytes: bytes,
+    fileName: fileName,
+    mimeType: mimeType,
+    annotationSourcePath: annotationSourcePath,
+    preservePdfSidecars: preservePdfSidecars,
+    expectedDocument: expectedDocument,
+  );
 
-      // Un chemin valide syntaxiquement peut malgré tout pointer vers un
-      // dossier ou un lien. Dans ce cas, on force le chemin déterministe sûr.
-      final entityType = await FileSystemEntity.type(
-        localPath,
-        followLinks: false,
-      );
-      if (entityType == FileSystemEntityType.directory ||
-          entityType == FileSystemEntityType.link) {
-        localPath = resolveReplacementDocumentPath(
-          applicationDocumentsPath: appDir.path,
-          existingPath: null,
-          patientId: patientId,
-          documentId: documentId,
-          fileName: publicFileName,
-          mimeType: mimeType,
-        );
-      }
-      await NativeFileProtection.instance.writeProtectedBytes(localPath, bytes);
-    }
-
-    await db.delete(
-      'sync_operations',
-      where: 'entity_local_id = ? AND entity_type = ? AND status IN (?, ?, ?)',
-      whereArgs: [
-        documentId,
-        'document',
-        SyncOperationStatus.pending.name,
-        SyncOperationStatus.running.name,
-        SyncOperationStatus.failed.name,
-      ],
-    );
-    await db.update(
-      'documents',
-      {
-        'local_file_data_url': dataUrl == null
-            ? null
-            : await OfflineVault.instance.sealString(dataUrl),
-        'file_ext': extension,
-        'mime_type': mimeType,
-        'file_name': publicFileName,
-        'local_file_path': localPath,
-        'sync_state': SyncState.pendingSync.name,
-        'updated_at': now,
-      },
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-    );
-    await db.insert('sync_operations', {
-      'id':
-          'sync_replace_${documentId}_${DateTime.now().microsecondsSinceEpoch}',
-      'entity_type': 'document',
-      'entity_local_id': documentId,
-      'operation_type': 'upload_file',
-      'payload_json': await OfflineVault.instance.sealString(
-        jsonEncode({
-          'patientLocalId': patientId,
-          'documentLocalId': documentId,
-          if (localPath != null)
-            'localPath': localPath
-          else if (dataUrl != null)
-            'dataUrl': dataUrl,
-          'title': title,
-          'fileName': publicFileName,
-          'mimeType': mimeType,
-          'tags': tags,
-        }),
-      ),
-      'status': SyncOperationStatus.pending.name,
-      'attempt_count': 0,
-      'last_error': null,
-      'created_at': now,
-      'updated_at': now,
-    });
-    SyncEngine().notify();
-    _notifyChanged(patientId: patientId, reason: 'replace_file');
-  }
-
-  /// Remplace le contenu d'un document depuis un fichier local déjà prêt.
-  ///
-  /// Utilisé par la rotation PDF native iOS : PDFKit écrit un PDF temporaire
-  /// dont seules les pages portent une rotation. On copie ce fichier dans le
-  /// stockage protégé du document, puis on garde la même op `upload_file`
-  /// idempotente que [enqueueReplacementBytes].
-  Future<void> enqueueReplacementFile({
+  Future<DocItem> enqueueReplacementFile({
     required String documentId,
     required File sourceFile,
     required String fileName,
     required String mimeType,
+    String? annotationSourcePath,
+    bool preservePdfSidecars = true,
+    DocItem? expectedDocument,
+  }) => _replaceDocumentContent(
+    documentId: documentId,
+    sourceFile: sourceFile,
+    fileName: fileName,
+    mimeType: mimeType,
+    annotationSourcePath: annotationSourcePath,
+    preservePdfSidecars: preservePdfSidecars,
+    expectedDocument: expectedDocument,
+  );
+
+  Future<void> enqueueAnnotatedReupload({
+    required String documentId,
+    required String flattenedPath,
+  }) => _replaceDocumentContent(
+    documentId: documentId,
+    sourceFile: File(flattenedPath),
+    mimeType: 'image/png',
+    annotated: true,
+  );
+
+  Future<DocItem> _replaceDocumentContent({
+    required String documentId,
+    required String mimeType,
+    Uint8List? bytes,
+    File? sourceFile,
+    String? fileName,
+    bool annotated = false,
+    String? annotationSourcePath,
+    bool preservePdfSidecars = true,
+    DocItem? expectedDocument,
   }) async {
+    if (bytes != null && bytes.isEmpty) {
+      throw const FileSystemException('Le document produit est vide');
+    }
     final db = await _database.database;
     final rows = await db.query(
       'documents',
-      where: 'local_id = ?',
+      where: 'local_id = ? AND pending_delete = 0',
       whereArgs: [documentId],
       limit: 1,
     );
-    if (rows.isEmpty) return;
-    final row = rows.first;
-    final patientId = row['patient_local_id'] as String;
-    final title = row['title'] as String? ?? 'Document';
-    final tags = (jsonDecode(row['tags_json'] as String? ?? '[]') as List)
-        .cast<String>();
+    if (rows.isEmpty) {
+      throw StateError('Document absent ou supprime : sauvegarde impossible');
+    }
+    final snapshot = rows.single;
+    if (expectedDocument != null &&
+        (snapshot['local_file_path'] != expectedDocument.localPath ||
+            snapshot['remote_public_url'] != expectedDocument.url ||
+            await OfflineVault.instance.openNullableString(
+                  snapshot['local_file_data_url'] as String?,
+                ) !=
+                expectedDocument.dataUrl)) {
+      throw StateError(
+        'Le document a change pendant la preparation. Rouvrez-le.',
+      );
+    }
+    if (expectedDocument != null &&
+        !preservePdfSidecars &&
+        await OfflineVault.instance.openNullableString(
+              snapshot['annotations_json'] as String?,
+            ) !=
+            expectedDocument.annotationsJson) {
+      throw StateError('Les annotations ont change pendant la preparation.');
+    }
+    final originalName = snapshot['file_name'] as String? ?? 'document.bin';
     final publicFileName = publicDocumentFileName(
-      storedName: fileName,
-      title: title,
+      storedName: annotated
+          ? '${p.basenameWithoutExtension(originalName)}-annoté.png'
+          : fileName!,
+      title: snapshot['title'] as String? ?? 'Document',
       mimeType: mimeType,
     );
     final extension = documentFileExtension(
       storedName: publicFileName,
       mimeType: mimeType,
     ).replaceFirst('.', '').toLowerCase();
-    final now = DateTime.now().toIso8601String();
-
-    final appDir = await getApplicationDocumentsDirectory();
-    final existingPath = row['local_file_path'] as String?;
-    var localPath = resolveReplacementDocumentPath(
-      applicationDocumentsPath: appDir.path,
-      existingPath: existingPath,
-      patientId: patientId,
-      documentId: documentId,
-      fileName: publicFileName,
-      mimeType: mimeType,
+    final dataUrl = kIsWeb
+        ? 'data:$mimeType;base64,${base64Encode(bytes!)}'
+        : null;
+    final sealedDataUrl = await OfflineVault.instance.sealNullableString(
+      dataUrl,
     );
+    final revision = kIsWeb
+        ? null
+        : await _revisionStore.prepare(
+            extension: extension,
+            bytes: bytes,
+            sourceFile: sourceFile,
+            annotationSourcePath:
+                mimeType == 'application/pdf' && preservePdfSidecars
+                ? annotationSourcePath ?? snapshot['local_file_path'] as String?
+                : null,
+          );
+    final random = Random.secure();
+    final operationId =
+        'sync_replace_${base64UrlEncode(List<int>.generate(24, (_) => random.nextInt(256)))}';
 
-    final entityType = await FileSystemEntity.type(
-      localPath,
-      followLinks: false,
-    );
-    if (entityType == FileSystemEntityType.directory ||
-        entityType == FileSystemEntityType.link) {
-      localPath = resolveReplacementDocumentPath(
-        applicationDocumentsPath: appDir.path,
-        existingPath: null,
-        patientId: patientId,
-        documentId: documentId,
-        fileName: publicFileName,
-        mimeType: mimeType,
+    // A crash before commit leaves only an unreferenced revision. A crash
+    // after commit leaves both the complete file and a durable pending upload.
+    // Retain old files: an in-flight upload or open viewer may still need them.
+    late Map<String, Object?> committedRow;
+    await db.transaction((txn) async {
+      final currentRows = await txn.query(
+        'documents',
+        where: 'local_id = ? AND pending_delete = 0',
+        whereArgs: [documentId],
+        limit: 1,
       );
-    }
-    await NativeFileProtection.instance.copyProtectedFile(
-      sourceFile,
-      localPath,
-    );
-
-    await db.delete(
-      'sync_operations',
-      where: 'entity_local_id = ? AND entity_type = ? AND status IN (?, ?, ?)',
-      whereArgs: [
-        documentId,
-        'document',
-        SyncOperationStatus.pending.name,
-        SyncOperationStatus.running.name,
-        SyncOperationStatus.failed.name,
-      ],
-    );
-    await db.update(
-      'documents',
-      {
-        'local_file_data_url': null,
-        'file_ext': extension,
-        'mime_type': mimeType,
-        'file_name': publicFileName,
-        'local_file_path': localPath,
-        'sync_state': SyncState.pendingSync.name,
-        'updated_at': now,
-      },
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-    );
-    await db.insert('sync_operations', {
-      'id':
-          'sync_replace_${documentId}_${DateTime.now().microsecondsSinceEpoch}',
-      'entity_type': 'document',
-      'entity_local_id': documentId,
-      'operation_type': 'upload_file',
-      'payload_json': await OfflineVault.instance.sealString(
+      if (currentRows.isEmpty) {
+        throw StateError('Document supprime pendant la sauvegarde');
+      }
+      final current = currentRows.single;
+      if (current['local_file_path'] != snapshot['local_file_path'] ||
+          current['local_file_data_url'] != snapshot['local_file_data_url'] ||
+          current['patient_local_id'] != snapshot['patient_local_id'] ||
+          current['remote_file_path'] != snapshot['remote_file_path'] ||
+          current['remote_public_url'] != snapshot['remote_public_url'] ||
+          (!preservePdfSidecars &&
+              current['annotations_json'] != snapshot['annotations_json'])) {
+        throw StateError(
+          'Une autre version a ete enregistree. Rouvrez le document.',
+        );
+      }
+      final now = DateTime.now().toIso8601String();
+      if (!preservePdfSidecars &&
+          (current['annotations_json'] as String? ?? '').isNotEmpty) {
+        await txn.insert('kv_store', {
+          'key':
+              'document_previous_revision:$documentId:${DateTime.now().microsecondsSinceEpoch}',
+          'value': await OfflineVault.instance.sealString(jsonEncode(current)),
+          'updated_at': now,
+        });
+      }
+      final payload = await OfflineVault.instance.sealString(
         jsonEncode({
-          'patientLocalId': patientId,
+          'patientLocalId': current['patient_local_id'],
           'documentLocalId': documentId,
-          'localPath': localPath,
-          'title': title,
+          if (revision != null) 'localPath': revision.path,
+          if (dataUrl != null) 'dataUrl': dataUrl,
+          'title': current['title'] as String? ?? 'Document',
           'fileName': publicFileName,
           'mimeType': mimeType,
-          'tags': tags,
+          'tags': jsonDecode(current['tags_json'] as String? ?? '[]'),
         }),
-      ),
-      'status': SyncOperationStatus.pending.name,
-      'attempt_count': 0,
-      'last_error': null,
-      'created_at': now,
-      'updated_at': now,
-    });
-    SyncEngine().notify();
-    _notifyChanged(patientId: patientId, reason: 'replace_file');
-  }
-
-  /// Re-upload d'un document existant avec le même `documentLocalId` et un
-  /// fichier "flattened" (image + annotations aplaties). Le serveur remplace
-  /// l'asset existant sur dedup par `documentLocalId`. Appelé après un save
-  /// d'annotation image/PDF — les annotations deviennent ainsi visibles sur
-  /// l'exemplaire NocoDB téléchargé depuis l'app React ou un tiers.
-  Future<void> enqueueAnnotatedReupload({
-    required String documentId,
-    required String flattenedPath,
-  }) async {
-    final db = await _database.database;
-    final rows = await db.query(
-      'documents',
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    final row = rows.first;
-    final patientId = row['patient_local_id'] as String;
-    final title = row['title'] as String? ?? 'Document';
-    final originalName = row['file_name'] as String? ?? 'document.bin';
-    // Nom de fichier côté serveur : on force l'extension .png puisque le
-    // flatten produit un PNG (valable aussi pour les PDFs annotés aplatis
-    // à une page).
-    final flatName = '${p.basenameWithoutExtension(originalName)}-annoté.png';
-    final now = DateTime.now().toIso8601String();
-    final tagsJson = row['tags_json'] as String? ?? '[]';
-    final tags = (jsonDecode(tagsJson) as List<dynamic>).cast<String>();
-
-    // Supprime toute opération d'upload en attente/en cours/en échec pour ce
-    // doc : on ne veut pas pousser successivement deux versions.
-    await db.delete(
-      'sync_operations',
-      where: 'entity_local_id = ? AND entity_type = ? AND status IN (?, ?, ?)',
-      whereArgs: [
-        documentId,
-        'document',
-        SyncOperationStatus.pending.name,
-        SyncOperationStatus.running.name,
-        SyncOperationStatus.failed.name,
-      ],
-    );
-
-    // Marque le doc comme pendingSync + bascule les métadonnées sur
-    // PNG. Sans cette bascule, le doc restait classé `pdf` côté
-    // SQLite alors que le contenu local devient un PNG (le flatten
-    // produit un PNG, limitation Flutter PDF write). À la réouverture,
-    // la preview essayait `PdfDocument.openData` sur des bytes PNG →
-    // erreur du décodeur, plus de preview visible. On aligne les
-    // métadonnées sur ce qui est réellement stocké : `file_ext='png'`,
-    // `mime_type='image/png'`, et on adopte aussi le `file_name`
-    // suffixé "-annoté.png" pour que la cohérence remontée serveur
-    // soit propre.
-    await db.update(
-      'documents',
-      {
-        'sync_state': SyncState.pendingSync.name,
+      );
+      await txn.delete(
+        'sync_operations',
+        where:
+            'entity_local_id = ? AND entity_type = ? '
+            'AND operation_type = ? AND status IN (?, ?, ?)',
+        whereArgs: [
+          documentId,
+          'document',
+          'upload_file',
+          SyncOperationStatus.pending.name,
+          SyncOperationStatus.running.name,
+          SyncOperationStatus.failed.name,
+        ],
+      );
+      await txn.update(
+        'documents',
+        {
+          'local_file_path': revision?.path,
+          'local_file_data_url': sealedDataUrl,
+          'file_ext': extension,
+          'mime_type': mimeType,
+          'file_name': publicFileName,
+          if (!preservePdfSidecars) 'annotations_json': null,
+          'sync_state': SyncState.pendingSync.name,
+          'updated_at': now,
+        },
+        where: 'local_id = ?',
+        whereArgs: [documentId],
+      );
+      await txn.insert('sync_operations', {
+        'id': operationId,
+        'entity_type': 'document',
+        'entity_local_id': documentId,
+        'operation_type': 'upload_file',
+        'payload_json': payload,
+        'status': SyncOperationStatus.pending.name,
+        'attempt_count': 0,
+        'last_error': null,
+        'created_at': now,
         'updated_at': now,
-        'local_file_path': flattenedPath,
-        'file_ext': 'png',
-        'mime_type': 'image/png',
-        'file_name': flatName,
-      },
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-    );
-
-    await db.insert('sync_operations', {
-      'id': 'sync_${documentId}_${DateTime.now().microsecondsSinceEpoch}',
-      'entity_type': 'document',
-      'entity_local_id': documentId,
-      'operation_type': 'upload_file',
-      'payload_json': await OfflineVault.instance.sealString(
-        jsonEncode({
-          'patientLocalId': patientId,
-          'documentLocalId': documentId,
-          'localPath': flattenedPath,
-          'title': title,
-          'fileName': flatName,
-          'mimeType': 'image/png',
-          'tags': tags,
-        }),
-      ),
-      'status': SyncOperationStatus.pending.name,
-      'attempt_count': 0,
-      'last_error': null,
-      'created_at': now,
-      'updated_at': now,
+      });
+      committedRow = (await txn.query(
+        'documents',
+        where: 'local_id = ?',
+        whereArgs: [documentId],
+        limit: 1,
+      )).single;
     });
 
     SyncEngine().notify();
+    _notifyChanged(
+      patientId: snapshot['patient_local_id'] as String,
+      dossierId: snapshot['dossier_local_id'] as String?,
+      documentId: documentId,
+      reason: annotated ? 'annotated_reupload' : 'replace_file',
+    );
+    return _mapRow(committedRow);
   }
 
   Future<void> updateDocumentMetadata({
@@ -1216,6 +1069,13 @@ class DocumentRepository {
   }) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
+    final rows = await db.query(
+      'documents',
+      columns: const ['patient_local_id', 'dossier_local_id'],
+      where: 'local_id = ?',
+      whereArgs: [documentId],
+      limit: 1,
+    );
     await db.update(
       'documents',
       {
@@ -1233,6 +1093,14 @@ class DocumentRepository {
       tags: tags,
     );
     SyncEngine().notify();
+    if (rows.isNotEmpty) {
+      _notifyChanged(
+        patientId: rows.first['patient_local_id'] as String? ?? '',
+        dossierId: rows.first['dossier_local_id'] as String?,
+        documentId: documentId,
+        reason: 'update_metadata',
+      );
+    }
   }
 
   Future<void> _enqueueDocumentMetadataSync({
@@ -1289,20 +1157,35 @@ class DocumentRepository {
   /// Local-only : on ne marque pas le document comme modifié et on ne crée
   /// aucune opération de sync. Le but est uniquement de permettre aux aperçus
   /// natifs (notamment PDF) de s'ouvrir instantanément aux prochains clics.
-  Future<void> storeLocalDocumentPath({
-    required String documentId,
+  Future<bool> storeLocalDocumentPath({
+    required DocItem expectedDocument,
     required String localFilePath,
   }) async {
     final trimmedPath = localFilePath.trim();
-    if (trimmedPath.isEmpty) return;
+    if (trimmedPath.isEmpty) return false;
     final db = await _database.database;
-    await db.update(
+    final changed = await db.update(
       'documents',
       {'local_file_path': trimmedPath},
       where:
-          'local_id = ? AND (local_file_path IS NULL OR local_file_path = "")',
-      whereArgs: [documentId],
+          'local_id = ? AND updated_at = ? '
+          'AND COALESCE(remote_public_url, \'\') = ? '
+          'AND COALESCE(local_file_path, \'\') = ? '
+          'AND COALESCE(local_file_data_url, \'\') = \'\' '
+          'AND pending_delete = 0 AND sync_state = ? '
+          'AND NOT EXISTS (SELECT 1 FROM sync_operations op '
+          'WHERE op.entity_type = \'document\' '
+          'AND op.entity_local_id = documents.local_id '
+          'AND op.status != \'completed\')',
+      whereArgs: [
+        expectedDocument.id,
+        expectedDocument.updatedAt,
+        expectedDocument.url ?? '',
+        expectedDocument.localPath ?? '',
+        SyncState.synced.name,
+      ],
     );
+    return changed == 1;
   }
 
   /// Met à jour la catégorisation visite d'un document — utilisé
@@ -1326,7 +1209,7 @@ class DocumentRepository {
     final now = DateTime.now().toIso8601String();
     final rows = await db.query(
       'documents',
-      columns: const ['title'],
+      columns: const ['title', 'patient_local_id', 'dossier_local_id'],
       where: 'local_id = ?',
       whereArgs: [documentId],
       limit: 1,
@@ -1351,6 +1234,14 @@ class DocumentRepository {
       tags: tags,
     );
     SyncEngine().notify();
+    if (rows.isNotEmpty) {
+      _notifyChanged(
+        patientId: rows.first['patient_local_id'] as String? ?? '',
+        dossierId: rows.first['dossier_local_id'] as String?,
+        documentId: documentId,
+        reason: 'visit_categorization',
+      );
+    }
   }
 
   /// Réordonne plusieurs documents d'une catégorie en une seule
@@ -1562,7 +1453,11 @@ class DocumentRepository {
     }
 
     SyncEngine().notify();
-    _notifyChanged(patientId: patientId, reason: 'delete');
+    _notifyChanged(
+      patientId: patientId,
+      documentId: documentId,
+      reason: 'delete',
+    );
   }
 
   bool _documentRowHasTag(Map<String, Object?> row, String tag) {
@@ -1667,36 +1562,50 @@ class DocumentRepository {
 
         final existing = existingRows.isNotEmpty ? existingRows.first : null;
         final existingSyncState = existing?['sync_state'] as String?;
-        // Stratégie LWW (last-writer-wins) — même fix que pour
-        // `mergeRemoteNotePage` (note_repository.dart 2026-05-07).
-        //
-        // Avant : on skippait aveuglément dès que la row locale était
-        // `pendingSync`. Conséquence : si une ancienne op de cette row
-        // était bloquée en `failed`/`pendingSync` côté Mac, toutes les
-        // versions remote suivantes (notamment les photos importées
-        // depuis iPad) étaient ignorées. Symptôme reporté 2026-05-07 :
-        // « nouvelle photo Accessibilité importée sur iPad mais ne se
-        // met pas sur Mac, default de synchronisation toujours présent ».
-        //
-        // Désormais :
-        //  1. Si row locale `synced` → merge directement (pas de risque)
-        //  2. Sinon, comparer `remote.updatedAt` vs `local.updated_at` :
-        //     - remote plus récent → merge (la version distante gagne,
-        //       on rattrape un local stale)
-        //     - remote plus ancien → skip (préserve un push en cours)
-        //  3. Timestamps absents/invalides → skip safely (ancien
-        //     comportement)
-        if (existing != null && existingSyncState != SyncState.synced.name) {
-          final localUpdatedAt = existing['updated_at'] as String?;
-          final remoteUpdatedAt = remote['updatedAt']?.toString();
-          final remoteIsNewer = _isRemoteUpdatedAtNewer(
-            remoteUpdatedAt: remoteUpdatedAt,
-            localUpdatedAt: localUpdatedAt,
+        final remoteDate = DateTime.tryParse(
+          remote['updatedAt']?.toString() ?? '',
+        );
+        if (existing != null) {
+          // Include protected rows in reconciliation before any early return.
+          remoteLocalIds.add(existing['local_id'] as String);
+          final pending = await txn.query(
+            'sync_operations',
+            columns: const ['id'],
+            where: 'entity_type = ? AND entity_local_id = ? AND status != ?',
+            whereArgs: ['document', existing['local_id'], 'completed'],
+            limit: 1,
           );
-          if (!remoteIsNewer) {
+          if (pending.isNotEmpty) continue;
+
+          final versions = await txn.query(
+            'kv_store',
+            where: 'key = ?',
+            whereArgs: ['document_remote_version:${existing['local_id']}'],
+            limit: 1,
+          );
+          if (versions.isNotEmpty && remoteDate != null) {
+            final version =
+                jsonDecode(versions.single['value'] as String) as Map;
+            final acceptedDate = DateTime.tryParse(
+              version['updatedAt'] as String? ?? '',
+            );
+            // Compare server timestamps only: the iPad clock and upload ACK
+            // timestamp are not a remote revision clock.
+            if (acceptedDate != null &&
+                (remoteDate.isBefore(acceptedDate) ||
+                    (remoteDate.isAtSameMomentAs(acceptedDate) &&
+                        version['remotePath'] == remotePath &&
+                        remotePath != existing['remote_file_path']))) {
+              continue;
+            }
+          }
+          if (existingSyncState != SyncState.synced.name &&
+              !_isRemoteUpdatedAtNewer(
+                remoteUpdatedAt: remote['updatedAt']?.toString(),
+                localUpdatedAt: existing['updated_at'] as String?,
+              )) {
             continue;
           }
-          // Sinon on tombe en bas pour faire le merge.
         }
         // Anti-resurrection : si l'utilisateur a supprimé le doc localement
         // (pending_delete=1) et que le DELETE remote n'a pas encore été
@@ -1724,19 +1633,48 @@ class DocumentRepository {
             existing?['local_id'] as String? ??
             _remoteDocumentLocalId(patientId, remote);
         remoteLocalIds.add(localId);
+        // The backend allocates a new content UUID/path on replacement.
+        // Timestamps alone also change on rename, so keep those local bytes.
+        final contentChanged =
+            existing != null &&
+            ((remotePath != null &&
+                    remotePath.isNotEmpty &&
+                    (existing['remote_file_path'] as String? ?? '')
+                        .isNotEmpty &&
+                    existing['remote_file_path'] != remotePath) ||
+                ((existing['remote_file_path'] as String? ?? '').isEmpty &&
+                    (existing['remote_public_url'] as String? ?? '')
+                        .isNotEmpty &&
+                    publicUrl != null &&
+                    publicUrl.isNotEmpty &&
+                    existing['remote_public_url'] != publicUrl));
+        if (contentChanged) {
+          // Keep a recoverable snapshot, including encrypted web overlays,
+          // without applying annotations from the previous PDF to the new one.
+          await txn.insert('kv_store', {
+            'key':
+                'document_previous_revision:$localId:${DateTime.now().microsecondsSinceEpoch}',
+            'value': await OfflineVault.instance.sealString(
+              jsonEncode(existing),
+            ),
+            'updated_at': DateTime.now().toIso8601String(),
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
         final row = {
+          if (existing != null) ...existing,
           'local_id': localId,
           'patient_local_id': patientId,
           'title': title,
           'file_name': fileName,
           'file_ext': extension,
           'mime_type': mimeType ?? _mimeTypeFor(extension),
-          'local_file_path': existing?['local_file_path'],
-          // CRITICAL : preserve the local bytes (web PWA "offline upload").
-          // Without this, `conflictAlgorithm: replace` nulls the column and
-          // the thumbnail loses its source → the picture would disappear
-          // right after the sync pushes it to NocoDB.
-          'local_file_data_url': existing?['local_file_data_url'],
+          'local_file_path': contentChanged
+              ? null
+              : existing?['local_file_path'],
+          // Preserve offline bytes on metadata refresh, not on replacement.
+          'local_file_data_url': contentChanged
+              ? null
+              : existing?['local_file_data_url'],
           'remote_file_path': remotePath,
           'remote_public_url': publicUrl,
           'tags_json': jsonEncode(
@@ -1751,20 +1689,17 @@ class DocumentRepository {
           // le tri perd son sens.
           'category_order':
               existing?['category_order'] ?? remote['category_order'],
-          // CRITICAL aussi : `annotations_json` (overlays par page d'un
-          // PDF annoté côté ergo) est local-only en v1. Sans cette
-          // préservation, à chaque polling remote (10 s) la colonne
-          // était réécrite à NULL → les annotations disparaissaient.
-          // Symptôme reporté : "j'écris sur le PDF, je clique
-          // enregistrer, je quitte, la note se voit pas, je rouvre
-          // elle est là, je requitte/rouvre elle a disparu".
-          'annotations_json': existing?['annotations_json'],
+          // Overlays belong to the old content, archived above on replacement.
+          'annotations_json': contentChanged
+              ? null
+              : existing?['annotations_json'],
           'created_at':
               remote['createdAt']?.toString() ??
               existing?['created_at'] as String? ??
               DateTime.now().toIso8601String(),
           'updated_at':
               remote['updatedAt']?.toString() ??
+              existing?['updated_at'] as String? ??
               DateTime.now().toIso8601String(),
           'sync_state': SyncState.synced.name,
           'pending_delete': existing?['pending_delete'] ?? 0,
@@ -1775,6 +1710,16 @@ class DocumentRepository {
           row,
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
+        if (remoteDate != null) {
+          await txn.insert('kv_store', {
+            'key': 'document_remote_version:$localId',
+            'value': jsonEncode({
+              'remotePath': remotePath,
+              'updatedAt': remoteDate.toIso8601String(),
+            }),
+            'updated_at': remoteDate.toIso8601String(),
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
       }
 
       // ----------------------------------------------------------------
@@ -1812,6 +1757,11 @@ class DocumentRepository {
           'AND created_at < ?';
       final placeholders = List.filled(remoteLocalIds.length, '?').join(',');
       whereClause += ' AND local_id NOT IN ($placeholders)';
+      whereClause +=
+          " AND NOT EXISTS (SELECT 1 FROM sync_operations op "
+          "WHERE op.entity_type = 'document' "
+          "AND op.entity_local_id = documents.local_id "
+          "AND op.status != 'completed')";
       args.addAll(remoteLocalIds);
       final deleted = await txn.delete(
         'documents',
@@ -1829,159 +1779,74 @@ class DocumentRepository {
 
     // Warm the media cache so document previews (PDFs, images) work offline
     // after the first sync of this dossier.
-    unawaited(_prefetchDocumentAssets(patientId, remoteDocuments));
-  }
-
-  Future<void> _prefetchDocumentAssets(
-    String patientId,
-    List<Map<String, dynamic>> remoteDocuments,
-  ) async {
-    final urls = <String>{};
-    for (final doc in remoteDocuments) {
-      final url = doc['publicUrl']?.toString().trim() ?? '';
-      if (url.isNotEmpty) urls.add(url);
-    }
-    if (urls.isEmpty) return;
-
-    try {
-      // Étape 1 — warm cache générique (sha1-keyed sur disk en native, blob
-      // SQLite sur web). Mêmes headers d'auth web ET native : les URLs
-      // patient passent par `requireAuth` côté serveur dans le mode
-      // `nocodb`. Sans le header, le fetch renvoyait 401 et le cache
-      // restait vide → réinstallation iPad sans réseau = aucun aperçu.
-      await MediaCacheService.instance.prefetchAll(
-        urls,
-        headers: MediaCacheService.authHeaders(),
-      );
-    } catch (e) {
-      // Best effort — log mais ne bloque pas le reste du sync.
-      // ignore: avoid_print
-      print('[docs prefetch] warm cache failed: $e');
-    }
-
-    // Étape 2 (native uniquement) — pour chaque document remote, on copie
-    // les bytes vers un emplacement stable
-    // `<docs>/cached_remote_documents/<patientId>/<localId>.<ext>` puis
-    // on met à jour `documents.local_file_path` si vide. Permet à
-    // `_PreviewScreen._buildPreviewBody` (qui exige `File(localPath)
-    // .existsSync()`) d'ouvrir les PDFs distants après une réinstallation
-    // — sans ça, sur iPad réinstallé, aucun PDF synchronisé n'était
-    // consultable.
-    //
-    // Sur web, les PDFs sont déjà dans `web_media_cache` SQLite ; un
-    // chemin natif n'aurait aucun sens.
-    if (kIsWeb) return;
-    try {
-      await _persistRemoteDocumentsLocally(patientId, remoteDocuments);
-    } catch (e) {
-      // ignore: avoid_print
-      print('[docs prefetch] persist-to-disk failed: $e');
+    if (prefetchRemoteAssets) {
+      unawaited(prefetchDocumentAssets(patientId));
     }
   }
 
-  /// Pour chaque document remote sans `local_file_path` côté DB, télécharge
-  /// (via le cache MediaCacheService déjà chaud) puis copie le fichier vers
-  /// un chemin stable et persistent et met à jour la table `documents`.
-  /// L'existant est préservé : si l'utilisateur a uploadé le doc en local
-  /// (donc `local_file_path` non-vide), on ne touche à rien.
-  Future<void> _persistRemoteDocumentsLocally(
-    String patientId,
-    List<Map<String, dynamic>> remoteDocuments,
-  ) async {
-    if (remoteDocuments.isEmpty) return;
-    final db = await _database.database;
-
-    // Lit toutes les lignes de ce patient pour résoudre `local_id` à partir
-    // de l'URL remote. C'est `mergeRemoteDocuments` qui décide du
-    // `local_id` final (souvent un id pré-existant si le doc avait
-    // d'abord été uploadé offline).
-    final rows = await db.query(
-      'documents',
-      columns: const [
-        'local_id',
-        'file_ext',
-        'remote_file_path',
-        'remote_public_url',
-        'local_file_path',
-      ],
-      where: 'patient_local_id = ?',
-      whereArgs: [patientId],
-    );
-    if (rows.isEmpty) return;
-
-    // Mappe l'URL remote (publicUrl OU remote_file_path) → ligne DB pour
-    // retrouver le `local_id`.
-    final byKey = <String, Map<String, Object?>>{};
-    for (final row in rows) {
-      final url = (row['remote_public_url'] as String?)?.trim() ?? '';
-      final path = (row['remote_file_path'] as String?)?.trim() ?? '';
-      if (url.isNotEmpty) byKey[url] = row;
-      if (path.isNotEmpty) byKey[path] = row;
-    }
-
-    final docsDir = await getApplicationDocumentsDirectory();
-    for (final remote in remoteDocuments) {
-      final url = remote['publicUrl']?.toString().trim() ?? '';
-      if (url.isEmpty) continue;
-      final row =
-          byKey[url] ?? byKey[remote['remotePath']?.toString().trim() ?? ''];
-      if (row == null) continue;
-
-      // Skip si l'utilisateur a déjà des bytes locaux (upload offline,
-      // ou ré-upload après annotation).
-      final existingPath = (row['local_file_path'] as String?)?.trim() ?? '';
-      if (existingPath.isNotEmpty && await File(existingPath).exists()) {
-        await NativeFileProtection.instance.protectPath(existingPath);
-        continue;
-      }
-
-      // Récupère via MediaCacheService (auth-aware, déjà chauffé par
-      // l'étape 1).
-      final cached = await MediaCacheService.instance.fetch(
-        url,
-        headers: MediaCacheService.authHeaders(),
+  /// Hydrate accepted database revisions only, never the raw pull response.
+  /// A late download must still match its snapshot before it can be attached.
+  Future<void> prefetchDocumentAssets(String patientId) async {
+    try {
+      final db = await _database.database;
+      final rows = await db.query(
+        'documents',
+        where:
+            "patient_local_id = ? AND sync_state = 'synced' "
+            "AND pending_delete = 0 "
+            "AND NOT EXISTS (SELECT 1 FROM sync_operations op "
+            "WHERE op.entity_type = 'document' "
+            "AND op.entity_local_id = documents.local_id "
+            "AND op.status != 'completed')",
+        whereArgs: [patientId],
       );
-      if (cached == null) continue;
-
-      final localId = row['local_id'] as String;
-      final ext = (row['file_ext'] as String? ?? '').trim();
-      final extSuffix = ext.isEmpty ? '' : '.$ext';
-
-      try {
-        final targetDirPath = p.join(
-          docsDir.path,
-          'cached_remote_documents',
-          patientId,
-        );
-        await NativeFileProtection.instance.ensureProtectedDirectory(
-          targetDirPath,
-          recursive: true,
-        );
-        final targetDir = Directory(
-          p.join(docsDir.path, 'cached_remote_documents', patientId),
-        );
-        final target = File(p.join(targetDir.path, '$localId$extSuffix'));
-        if (!await target.exists()) {
-          await NativeFileProtection.instance.copyProtectedFile(
-            cached,
-            target.path,
+      for (final row in rows) {
+        try {
+          if ((row['local_file_data_url'] as String? ?? '').isNotEmpty) {
+            continue;
+          }
+          final doc = await _mapRow(row);
+          final url = documentPreviewUrl(doc);
+          if (url.isEmpty) continue;
+          final path = doc.localPath ?? '';
+          if (!kIsWeb && path.isNotEmpty && await File(path).exists()) continue;
+          if (kIsWeb) {
+            await MediaCacheService.instance.webCachedFetch(
+              url,
+              headers: MediaCacheService.authHeadersFor(url),
+            );
+            continue;
+          }
+          final cached =
+              await (_remoteFileFetcher?.call(url) ??
+                  MediaCacheService.instance.fetch(
+                    url,
+                    headers: MediaCacheService.authHeadersFor(url),
+                  ));
+          if (cached == null) continue;
+          final revision = await _revisionStore.prepare(
+            extension: (row['file_ext'] as String? ?? '').isEmpty
+                ? 'bin'
+                : row['file_ext'] as String,
+            sourceFile: cached,
           );
+          final attached = await storeLocalDocumentPath(
+            expectedDocument: doc,
+            localFilePath: revision.path,
+          );
+          if (!attached) {
+            // This private, unpublished directory cannot be in use by a viewer.
+            await revision.parent.delete(recursive: true);
+          }
+        } catch (error) {
+          // One failed/offline document must not stop the rest of the dossier.
+          // ignore: avoid_print
+          print('[docs prefetch] document unavailable (${error.runtimeType})');
         }
-        await db.update(
-          'documents',
-          {'local_file_path': target.path},
-          // Re-vérifie côté SQL : entre l'instant où on a lu la row et
-          // maintenant un autre flux a pu écrire un chemin (ex. user
-          // qui ré-importe le doc localement). On n'écrase que si
-          // toujours vide.
-          where:
-              'local_id = ? AND (local_file_path IS NULL OR local_file_path = "")',
-          whereArgs: [localId],
-        );
-      } catch (e) {
-        // ignore: avoid_print
-        print('[docs persist] copy/update failed for $localId: $e');
       }
+    } catch (error) {
+      // ignore: avoid_print
+      print('[docs prefetch] unavailable (${error.runtimeType})');
     }
   }
 
@@ -2031,6 +1896,7 @@ class DocumentRepository {
       title: title,
       url: row['remote_public_url'] as String?,
       date: isReport ? updatedAt : createdAt,
+      updatedAt: updatedAt,
       localPath: localPath,
       // Web-only: the freshly captured bytes as a data URL. Populated by
       // `importDocumentBytes` on web and cleared once the sync processor

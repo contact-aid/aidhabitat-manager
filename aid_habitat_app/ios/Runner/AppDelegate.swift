@@ -39,6 +39,36 @@ import UIKit
   }
 
   private func handlePdfRotationCall(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if ["readPdfInk", "writePdfInk", "renderPdfInkPreview"].contains(call.method) {
+      guard let args = call.arguments as? [String: Any],
+            let source = args["sourcePath"] as? String else {
+        result(FlutterError(code: "invalid_args", message: "PDF manquant.", details: nil))
+        return
+      }
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let value: Any
+          switch call.method {
+          case "readPdfInk":
+            value = try PdfInkEditor.read(source)
+          case "writePdfInk":
+            guard let pages = args["pages"] as? [String: Any] else {
+              throw PdfInkEditor.failure("Traits manquants.")
+            }
+            value = try PdfInkEditor.write(source, pages: pages, quarterTurns: args["quarterTurns"] as? Int ?? 0)
+          default:
+            value = try PdfInkEditor.render(source, pageNumber: args["page"] as? Int ?? 1,
+              width: args["width"] as? Double ?? 800, omitManagedInk: args["omitManagedInk"] as? Bool ?? false)
+          }
+          DispatchQueue.main.async { result(value) }
+        } catch {
+          DispatchQueue.main.async {
+            result(FlutterError(code: "pdf_ink_failed", message: error.localizedDescription, details: nil))
+          }
+        }
+      }
+      return
+    }
     guard call.method == "rotatePdfFile" else {
       result(FlutterMethodNotImplemented)
       return

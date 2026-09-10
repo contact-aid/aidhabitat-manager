@@ -49,6 +49,7 @@ server/data/visit-plans/
 **/*.spec.*
 **/test/
 **/__tests__/
+**/test-fixtures/
 README.md
 docs/
 

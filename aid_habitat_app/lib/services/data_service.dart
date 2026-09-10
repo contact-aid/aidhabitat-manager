@@ -51,33 +51,22 @@ class DataService {
 
   Future<void> initialize() async {
     await _dossierRepository.initialize();
-    // Câble le callback que `NocodbSyncService` invoque après chaque
-    // auto-résolution de conflit 409 (« remote wins ») pour rafraîchir
-    // tout de suite les données locales avec la version serveur, sans
-    // attendre le prochain tick périodique du SyncEngine. Évite que
-    // l'ergo génère un PDF / regarde une page juste après le conflit
-    // et voie encore l'ancienne valeur locale écrasée à la milliseconde
-    // suivante.
-    _nocodbSyncService.onConflictAutoResolved = refreshWorkspaceFromRemote;
   }
 
   /// Réparation non destructive de la file au démarrage : réhabilite les
   /// erreurs réseau, remet en attente les opérations interrompues, puis
-  /// débloque les anciens conflits. Aucun payload utilisateur n'est supprimé
+  /// restaure les indicateurs des conflits conservés. Aucun payload n'est supprimé
   /// automatiquement par ce passage.
-  Future<void> purgeStaleSyncOperations() async {
+  Future<void> purgeStaleSyncOperations({DateTime? interruptedBefore}) async {
     try {
-      await _syncRepository.purgeStalePendingOperations();
-      // Récupération boot pour les conflits bloqués depuis les anciens
-      // builds. Les opérations sont remises en attente sans supprimer leur
-      // payload ; le push local sera rejoué avant le prochain pull distant.
-      final unstuckCount = await _syncRepository.unstickConflictedEntities();
+      await _syncRepository.purgeStalePendingOperations(
+        interruptedBefore: interruptedBefore,
+      );
+      // Un redémarrage ne constitue jamais un choix de résolution.
+      final unstuckCount = await _syncRepository.restoreConflictedEntities();
       if (unstuckCount > 0) {
         // ignore: avoid_print
-        print(
-          '[boot] $unstuckCount entité(s) en conflict débloquée(s) → '
-          'mutations locales remises en attente avant le prochain pull',
-        );
+        print('[boot] $unstuckCount conflit(s) conservé(s) pour résolution');
       }
     } catch (_) {
       // ignore — cleanup is best-effort
@@ -1174,29 +1163,54 @@ class DataService {
     return _syncRepository.discardSingleOperation('report_gen_$dossierId');
   }
 
-  Future<Dossier?> fetchRemoteDossierById(String dossierId) async {
-    try {
-      final remoteDossiers = await _nocodbApiClient.fetchDossiers();
-      return remoteDossiers.cast<Dossier?>().firstWhere(
-        (d) => d!.id == dossierId,
-        orElse: () => null,
+  Future<List<SyncConflictReview>> reviewDossierConflicts(
+    String dossierId,
+  ) async {
+    final scope = await _dossierRepository.conflictReviewScope(dossierId);
+    final reviews = <SyncConflictReview>[];
+    if (scope.entityTypes.any({'patient', 'housing', 'dossier'}.contains)) {
+      final payloads = await _nocodbApiClient.fetchDossierPayloads();
+      final matches = payloads
+          .where((row) => row['id'] == scope.remoteDossierId)
+          .toList();
+      if (matches.length != 1) {
+        throw StateError(
+          'Dossier distant indisponible. Aucune modification appliquee.',
+        );
+      }
+      reviews.addAll(
+        await _dossierRepository.reviewConflicts(dossierId, matches.single),
       );
-    } catch (_) {
-      return null;
     }
-  }
-
-  Future<void> resolveConflictKeepLocal(Dossier dossier) async {
-    await _syncRepository.setEntitySyncState(
-      entityType: 'dossier',
-      entityLocalId: dossier.id,
-      syncState: SyncState.pendingSync,
+    final secondary = <String, Map<String, dynamic>?>{};
+    if (scope.entityTypes.contains('mesures_anthropometriques')) {
+      secondary['mesures_anthropometriques'] = await _nocodbApiClient
+          .fetchMesuresPayload(scope.remoteDossierId);
+    }
+    if (scope.entityTypes.contains('observations_synthese')) {
+      secondary['observations_synthese'] = await _nocodbApiClient
+          .fetchObservationsPayload(scope.remoteDossierId);
+    }
+    if (scope.entityTypes.contains('diagnostic_sanitaires')) {
+      secondary['diagnostic_sanitaires'] = await _nocodbApiClient
+          .fetchDiagnosticSanitairePayload(scope.remoteDossierId);
+    }
+    reviews.addAll(
+      await _dossierRepository.reviewSecondaryConflicts(dossierId, secondary),
     );
+    return reviews;
   }
 
-  Future<void> resolveConflictTakeRemote(Dossier remoteDossier) async {
-    await _dossierRepository.forceReplaceWithRemote(remoteDossier);
-    await _syncRepository.clearPendingOperationsForEntity(remoteDossier.id);
+  Future<void> resolveReviewedConflict(
+    SyncConflictReview review, {
+    required bool keepLocal,
+  }) async {
+    await _dossierRepository.resolveReviewedConflict(
+      review,
+      keepLocal: keepLocal,
+    );
+    _dossierRecordsController.add(null);
+    if (keepLocal) SyncEngine().requestSync();
   }
 
   /// Recharge l'état distant sans jamais vider le cache local.

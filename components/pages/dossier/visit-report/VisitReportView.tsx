@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { AlertTriangle, ArrowLeft, Ban, Bath, Blinds, Check, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, Coins, DoorOpen, FolderOpen, Hand, Heart, House, ImagePlus, LayoutGrid, MapPin, Plus, Search, ShowerHead, Toilet, Trash2, User, Zap } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Ban, Bath, Blinds, Check, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, Coins, DoorOpen, FolderOpen, Hand, Heart, House, ImagePlus, LayoutGrid, MapPin, Plus, Search, ShowerHead, Toilet, Trash2, User, X, Zap } from 'lucide-react';
 import { BathroomLevelInstance, Dossier, HeatingMode, DiagnosticSanitaires, MesuresAnthropometriques, NotePage, ObservationsSynthese, VisitRecommendationItem, VisitReportLocation, WikiLibraryItem, WcLevelInstance } from '../../../../types';
 import { NotesCanvas, buildNotePreviewDataUrlFromContent, type DrawingTool } from '../../../shared/NotesCanvas';
 import { CommuneFieldGroup, type CommuneOption } from '../../../shared/CommuneFieldGroup';

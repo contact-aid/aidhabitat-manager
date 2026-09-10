@@ -4,13 +4,17 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
+import { isDeepStrictEqual } from 'node:util';
 import express from 'express';
 import aiRouter from './routes/ai.mjs';
 import feedbackRouter from './routes/feedback.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import dotenv from 'dotenv';
 import multer from 'multer';
-import { callNocoTool, closeMcpClient } from './nocodbMcpClient.mjs';
+import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureConditionalSyncTables } from './nocodbMcpClient.mjs';
+import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
+import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
+import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
 import { createMobileSyncStore } from './mobileSyncStore.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
@@ -51,6 +55,7 @@ import {
   executeSyncBatch,
   validateSyncBatchPayload,
 } from './syncBatch.mjs';
+import { readAuthorizedDossierRecord } from './dossierReadQueries.mjs';
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
@@ -452,13 +457,13 @@ const FIELD_SETS = {
     'sdb_machine_a_laver', 'sdb_machine_a_laver_hauteur', 'wc_cuvette_bonne_hauteur', 'wc_cuvette_trop_basse', 'wc_cuvette_trop_haute', 'wc_cuvette_hauteur',
     'wc_barre_relevement', 'porte_sdb_largeur_suffisante', 'porte_sdb_dimension', 'porte_sdb_sens_adapte',
     'porte_wc_largeur_suffisante', 'porte_wc_dimension', 'porte_wc_sens_adapte',
-    'observation_equipements_utilisation', 'sdb_instances_json', 'wc_instances_json', 'updated_at', 'UpdatedAt',
+    'observation_equipements_utilisation', 'sdb_instances_json', 'wc_instances_json', 'updated_at', 'UpdatedAt', 'CreatedAt',
   ],
   mesuresAnthropometriques: [
     'uuid_source', 'dossier_id', 'debout_hauteur_coude', 'assis_hauteur_assise', 'assis_profondeur_genoux',
-    'assis_hauteur_coudes', 'observations', 'updated_at', 'UpdatedAt',
+    'assis_hauteur_coudes', 'observations', 'updated_at', 'UpdatedAt', 'CreatedAt',
   ],
-  observations: ['uuid_source', 'dossier_id', 'observation_equipements', 'projet_souhait_usage', 'resume_preconisations', 'UpdatedAt'],
+  observations: ['uuid_source', 'dossier_id', 'observation_equipements', 'projet_souhait_usage', 'resume_preconisations', 'UpdatedAt', 'CreatedAt'],
   referencesLibelle: ['libelle'],
   referencesNom: ['nom'],
   ergotherapeutes: ['uuid_source', 'nom', 'prenom', 'email', 'user_id', 'nom_etablissement_id', 'User', 'etablissements_id', 'etablissement', 'mot_de_passe', 'profile_photo_base64'],
@@ -468,6 +473,75 @@ const FIELD_SETS = {
   wikiTags: ['uuid_source', 'tags'],
   wiki: ['uuid_source', 'titre', 'photos', 'photo_base64', 'contenu', 'wiki_tags_id', 'wiki_tags'],
 };
+
+// Keep production behavior unchanged until every writer/client and the table
+// revisions have been prepared and verified during the controlled rollout.
+const conditionalSyncEnabled = process.env.AIDHABITAT_CONDITIONAL_SYNC === '1';
+const conditionalTables = [TABLES.beneficiaires, TABLES.logements, TABLES.dossiers];
+if (conditionalSyncEnabled) {
+  configureConditionalSyncTables(conditionalTables);
+  for (const name of ['beneficiaires', 'logements', 'dossiers']) {
+    FIELD_SETS[name].push(SYNC_REVISION_FIELD);
+  }
+}
+const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter({
+  baseId: process.env.NOCODB_BASE_ID,
+  allowedTableIds: conditionalTables,
+  request: requestConditionalNocodbRest,
+}) : null;
+const guardedMutation = conditionalWriter ? createGuardedMutation({
+  writer: conditionalWriter,
+  readColumns: async (tableId) => {
+    if (!conditionalTables.includes(tableId)) throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
+    const schema = await requestConditionalNocodbRest({ method: 'GET', path: `/api/v2/meta/tables/${tableId}` });
+    return validateConditionalSchema(schema, { tableId, baseId: process.env.NOCODB_BASE_ID });
+  },
+  readRecord: async (tableId, recordId) => {
+    if (!conditionalTables.includes(tableId) || !Number.isSafeInteger(recordId) || recordId <= 0) {
+      throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
+    }
+    const params = new URLSearchParams({ where: `(Id,eq,${recordId})`, limit: '2' });
+    const result = await requestConditionalNocodbRest({ method: 'GET',
+      path: `/api/v2/tables/${tableId}/records?${params}` });
+    if (!Array.isArray(result?.list) || result.list.length > 1 ||
+        (result.list.length && Number(result.list[0].Id) !== recordId)) {
+      throw new SyncMutationError(503, 'SYNC_RECORD_READ_INVALID');
+    }
+    return result.list[0] ?? null;
+  },
+}) : null;
+
+async function applyConditionalSync(req, res, { tableId, record, fields, mapBaseline }) {
+  if (!guardedMutation) return false;
+  try {
+    const guard = req.body?.concurrency;
+    if (guard?.version !== 1 || !guard.baseValues || typeof guard.baseValues !== 'object' ||
+        Array.isArray(guard.baseValues)) {
+      throw new SyncMutationError(428, 'SYNC_BASELINE_REQUIRED');
+    }
+    await guardedMutation({ tableId, recordId: Number(record.id), fields,
+      baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
+      authorizeObserved: tableId === TABLES.dossiers
+        ? (row) => canAccessDossierRecord(req.appUser, { id: String(record.id), fields: row })
+        : undefined,
+    });
+    return false;
+  } catch (error) {
+    if (error instanceof ConditionalWriteUncertainError) {
+      res.status(503).json({ success: false, error: 'SYNC_WRITE_UNCONFIRMED' });
+      return true;
+    }
+    if (!(error instanceof SyncMutationError)) throw error;
+    const observed = error.observed;
+    res.status(error.status).json({ success: false, error: error.code,
+      ...(error.status === 409 ? { conflict: true,
+        remoteUpdatedAt: observed ? getRecordUpdatedAt({ fields: observed }) : null,
+        remoteData: observed,
+      } : {}),
+    });
+    return true;
+  }
+}
 
 const VISIT_RECOMMENDATION_FIELDS = [
   'uuid_source',
@@ -2502,6 +2576,10 @@ const queryAll = async (tableId, options = {}) => {
 };
 
 const updateRecord = async (tableId, id, fields) => {
+  if (conditionalSyncEnabled && conditionalTables.includes(tableId)) {
+    // Fail closed for any overlooked legacy writer of a protected table.
+    throw new SyncMutationError(428, 'SYNC_UNGUARDED_WRITE_FORBIDDEN');
+  }
   await callNocoTool('updateRecords', {
     tableId,
     records: [{ id: String(id), fields }],
@@ -2509,6 +2587,14 @@ const updateRecord = async (tableId, id, fields) => {
 };
 
 const createRecord = async (tableId, fields) => {
+  if (conditionalSyncEnabled && conditionalTables.includes(tableId)) {
+    const schema = await requestConditionalNocodbRest({ method: 'GET', path: `/api/v2/meta/tables/${tableId}` });
+    if (schema?.id !== tableId || schema.base_id !== process.env.NOCODB_BASE_ID ||
+        !schema.columns?.some(column => column.title === SYNC_REVISION_FIELD && column.uidt === 'SingleLineText')) {
+      throw new SyncMutationError(503, 'SYNC_REVISION_NOT_PREPARED');
+    }
+    fields = { ...fields, [SYNC_REVISION_FIELD]: crypto.randomUUID() };
+  }
   const payload = await callNocoTool('createRecords', {
     tableId,
     records: [{ fields }],
@@ -3543,6 +3629,22 @@ const backfillLegacyDossierAssignments = async (dossiers) => {
     .map((record) => ({ id: String(record.id), fields: { ergo_id: fallbackLabel } }));
 
   if (updates.length === 0) return;
+
+  if (conditionalSyncEnabled) {
+    for (const update of updates) {
+      const target = dossiers.find(record => String(record.id) === update.id);
+      try {
+        await guardedMutation({ tableId: TABLES.dossiers, recordId: Number(update.id),
+          fields: update.fields, baseFields: { ergo_id: field(target, 'ergo_id') },
+          writeId: crypto.randomUUID() });
+        syncRecordFieldsLocally(target, update.fields);
+      } catch (error) {
+        if (error instanceof SyncMutationError && error.status === 409) continue;
+        throw error;
+      }
+    }
+    return;
+  }
 
   for (let index = 0; index < updates.length; index += 10) {
     await callNocoTool('updateRecords', {
@@ -4706,24 +4808,39 @@ app.post('/api/admin/access-members/:email/revoke-sessions', requireAdmin, async
   }
 });
 
+// Publish only a full commit SHA, never arbitrary environment contents.
+const activeBuildShaCandidate = String(process.env.APP_BUILD_SHA || '').trim();
+const activeBuildSha = /^[a-f0-9]{40}$/i.test(activeBuildShaCandidate)
+  ? activeBuildShaCandidate.toLowerCase()
+  : null;
+
 app.get('/api/health/live', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
   res.json({
     success: true,
     status: 'live',
+    buildSha: activeBuildSha,
     message: 'OK',
   });
 });
 
-const sendReadyHealth = async (_req, res, next) => {
+const sendReadyHealth = async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
     await queryAll(TABLES.beneficiaires, { fields: ['Id'], limit: 1 });
     res.json({
       success: true,
       status: 'ready',
+      buildSha: activeBuildSha,
       message: 'OK',
     });
-  } catch (error) {
-    next(error);
+  } catch {
+    res.status(503).json({
+      success: false,
+      status: 'not_ready',
+      buildSha: activeBuildSha,
+      message: 'Not ready',
+    });
   }
 };
 
@@ -6837,60 +6954,8 @@ app.post(
     );
     const notePages = mergeInlineNotePages(remoteNotePages, inlineAssets.plans);
 
-    // 3a) Auto-cleanup des photos NocoDB orphelines.
-    //
-    // Demande utilisateur 2026-05-05 : « dès qu'on régénère le PDF, ça
-    // nettoie toutes les sauvegardes précédentes et garde uniquement
-    // celles qui sont dans le relevé de visite au moment où je
-    // génère ». Logique : l'iPad envoie en inline TOUTES les photos
-    // qu'il a localement (= source de vérité). Tout ce qui est en
-    // NocoDB pour ce patient mais PAS dans inline est un orphelin
-    // (= résidu de sync échouée, doublons après ré-imports, etc.).
-    //
-    // On supprime ces orphelins (rows mobile_documents + leurs chunks)
-    // EN ARRIÈRE-PLAN après la réponse — pas critique pour la
-    // génération du PDF en cours, mais essentiel pour la prochaine.
-    //
-    // Garde-fou : on ne déclenche le cleanup QUE si l'iPad a envoyé
-    // au moins 1 photo inline. Sinon (cas où le PDF est généré avec
-    // un iPad offline qui n'a pas pu charger les photos), on ne
-    // toucherait pas à NocoDB pour ne pas tout supprimer par erreur.
-    const inlineDocCount = inlineAssets.documents.size;
-    if (inlineDocCount > 0 && patientId) {
-      const inlineIds = new Set(
-        Array.from(inlineAssets.documents.keys()).map((k) => String(k)),
-      );
-      const orphans = [];
-      for (const doc of remoteDocuments) {
-        if (!doc) continue;
-        const docId = String(doc.id || '');
-        const cid = String(doc.clientDocumentId || '');
-        if (inlineIds.has(docId) || (cid && inlineIds.has(cid))) continue;
-        // Pas dans inline → orphelin à supprimer.
-        orphans.push(doc);
-      }
-      if (orphans.length > 0) {
-        // Lance le cleanup en arrière-plan (pas d'await).
-        // ignore: discarded_futures
-        (async () => {
-          for (const orphan of orphans) {
-            try {
-              await mobileSyncStore.deleteDocument(orphan.id);
-            } catch (err) {
-              console.warn(
-                `[report] cleanup orphan ${orphan.id} échoué :`,
-                err?.message || err,
-              );
-            }
-          }
-          // ignore: avoid_print
-          console.log(
-            `[report] cleanup auto : ${orphans.length} photo(s) ` +
-            `orpheline(s) supprimée(s) pour patient=${patientId}`,
-          );
-        })();
-      }
-    }
+    // Inline assets are partial: missing local bytes do not imply deletion.
+    // Document removal belongs exclusively to explicit delete operations.
 
     // 3b) Merge VAD overlay notes (nouvelle source) avec
     // `observations_synthese` (ancienne source). Notes gagnent.
@@ -7142,7 +7207,16 @@ app.post('/api/beneficiaires', requireAuth, async (req, res, next) => {
 
     const created = await createRecord(TABLES.beneficiaires, baseFields);
     if (Object.keys(relationFields).length > 0) {
-      await updateRecord(TABLES.beneficiaires, created.id, relationFields);
+      if (conditionalSyncEnabled) {
+        // The creation owns the initial values; link fields are initialized
+        // through the same atomic path, never the legacy updateRecords call.
+        const result = await conditionalWriter({ tableId: TABLES.beneficiaires,
+          recordId: Number(created.id), expectedRevision: field(created, SYNC_REVISION_FIELD),
+          writeId: crypto.randomUUID(), fields: relationFields });
+        if (result.status !== 'applied') throw new SyncMutationError(503, 'SYNC_CREATE_LINKS_UNCONFIRMED');
+      } else {
+        await updateRecord(TABLES.beneficiaires, created.id, relationFields);
+      }
     }
     // `natureAccompagnement` : envoyé depuis le formulaire de création
     // côté Flutter (CreateBeneficiaryScreen). Champ dossier, pas
@@ -7210,11 +7284,18 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       return;
     }
 
-    if (sendConflictIfStale(req, res, beneficiaryRecord)) return;
+    if (!conditionalSyncEnabled && sendConflictIfStale(req, res, beneficiaryRecord)) return;
 
     const fields = mapBeneficiaryUpdatesToFields(updates, references);
 
-    await updateRecord(TABLES.beneficiaires, beneficiaryRecord.id, fields);
+    if (conditionalSyncEnabled) {
+      if (await applyConditionalSync(req, res, {
+        tableId: TABLES.beneficiaires, record: beneficiaryRecord, fields,
+        mapBaseline: (base) => mapBeneficiaryUpdatesToFields(base, references),
+      })) return;
+    } else {
+      await updateRecord(TABLES.beneficiaires, beneficiaryRecord.id, fields);
+    }
     const refreshedDossiers = await getDossiersForApp(req.appUser);
     const refreshedDossier = refreshedDossiers.find((dossier) => String(dossier?.patient?.id) === String(patientId));
     if (refreshedDossier?.patient) {
@@ -7289,12 +7370,16 @@ app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    if (sendConflictIfStale(req, res, dossierRecord)) return;
+    if ((!conditionalSyncEnabled || updates.medicalContext || updates.autonomy)
+        && sendConflictIfStale(req, res, dossierRecord)) return;
+    if (conditionalSyncEnabled && req.body?.concurrency && (updates.medicalContext || updates.autonomy)) {
+      throw new SyncMutationError(400, 'SYNC_MULTITABLE_MUTATION_UNSUPPORTED');
+    }
 
     const dossierUuid = field(dossierRecord, 'uuid_source');
     const beneficiaryUuid = field(dossierRecord, 'patient_id');
 
-    const fields = sanitizeUndefined({
+    const mapDossierFields = async (updates) => sanitizeUndefined({
       compte_anah: updates.compteAnah,
       nature_accompagnement: updates.natureAccompagnement,
       envoi_rapport: updates.envoiRapport,
@@ -7308,9 +7393,17 @@ app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
         ? nullableString(await resolveRequestedErgoLabel(req.appUser, updates.ergoId))
         : undefined,
     });
+    const fields = await mapDossierFields(updates);
 
     if (Object.keys(fields).length > 0) {
-      await updateRecord(TABLES.dossiers, dossierRecord.id, fields);
+      if (conditionalSyncEnabled) {
+        if (await applyConditionalSync(req, res, {
+          tableId: TABLES.dossiers, record: dossierRecord, fields,
+          mapBaseline: mapDossierFields,
+        })) return;
+      } else {
+        await updateRecord(TABLES.dossiers, dossierRecord.id, fields);
+      }
     }
 
     if (updates.medicalContext || updates.autonomy) {
@@ -7379,11 +7472,12 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
     const existingHousing = latestRecord(
       logements.filter((record) => field(record, 'beneficiaire_id') === beneficiaryId || String(field(record, 'beneficiaires_id')) === String(beneficiaryRecord.id))
     );
+    const mapHousingFields = (updates) => {
     const typeLogement = findByLabel(typeLogements, updates.typology);
     const porteGarage = findByLabel(porteGarageRefs, updates.motorisationPorteGarage);
     const portail = findByLabel(portailRefs, updates.motorisationPortail);
 
-    const fields = sanitizeUndefined({
+    return sanitizeUndefined({
       uuid_source: existingHousing ? undefined : crypto.randomUUID(),
       beneficiaire_id: beneficiaryId,
       beneficiaires_id: Number(beneficiaryRecord.id),
@@ -7456,10 +7550,19 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
       porte_de_garage_id: porteGarage ? Number(porteGarage.id) : undefined,
       portail_id1: portail ? Number(portail.id) : undefined,
     });
+    };
+    const fields = mapHousingFields(updates);
 
     if (existingHousing) {
-      if (sendConflictIfStale(req, res, existingHousing)) return;
-      await updateRecord(TABLES.logements, existingHousing.id, fields);
+      if (conditionalSyncEnabled) {
+        if (await applyConditionalSync(req, res, {
+          tableId: TABLES.logements, record: existingHousing, fields,
+          mapBaseline: mapHousingFields,
+        })) return;
+      } else {
+        if (sendConflictIfStale(req, res, existingHousing)) return;
+        await updateRecord(TABLES.logements, existingHousing.id, fields);
+      }
       // Fix 2026-05-13 : on renvoie le nouvel `updatedAt` du logement
       // pour que le client puisse mettre à jour son `remote_updated_at`
       // local. Sans ça, le 2e save consécutif envoie l'ancien
@@ -8353,19 +8456,111 @@ app.put('/api/visit-plans/:dossierId', requireAuth, async (req, res, next) => {
   }
 });
 
+// Secondary rows have their own clock; a dossier timestamp cannot guard them.
+const secondaryUpdatedAt = (record) => {
+  const raw = field(record, 'UpdatedAt') || field(record, 'updated_at') || field(record, 'CreatedAt');
+  const time = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+};
+const secondaryIdentity = (record, canonicalDossierId = field(record, 'dossier_id')) => ({
+  id: field(record, 'uuid_source') || String(record.id),
+  dossierId: canonicalDossierId,
+  updatedAt: secondaryUpdatedAt(record),
+});
+const secondaryWriteConflict = (req, res, record) => {
+  const guarded = Object.hasOwn(req.body || {}, 'concurrency');
+  const guard = req.body?.concurrency;
+  const expected = req.body?.expectedUpdatedAt ?? req.get('If-Unmodified-Since');
+  const expectedTime = typeof expected === 'string' && expected.trim() ? Date.parse(expected) : NaN;
+  if (guarded && (!guard || Array.isArray(guard) || guard.version !== 1
+      || typeof req.body.expectedUpdatedAt !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(req.body.expectedUpdatedAt)
+      || !Number.isFinite(expectedTime)
+      || new Date(`${req.body.expectedUpdatedAt.slice(0, 10)}T00:00:00.000Z`).toISOString().slice(0, 10)
+        !== req.body.expectedUpdatedAt.slice(0, 10))) {
+    res.status(428).json({ success: false, error: 'SYNC_EXPECTED_VERSION_REQUIRED' });
+    return true;
+  }
+  const remoteUpdatedAt = secondaryUpdatedAt(record);
+  const remoteTime = remoteUpdatedAt ? Date.parse(remoteUpdatedAt) : NaN;
+  if ((Number.isFinite(expectedTime) && (!record || !remoteUpdatedAt))
+      || (guarded && (!remoteUpdatedAt || remoteTime !== expectedTime))
+      || (Number.isFinite(expectedTime) && remoteTime > expectedTime)) {
+    res.status(409).json({
+      conflict: true,
+      remoteUpdatedAt,
+      remoteData: record ? { ...unwrapRecordFields(record) } : null,
+    });
+    return true;
+  }
+  return false;
+};
+const secondaryScalarEquals = createDatabaseValueComparator([
+  { title: 'updated_at', uidt: 'DateTime' },
+  { title: 'created_at', uidt: 'DateTime' },
+]);
+const secondaryValueMatches = (key, expected, observed) => {
+  if (secondaryScalarEquals(key, expected, observed)) return true;
+  if (expected == null || observed == null) return false;
+  if (key === 'sdb_instances_json' || key === 'wc_instances_json') {
+    try {
+      return isDeepStrictEqual(JSON.parse(expected), JSON.parse(observed));
+    } catch {
+      return false;
+    }
+  }
+  // These are the numeric fields explicitly mapped by the three routes below.
+  const numeric = key === 'dossiers_id' || key === 'assis_profondeur_genoux'
+    || /^(?:debout_hauteur_coude|assis_hauteur_assise|assis_hauteur_coudes)$/.test(key)
+    || /^(?:sdb_.*_hauteur|wc_cuvette_hauteur|porte_(?:sdb|wc)_dimension)$/.test(key);
+  if (numeric && ['number', 'string'].includes(typeof observed)
+      && ['number', 'string'].includes(typeof expected)
+      && String(observed).trim() && String(expected).trim()) {
+    return Number.isFinite(Number(expected)) && Number(expected) === Number(observed);
+  }
+  return false;
+};
+const saveSecondaryRecord = async (tableId, projection, existing, fields) => {
+  const uuid = existing ? field(existing, 'uuid_source') : crypto.randomUUID();
+  const persistedFields = Object.fromEntries(Object.entries({
+    ...(!existing ? { uuid_source: uuid } : {}), ...fields,
+  }).filter(([, value]) => value !== undefined));
+  if (existing) {
+    await updateRecord(tableId, existing.id, persistedFields);
+  } else {
+    await createRecord(tableId, persistedFields);
+  }
+  // Never acknowledge a locally invented clock or the parent's version.
+  const rows = await queryAll(tableId, {
+    fields: [...new Set([...projection, ...Object.keys(persistedFields), 'Id'])],
+    where: existing ? `(Id,eq,${Number(existing.id)})` : `(uuid_source,eq,${filterValue(uuid)})`,
+  });
+  if (rows.length !== 1 || !secondaryUpdatedAt(rows[0])
+      || (existing && String(rows[0].id) !== String(existing.id))
+      || !Object.entries(persistedFields).every(([key, value]) =>
+        secondaryValueMatches(key, value, field(rows[0], key)))) {
+    throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
+  }
+  return secondaryIdentity(rows[0]);
+};
+
 app.get('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, next) => {
   try {
-    const dossierRecord = await ensureDossierRecord(req.params.dossierId);
-    if (!canAccessDossierRecord(req.appUser, dossierRecord)) {
+    const { accessAllowed, record, dossierRecord } = await readAuthorizedDossierRecord({
+      appUser: req.appUser,
+      requestedDossierId: req.params.dossierId,
+      ensureDossierRecord,
+      canAccessDossierRecord,
+      queryAll,
+      tableId: TABLES.diagnosticSanitaires,
+      fields: FIELD_SETS.diagnosticSanitaires,
+    });
+    if (!accessAllowed) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const records = await queryAll(TABLES.diagnosticSanitaires, { fields: FIELD_SETS.diagnosticSanitaires });
-    const canonicalDossierId = field(dossierRecord, 'uuid_source') || req.params.dossierId;
-    const record = latestByFieldValue(records, 'dossier_id', canonicalDossierId);
     res.json(record ? {
-      id: field(record, 'uuid_source') || String(record.id),
-      dossierId: field(record, 'dossier_id'),
+      ...secondaryIdentity(record, field(dossierRecord, 'uuid_source') || req.params.dossierId),
       sdbInstances: (() => {
         const parsed = parseJsonArrayField(field(record, 'sdb_instances_json'));
         return parsed.length > 0 ? parsed : buildLegacyBathroomInstances({
@@ -8449,13 +8644,20 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
   try {
     const dossierId = req.params.dossierId;
     const payload = req.body || {};
-    const records = await queryAll(TABLES.diagnosticSanitaires, { fields: FIELD_SETS.diagnosticSanitaires });
-    const dossierRecord = await ensureDossierRecord(dossierId);
-    if (!canAccessDossierRecord(req.appUser, dossierRecord)) {
+    const { accessAllowed, record: existing, dossierRecord } = await readAuthorizedDossierRecord({
+      appUser: req.appUser,
+      requestedDossierId: dossierId,
+      ensureDossierRecord,
+      canAccessDossierRecord,
+      queryAll,
+      tableId: TABLES.diagnosticSanitaires,
+      fields: FIELD_SETS.diagnosticSanitaires,
+    });
+    if (!accessAllowed) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const existing = latestByFieldValue(records, 'dossier_id', field(dossierRecord, 'uuid_source'));
+    if (secondaryWriteConflict(req, res, existing)) return;
     const sdbInstances = Array.isArray(payload.sdbInstances) ? payload.sdbInstances : [];
     const wcInstances = Array.isArray(payload.wcInstances) ? payload.wcInstances : [];
     const hasBathroom = sdbInstances.length > 0;
@@ -8502,14 +8704,20 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
       updated_at: new Date().toISOString(),
     };
 
+    // Each supplied list replaces that room family, never the absent family.
     if (existing) {
-      if (sendConflictIfStale(req, res, existing)) return;
-      await updateRecord(TABLES.diagnosticSanitaires, existing.id, fields);
-    } else {
-      await createRecord(TABLES.diagnosticSanitaires, { uuid_source: crypto.randomUUID(), created_at: new Date().toISOString(), ...fields });
+      for (const key of Object.keys(fields)) {
+        const bathroomField = key.startsWith('sdb_') || key.startsWith('porte_sdb_');
+        const wcField = key.startsWith('wc_') || key.startsWith('porte_wc_')
+          || key === 'observation_equipements_utilisation';
+        if ((bathroomField && !Object.hasOwn(payload, 'sdbInstances'))
+            || (wcField && !Object.hasOwn(payload, 'wcInstances'))) delete fields[key];
+      }
     }
-
-    res.json({ success: true, error: null });
+    const data = await saveSecondaryRecord(TABLES.diagnosticSanitaires,
+      FIELD_SETS.diagnosticSanitaires, existing,
+      { ...(!existing ? { created_at: new Date().toISOString() } : {}), ...fields });
+    res.json({ success: true, error: null, data });
   } catch (error) {
     next(error);
   }
@@ -8517,21 +8725,25 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
 
 app.get('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
   try {
-    const dossierRecord = await ensureDossierRecord(req.params.dossierId);
-    if (!canAccessDossierRecord(req.appUser, dossierRecord)) {
+    const { accessAllowed, record, dossierRecord } = await readAuthorizedDossierRecord({
+      appUser: req.appUser,
+      requestedDossierId: req.params.dossierId,
+      ensureDossierRecord,
+      canAccessDossierRecord,
+      queryAll,
+      tableId: TABLES.mesuresAnthropometriques,
+      fields: FIELD_SETS.mesuresAnthropometriques,
+    });
+    if (!accessAllowed) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const records = await queryAll(TABLES.mesuresAnthropometriques, { fields: FIELD_SETS.mesuresAnthropometriques });
-    const canonicalDossierId = field(dossierRecord, 'uuid_source') || req.params.dossierId;
-    const record = latestByFieldValue(records, 'dossier_id', canonicalDossierId);
     res.json(record ? {
-      id: field(record, 'uuid_source') || String(record.id),
-      dossierId: field(record, 'dossier_id'),
-      deboutHauteurCoude: toNumber(field(record, 'debout_hauteur_coude')),
-      assisHauteurAssise: toNumber(field(record, 'assis_hauteur_assise')),
-      assisProfondeurGenoux: toNumber(field(record, 'assis_profondeur_genoux')),
-      assisHauteurCoudes: toNumber(field(record, 'assis_hauteur_coudes')),
+      ...secondaryIdentity(record, field(dossierRecord, 'uuid_source') || req.params.dossierId),
+      deboutHauteurCoude: toNumber(field(record, 'debout_hauteur_coude')) ?? null,
+      assisHauteurAssise: toNumber(field(record, 'assis_hauteur_assise')) ?? null,
+      assisProfondeurGenoux: toNumber(field(record, 'assis_profondeur_genoux')) ?? null,
+      assisHauteurCoudes: toNumber(field(record, 'assis_hauteur_coudes')) ?? null,
       observations: stringValue(field(record, 'observations')),
     } : null);
   } catch (error) {
@@ -8543,13 +8755,20 @@ app.put('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
   try {
     const dossierId = req.params.dossierId;
     const payload = req.body || {};
-    const records = await queryAll(TABLES.mesuresAnthropometriques, { fields: FIELD_SETS.mesuresAnthropometriques });
-    const dossierRecord = await ensureDossierRecord(dossierId);
-    if (!canAccessDossierRecord(req.appUser, dossierRecord)) {
+    const { accessAllowed, record: existing, dossierRecord } = await readAuthorizedDossierRecord({
+      appUser: req.appUser,
+      requestedDossierId: dossierId,
+      ensureDossierRecord,
+      canAccessDossierRecord,
+      queryAll,
+      tableId: TABLES.mesuresAnthropometriques,
+      fields: FIELD_SETS.mesuresAnthropometriques,
+    });
+    if (!accessAllowed) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const existing = latestByFieldValue(records, 'dossier_id', field(dossierRecord, 'uuid_source'));
+    if (secondaryWriteConflict(req, res, existing)) return;
     const fields = {
       dossier_id: field(dossierRecord, 'uuid_source'),
       dossiers_id: Number(dossierRecord.id),
@@ -8561,14 +8780,10 @@ app.put('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
       updated_at: new Date().toISOString(),
     };
 
-    if (existing) {
-      if (sendConflictIfStale(req, res, existing)) return;
-      await updateRecord(TABLES.mesuresAnthropometriques, existing.id, fields);
-    } else {
-      await createRecord(TABLES.mesuresAnthropometriques, { uuid_source: crypto.randomUUID(), created_at: new Date().toISOString(), ...fields });
-    }
-
-    res.json({ success: true, error: null });
+    const data = await saveSecondaryRecord(TABLES.mesuresAnthropometriques,
+      FIELD_SETS.mesuresAnthropometriques, existing,
+      { ...(!existing ? { created_at: new Date().toISOString() } : {}), ...fields });
+    res.json({ success: true, error: null, data });
   } catch (error) {
     next(error);
   }
@@ -8576,17 +8791,21 @@ app.put('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
 
 app.get('/api/observations/:dossierId', requireAuth, async (req, res, next) => {
   try {
-    const dossierRecord = await ensureDossierRecord(req.params.dossierId);
-    if (!canAccessDossierRecord(req.appUser, dossierRecord)) {
+    const { accessAllowed, record, dossierRecord } = await readAuthorizedDossierRecord({
+      appUser: req.appUser,
+      requestedDossierId: req.params.dossierId,
+      ensureDossierRecord,
+      canAccessDossierRecord,
+      queryAll,
+      tableId: TABLES.observations,
+      fields: FIELD_SETS.observations,
+    });
+    if (!accessAllowed) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const records = await queryAll(TABLES.observations, { fields: FIELD_SETS.observations });
-    const canonicalDossierId = field(dossierRecord, 'uuid_source') || req.params.dossierId;
-    const record = latestByFieldValue(records, 'dossier_id', canonicalDossierId);
     res.json(record ? {
-      id: field(record, 'uuid_source') || String(record.id),
-      dossierId: field(record, 'dossier_id'),
+      ...secondaryIdentity(record, field(dossierRecord, 'uuid_source') || req.params.dossierId),
       observationEquipements: stringValue(field(record, 'observation_equipements')),
       projetSouhaitUsage: stringValue(field(record, 'projet_souhait_usage')),
       resumePreconisations: stringValue(field(record, 'resume_preconisations')),
@@ -8600,13 +8819,20 @@ app.put('/api/observations/:dossierId', requireAuth, async (req, res, next) => {
   try {
     const dossierId = req.params.dossierId;
     const payload = req.body || {};
-    const records = await queryAll(TABLES.observations, { fields: FIELD_SETS.observations });
-    const dossierRecord = await ensureDossierRecord(dossierId);
-    if (!canAccessDossierRecord(req.appUser, dossierRecord)) {
+    const { accessAllowed, record: existing, dossierRecord } = await readAuthorizedDossierRecord({
+      appUser: req.appUser,
+      requestedDossierId: dossierId,
+      ensureDossierRecord,
+      canAccessDossierRecord,
+      queryAll,
+      tableId: TABLES.observations,
+      fields: FIELD_SETS.observations,
+    });
+    if (!accessAllowed) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const existing = latestByFieldValue(records, 'dossier_id', field(dossierRecord, 'uuid_source'));
+    if (secondaryWriteConflict(req, res, existing)) return;
     const fields = {
       dossier_id: field(dossierRecord, 'uuid_source'),
       dossiers_id: Number(dossierRecord.id),
@@ -8615,14 +8841,8 @@ app.put('/api/observations/:dossierId', requireAuth, async (req, res, next) => {
       resume_preconisations: nullableString(payload.resumePreconisations),
     };
 
-    if (existing) {
-      if (sendConflictIfStale(req, res, existing)) return;
-      await updateRecord(TABLES.observations, existing.id, fields);
-    } else {
-      await createRecord(TABLES.observations, { uuid_source: crypto.randomUUID(), ...fields });
-    }
-
-    res.json({ success: true, error: null });
+    const data = await saveSecondaryRecord(TABLES.observations, FIELD_SETS.observations, existing, fields);
+    res.json({ success: true, error: null, data });
   } catch (error) {
     next(error);
   }

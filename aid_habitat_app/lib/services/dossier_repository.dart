@@ -8,6 +8,33 @@ import 'local_database.dart';
 import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
+import 'sync_mutation.dart';
+
+class SyncConflictReview {
+  SyncConflictReview._({
+    required this.operationId,
+    required this.entityType,
+    required this.entityLocalId,
+    required this.payloadJson,
+    required this.remoteUpdatedAt,
+    required this.localValues,
+    required this.remoteValues,
+    required this.remoteColumns,
+    required this.localRowId,
+    required this.table,
+  });
+
+  final String operationId;
+  final String entityType;
+  final String entityLocalId;
+  final String payloadJson;
+  final String remoteUpdatedAt;
+  final Map<String, dynamic> localValues;
+  final Map<String, dynamic> remoteValues;
+  final Map<String, dynamic> remoteColumns;
+  final String localRowId;
+  final String table;
+}
 
 class DossierRepository {
   DossierRepository({LocalDatabase? database})
@@ -19,6 +46,386 @@ class DossierRepository {
 
   Future<void> initialize() async {
     await _database.ensureSeeded();
+  }
+
+  Future<({String remoteDossierId, Set<String> entityTypes})>
+  conflictReviewScope(String dossierId) async {
+    final db = await _database.database;
+    final rows = await db.query(
+      'dossiers',
+      where: 'local_id = ?',
+      whereArgs: [dossierId],
+    );
+    if (rows.length != 1) throw StateError('Dossier local introuvable.');
+    final row = rows.single;
+    final operations = await db.query(
+      'sync_operations',
+      columns: ['entity_type'],
+      where:
+          "status = 'conflict' AND ((entity_type = 'patient' AND entity_local_id = ?) OR (entity_type != 'patient' AND entity_local_id = ?))",
+      whereArgs: [row['patient_local_id'], dossierId],
+    );
+    return (
+      remoteDossierId: _remoteIdentity(row['remote_dossier_id'], dossierId),
+      entityTypes: operations
+          .map((row) => row['entity_type'] as String)
+          .toSet(),
+    );
+  }
+
+  static String _remoteIdentity(Object? remoteId, String localId) {
+    final value = remoteId?.toString().trim();
+    return value == null || value.isEmpty ? localId : value;
+  }
+
+  /// Build a review from the unfiltered server payload, not the reduced UI
+  /// model. No local data changes during this read, including while offline.
+  Future<List<SyncConflictReview>> reviewConflicts(
+    String dossierId,
+    Map<String, dynamic> remote,
+  ) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final bundles = await txn.query(
+        'dossiers',
+        where: 'local_id = ?',
+        whereArgs: [dossierId],
+      );
+      if (bundles.length != 1) throw StateError('Dossier local introuvable.');
+      final bundle = bundles.single;
+      if (remote['id'] !=
+          _remoteIdentity(bundle['remote_dossier_id'], dossierId)) {
+        throw StateError('Le dossier distant ne correspond pas.');
+      }
+      final patientId = bundle['patient_local_id'] as String;
+      final patientRows = await txn.query(
+        'patients',
+        where: 'local_id = ?',
+        whereArgs: [patientId],
+      );
+      final patient = (remote['patient'] as Map?)?.cast<String, dynamic>();
+      if (patientRows.length != 1 ||
+          patient == null ||
+          patient['id'] !=
+              _remoteIdentity(
+                patientRows.single['remote_patient_id'],
+                patientId,
+              )) {
+        throw StateError('Le beneficiaire distant ne correspond pas.');
+      }
+      final operations = await txn.query(
+        'sync_operations',
+        where:
+            "status = 'conflict' AND ((entity_type = 'patient' AND entity_local_id = ?) OR (entity_type IN ('dossier', 'housing') AND entity_local_id = ?))",
+        whereArgs: [patientId, dossierId],
+        orderBy: 'created_at, id',
+      );
+      final reviews = <SyncConflictReview>[];
+      for (final operation in operations) {
+        final type = operation['entity_type'] as String;
+        final payloadJson = await OfflineVault.instance.openString(
+          operation['payload_json'] as String,
+        );
+        final payload = jsonDecode(payloadJson) as Map<String, dynamic>;
+        final updates = (payload['updates'] as Map).cast<String, dynamic>();
+        final raw = type == 'patient'
+            ? patient
+            : type == 'housing'
+            ? (remote['housing'] as Map?)?.cast<String, dynamic>()
+            : remote;
+        if (raw == null) throw StateError('Version distante incomplete.');
+        final version = _extractRemoteUpdatedAt(raw);
+        if (version == null || DateTime.tryParse(version) == null) {
+          throw StateError('Version serveur absente : resolution suspendue.');
+        }
+        final now = DateTime.now().toIso8601String();
+        final columns = type == 'patient'
+            ? _buildPatientPayload(raw: raw, now: now)
+            : type == 'housing'
+            ? _buildHousingPayload(raw: raw, now: now)
+            : _buildDossierPayload(raw: raw, now: now);
+        final mapper = type == 'patient'
+            ? _mapPatientFieldsToApi
+            : type == 'housing'
+            ? _mapHousingFieldsToApi
+            : _mapDossierFieldsToApi;
+        final remoteApi = mapper(columns);
+        for (final key in updates.keys) {
+          final rawKey = key == 'occupant1BirthDate' ? 'birthDate' : key;
+          if (!raw.containsKey(rawKey) || !remoteApi.containsKey(key)) {
+            throw StateError('Valeur distante absente pour $key.');
+          }
+        }
+        // Restore only columns belonging to the explicitly reviewed patch.
+        // In particular, unrelated dossier/context data must stay untouched.
+        final selectedColumns = <String, dynamic>{};
+        for (final column in columns.entries) {
+          if ([
+            'updated_at',
+            'remote_updated_at',
+            'sync_state',
+          ].contains(column.key)) {
+            continue;
+          }
+          if (mapper({
+            column.key: column.value,
+          }).keys.any(updates.containsKey)) {
+            selectedColumns[column.key] = column.value;
+          }
+        }
+        if (selectedColumns.isEmpty) throw StateError('Aucun champ resoluble.');
+        reviews.add(
+          SyncConflictReview._(
+            operationId: operation['id'] as String,
+            entityType: type,
+            entityLocalId: operation['entity_local_id'] as String,
+            payloadJson: payloadJson,
+            remoteUpdatedAt: version,
+            localValues: Map.unmodifiable(updates),
+            remoteValues: Map.unmodifiable({
+              for (final key in updates.keys) key: remoteApi[key],
+            }),
+            remoteColumns: Map.unmodifiable(selectedColumns),
+            localRowId: type == 'patient'
+                ? patientId
+                : type == 'housing'
+                ? bundle['housing_local_id'] as String
+                : dossierId,
+            table: type == 'patient'
+                ? 'patients'
+                : type == 'housing'
+                ? 'housings'
+                : 'dossiers',
+          ),
+        );
+      }
+      return reviews;
+    });
+  }
+
+  static const _secondaryFields = <String, Map<String, String>>{
+    'mesures_anthropometriques': {
+      'deboutHauteurCoude': 'debout_hauteur_coude',
+      'assisHauteurAssise': 'assis_hauteur_assise',
+      'assisProfondeurGenoux': 'assis_profondeur_genoux',
+      'assisHauteurCoudes': 'assis_hauteur_coudes',
+      'observations': 'observations',
+    },
+    'observations_synthese': {
+      'observationEquipements': 'observation_equipements',
+      'projetSouhaitUsage': 'projet_souhait_usage',
+      'resumePreconisations': 'resume_preconisations',
+    },
+    'diagnostic_sanitaires': {
+      'sdbInstances': 'sdb_instances_json',
+      'wcInstances': 'wc_instances_json',
+    },
+  };
+
+  Future<List<SyncConflictReview>> reviewSecondaryConflicts(
+    String dossierId,
+    Map<String, Map<String, dynamic>?> remoteByType,
+  ) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final dossiers = await txn.query(
+        'dossiers',
+        where: 'local_id = ?',
+        whereArgs: [dossierId],
+      );
+      if (dossiers.length != 1) throw StateError('Dossier local introuvable.');
+      final remoteId = _remoteIdentity(
+        dossiers.single['remote_dossier_id'],
+        dossierId,
+      );
+      final reviews = <SyncConflictReview>[];
+      for (final type in _secondaryFields.keys) {
+        final operations = await txn.query(
+          'sync_operations',
+          where:
+              "status = 'conflict' AND entity_type = ? AND entity_local_id = ?",
+          whereArgs: [type, dossierId],
+          orderBy: 'created_at, id',
+        );
+        if (operations.isEmpty) continue;
+        final raw = remoteByType[type];
+        final version = raw == null ? null : _extractRemoteUpdatedAt(raw);
+        if (raw == null ||
+            raw['dossierId'] != remoteId ||
+            version == null ||
+            DateTime.tryParse(version) == null) {
+          throw StateError('Version distante de la fiche indisponible.');
+        }
+        final rows = await txn.query(
+          type,
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+        if (rows.length != 1) throw StateError('Fiche locale introuvable.');
+        final fields = _secondaryFields[type]!;
+        for (final operation in operations) {
+          final payloadJson = await OfflineVault.instance.openString(
+            operation['payload_json'] as String,
+          );
+          final payload = jsonDecode(payloadJson) as Map<String, dynamic>;
+          final updates =
+              (payload['updates'] as Map?)?.cast<String, dynamic>() ??
+              (type == 'diagnostic_sanitaires'
+                  ? {
+                      for (final key in fields.keys)
+                        if (payload.containsKey(key)) key: payload[key],
+                    }
+                  : <String, dynamic>{});
+          if (updates.isEmpty) {
+            throw StateError('Modification locale incomplete.');
+          }
+          if (type == 'diagnostic_sanitaires' &&
+              !fields.keys.every(updates.containsKey)) {
+            throw StateError('Diagnostic local incomplet.');
+          }
+          final values = <String, dynamic>{};
+          final columns = <String, dynamic>{};
+          for (final key in updates.keys) {
+            if (!fields.containsKey(key) || !raw.containsKey(key)) {
+              throw StateError('Valeur distante absente pour $key.');
+            }
+            final value = raw[key];
+            if (type == 'diagnostic_sanitaires') {
+              if (value is! List || value.any((entry) => entry is! Map)) {
+                throw StateError('Diagnostic distant incomplet.');
+              }
+              columns[fields[key]!] = jsonEncode(value);
+            } else if (type == 'mesures_anthropometriques' &&
+                key != 'observations') {
+              if (value != null && (value is! num || !value.isFinite)) {
+                throw StateError('Mesure distante invalide.');
+              }
+              columns[fields[key]!] = value;
+            } else {
+              if (value != null && value is! String) {
+                throw StateError('Texte distant invalide.');
+              }
+              columns[fields[key]!] = value ?? '';
+            }
+            values[key] = value;
+          }
+          reviews.add(
+            SyncConflictReview._(
+              operationId: operation['id'] as String,
+              entityType: type,
+              entityLocalId: dossierId,
+              payloadJson: payloadJson,
+              remoteUpdatedAt: version,
+              localValues: Map.unmodifiable(updates),
+              remoteValues: Map.unmodifiable(values),
+              remoteColumns: Map.unmodifiable(columns),
+              localRowId: rows.single['local_id'] as String,
+              table: type,
+            ),
+          );
+        }
+      }
+      return reviews;
+    });
+  }
+
+  Future<void> resolveReviewedConflict(
+    SyncConflictReview review, {
+    required bool keepLocal,
+  }) async {
+    final db = await _database.database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        where:
+            'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
+        whereArgs: [
+          review.operationId,
+          review.entityType,
+          review.entityLocalId,
+          'conflict',
+        ],
+      );
+      if (rows.length != 1 ||
+          await OfflineVault.instance.openString(
+                rows.single['payload_json'] as String,
+              ) !=
+              review.payloadJson) {
+        throw StateError('La saisie a change. Rechargez la comparaison.');
+      }
+      final others = await txn.query(
+        'sync_operations',
+        columns: ['id'],
+        where:
+            "entity_type = ? AND entity_local_id = ? AND id != ? AND status != 'completed'",
+        whereArgs: [
+          review.entityType,
+          review.entityLocalId,
+          review.operationId,
+        ],
+        limit: 1,
+      );
+      if (others.isNotEmpty) {
+        throw StateError('Une autre modification attend sur cette fiche.');
+      }
+      final now = DateTime.now().toIso8601String();
+      await txn.insert('sync_conflict_history', {
+        'operation_id': review.operationId,
+        'entity_type': review.entityType,
+        'entity_local_id': review.entityLocalId,
+        'decision': keepLocal ? 'keep_local' : 'take_remote',
+        'snapshot_json': await OfflineVault.instance.sealString(
+          jsonEncode({
+            'mutation': jsonDecode(review.payloadJson),
+            'remoteValues': review.remoteValues,
+            'remoteUpdatedAt': review.remoteUpdatedAt,
+          }),
+        ),
+        'created_at': now,
+      });
+      final payload = jsonDecode(review.payloadJson) as Map<String, dynamic>;
+      payload.remove('conflict');
+      payload.remove('localReference');
+      payload['updates'] = review.localValues;
+      if (review.entityType == 'diagnostic_sanitaires') {
+        for (final key in _secondaryFields['diagnostic_sanitaires']!.keys) {
+          payload[key] = review.localValues[key];
+        }
+      }
+      payload['concurrency'] = {
+        'version': 1,
+        'writeId': newSyncWriteId(),
+        'expectedUpdatedAt': review.remoteUpdatedAt,
+        'baseValues': review.remoteValues,
+      };
+      await txn.update(
+        'sync_operations',
+        {
+          'payload_json': await OfflineVault.instance.sealString(
+            jsonEncode(payload),
+          ),
+          'status': keepLocal ? 'pending' : 'completed',
+          'last_error': null,
+          'attempt_count': 0,
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [review.operationId],
+      );
+      final changed = await txn.update(
+        review.table,
+        {
+          if (!keepLocal) ...review.remoteColumns,
+          'remote_updated_at': review.remoteUpdatedAt,
+          'updated_at': now,
+          'sync_state': keepLocal ? 'pendingSync' : 'synced',
+        },
+        where: 'local_id = ?',
+        whereArgs: [review.localRowId],
+      );
+      if (changed != 1) throw StateError('Fiche locale introuvable.');
+    });
+    SyncEngine().notify();
   }
 
   /// Create a new beneficiary + housing + dossier locally. All three entities
@@ -49,6 +456,8 @@ class DossierRepository {
     final patientLocalId = _generateLocalId();
     final housingLocalId = _generateLocalId();
     final dossierLocalId = _generateLocalId();
+    late Map<String, dynamic> patientBaseline;
+    late Map<String, dynamic> dossierBaseline;
 
     final patient = Patient(
       id: patientLocalId,
@@ -162,12 +571,30 @@ class DossierRepository {
         'created_at': now,
         'updated_at': now,
       });
+      patientBaseline = Map.of(
+        (await txn.query(
+          'patients',
+          where: 'local_id = ?',
+          whereArgs: [patientLocalId],
+          limit: 1,
+        )).single,
+      );
+      dossierBaseline = Map.of(
+        (await txn.query(
+          'dossiers',
+          where: 'local_id = ?',
+          whereArgs: [dossierLocalId],
+          limit: 1,
+        )).single,
+      );
     });
 
     SyncEngine().notify();
 
     return Dossier(
       id: dossierLocalId,
+      patientEditBaseline: Map.unmodifiable(patientBaseline),
+      dossierEditBaseline: Map.unmodifiable(dossierBaseline),
       patient: patient,
       status: DossierStatus.TO_VISIT,
       ergoId: ergoId,
@@ -315,6 +742,16 @@ class DossierRepository {
         d.beneficiary_prepared AS dossier_beneficiary_prepared,
         p.sync_state AS patient_sync_state,
         h.sync_state AS housing_sync_state,
+        EXISTS (
+          SELECT 1 FROM sync_operations child_op
+          WHERE child_op.entity_local_id = d.local_id
+            AND child_op.status = 'conflict'
+            AND child_op.entity_type IN (
+              'contexte_de_vie', 'mesures_anthropometriques',
+              'observations_synthese', 'diagnostic_sanitaires',
+              'visit_recommendations'
+            )
+        ) AS child_conflict,
         p.local_id AS patient_local_id,
         p.remote_patient_id AS patient_remote_id,
         p.first_name AS patient_first_name,
@@ -534,8 +971,9 @@ class DossierRepository {
   /// UPDATE is used when the row already exists in the `synced` state, so
   /// columns the server doesn't return (e.g. local-only flags) are NOT
   /// wiped. INSERT-or-replace is used only for rows that don't exist yet.
-  /// Rows with pending local mutations (sync_state != synced) are skipped,
-  /// exactly like the legacy path.
+  /// Bundles with outstanding mutations are preserved regardless of the
+  /// incoming timestamp. A newer snapshot may repair orphaned sync states
+  /// only when there is no queued mutation to protect.
   Future<void> mergeRemoteDossierPayloads(
     List<Map<String, dynamic>> payloads,
   ) async {
@@ -551,6 +989,41 @@ class DossierRepository {
     final remoteHousingIds = <String>{};
 
     await db.transaction((txn) async {
+      // A newer remote snapshot is not an acknowledgement of a local write.
+      // Keep the whole dossier bundle (including its concurrency baseline)
+      // while a real mutation is outstanding, even if sync_state is stale.
+      // Only identifiers are loaded; queued PDFs/JSON payloads stay on disk.
+      final protectedBundles = await txn.rawQuery('''
+        SELECT d.local_id, d.patient_local_id, d.housing_local_id
+        FROM dossiers AS d
+        WHERE EXISTS (
+          SELECT 1 FROM sync_operations AS op
+          WHERE op.status IN ('pending', 'running', 'failed', 'conflict')
+            AND (
+              (op.entity_type IN ('dossier', 'contexte_de_vie')
+                AND op.entity_local_id = d.local_id)
+              OR (op.entity_type = 'patient'
+                AND op.entity_local_id = d.patient_local_id)
+              OR (op.entity_type = 'housing'
+                AND op.entity_local_id IN (d.local_id, d.housing_local_id))
+            )
+        )
+      ''');
+      final protectedDossierIds = <String>{};
+      final protectedPatientIds = <String>{};
+      for (final bundle in protectedBundles) {
+        final dossierId = bundle['local_id'] as String;
+        final patientId = bundle['patient_local_id'] as String;
+        final housingId = bundle['housing_local_id'] as String;
+        protectedDossierIds.add(dossierId);
+        protectedPatientIds.add(patientId);
+        // Deletion reconciliation must preserve the same local bundle if
+        // it is missing from this response, not just skip incoming updates.
+        remoteDossierIds.add(dossierId);
+        remotePatientIds.add(patientId);
+        remoteHousingIds.add(housingId);
+      }
+
       for (final raw in payloads) {
         final dossierId = raw['id']?.toString() ?? '';
         if (dossierId.isEmpty) continue;
@@ -559,6 +1032,11 @@ class DossierRepository {
         final pid = pJson?['id']?.toString() ?? dossierId;
         remotePatientIds.add(pid);
         remoteHousingIds.add('housing_$dossierId');
+
+        if (protectedDossierIds.contains(dossierId) ||
+            protectedPatientIds.contains(pid)) {
+          continue;
+        }
 
         final existingDossier = await txn.query(
           'dossiers',
@@ -588,12 +1066,9 @@ class DossierRepository {
         // l'utilisateur ne voyait JAMAIS les modifs faites sur l'autre
         // device tant qu'il n'avait pas resolu l'op.
         //
-        // Avec LWW : si le payload remote est strictement plus récent que
-        // le `remote_updated_at` local, on autorise le merge même quand
-        // sync_state ≠ synced. La sync_op pending pourra toujours retenter
-        // son push après ; si elle échoue (409), markConflict prendra le
-        // relais. Si elle réussit, elle ré-écrit la valeur dans NocoDB
-        // (potentiellement la même que ce qu'on vient de merger).
+        // This recovery now applies only to orphaned states: bundles with
+        // actual outstanding operations were excluded above. Updating their
+        // remote_updated_at here would bypass the next push's version check.
         bool remoteIsStrictlyNewer = false;
         final remoteUpdatedAtForLww = _extractWorkspaceUpdatedAt(raw);
         if (remoteUpdatedAtForLww != null && existingDossier.isNotEmpty) {
@@ -919,7 +1394,7 @@ class DossierRepository {
         WHERE entity_type = 'contexte_de_vie'
           AND entity_local_id = ?
           AND (
-            status IN ('pending', 'running', 'failed')
+            status IN ('pending', 'running', 'failed', 'conflict')
             OR (status = 'completed' AND updated_at > ?)
           )
         LIMIT 1
@@ -1150,7 +1625,7 @@ class DossierRepository {
       'updated_at': now,
       // Voir _buildDossierPayload : on stocke l'updatedAt serveur, pas
       // l'horodatage local du merge.
-      'remote_updated_at': _extractRemoteUpdatedAt(raw) ?? now,
+      'remote_updated_at': _extractRemoteUpdatedAt(raw),
       'sync_state': SyncState.synced.name,
     };
   }
@@ -1283,7 +1758,7 @@ class DossierRepository {
       'updated_at': now,
       // Voir _buildDossierPayload : on stocke l'updatedAt serveur, pas
       // l'horodatage local du merge (sert au check optimistic au push).
-      'remote_updated_at': _extractRemoteUpdatedAt(raw) ?? now,
+      'remote_updated_at': _extractRemoteUpdatedAt(raw),
       'sync_state': SyncState.synced.name,
     };
   }
@@ -1355,7 +1830,7 @@ class DossierRepository {
       // valeur dans `expectedUpdatedAt` et le serveur (via
       // `sendConflictIfStale`) refusera l'update si quelqu'un d'autre a
       // modifié la ligne entre-temps.
-      'remote_updated_at': _extractRemoteUpdatedAt(raw) ?? now,
+      'remote_updated_at': _extractRemoteUpdatedAt(raw),
       'sync_state': SyncState.synced.name,
     };
   }
@@ -1444,69 +1919,6 @@ class DossierRepository {
     }
   }
 
-  Future<void> forceReplaceWithRemote(Dossier remote) async {
-    final db = await _database.database;
-    final now = DateTime.now().toIso8601String();
-
-    await db.transaction((txn) async {
-      await txn.insert('patients', {
-        'local_id': remote.patient.id,
-        'remote_patient_id': remote.patient.id,
-        'first_name': remote.patient.firstName,
-        'last_name': remote.patient.lastName,
-        'birth_date': remote.patient.birthDate,
-        'phone': remote.patient.phone,
-        'email': remote.patient.email,
-        'address': remote.patient.address,
-        'city': remote.patient.city,
-        'zip_code': remote.patient.zipCode,
-        'family_situation': remote.patient.familySituation,
-        'occupation_status': remote.patient.occupationStatus,
-        'income_category': remote.patient.incomeCategory,
-        'trusted_person_json': jsonEncode({
-          'name': remote.patient.trustedPerson.name,
-          'phone': remote.patient.trustedPerson.phone,
-          'email': remote.patient.trustedPerson.email,
-        }),
-        'updated_at': now,
-        'remote_updated_at': now,
-        'sync_state': SyncState.synced.name,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-
-      final housingLocalId = 'housing_${remote.id}';
-      await txn.insert('housings', {
-        'local_id': housingLocalId,
-        'remote_housing_id': housingLocalId,
-        'patient_local_id': remote.patient.id,
-        'type': remote.housing.type.name,
-        'year_value': remote.housing.year,
-        'surface': remote.housing.surface,
-        'heating_mode': remote.housing.heating.name,
-        'accessibility_notes': remote.housing.accessibilityNotes,
-        'updated_at': now,
-        'remote_updated_at': now,
-        'sync_state': SyncState.synced.name,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-
-      await txn.insert('dossiers', {
-        'local_id': remote.id,
-        'remote_dossier_id': remote.id,
-        'patient_local_id': remote.patient.id,
-        'housing_local_id': housingLocalId,
-        'status': remote.status.name,
-        'ergo_id': remote.ergoId,
-        'visit_date': remote.visitDate,
-        'autonomy_notes': remote.autonomyNotes,
-        'beneficiary_prepared': remote.beneficiaryPrepared ? 1 : 0,
-        'plans_json': jsonEncode(remote.plans.keys.toList()),
-        'created_at': remote.createdAt,
-        'updated_at': now,
-        'remote_updated_at': now,
-        'sync_state': SyncState.synced.name,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-    });
-  }
-
   /// Alias kept for the dossier screen's in-place edits. Forwards to
   /// [updatePatient] so we get the same local write + sync-queue behaviour.
   Future<void> updatePatientFields(
@@ -1531,8 +1943,9 @@ class DossierRepository {
 
   Future<void> updateDossierFields(
     String dossierLocalId,
-    Map<String, dynamic> fields,
-  ) async {
+    Map<String, dynamic> fields, {
+    Map<String, dynamic>? observedFields,
+  }) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
     var enqueued = false;
@@ -1569,8 +1982,21 @@ class DossierRepository {
         txn,
         entityType: 'dossier',
         entityLocalId: dossierLocalId,
+        localConflict: _formConflict(
+          existingRows,
+          changedFields,
+          observedFields,
+        ),
         payloadKey: 'dossierId',
         updates: apiUpdates,
+        baseValues: _mapDossierFieldsToApi({
+          for (final key in changedFields.keys)
+            if (existingRows.isNotEmpty && existingRows.first.containsKey(key))
+              key: existingRows.first[key],
+        }),
+        expectedUpdatedAt: existingRows.isEmpty
+            ? null
+            : existingRows.first['remote_updated_at'] as String?,
         now: now,
       );
       enqueued = true;
@@ -1614,18 +2040,27 @@ class DossierRepository {
     required String entityLocalId,
     required String payloadKey,
     required Map<String, dynamic> updates,
+    required Map<String, dynamic> baseValues,
+    required String? expectedUpdatedAt,
     required String now,
+    Map<String, dynamic>? localConflict,
   }) async {
     final opId = '${entityType}_update_$entityLocalId';
-    final merged = await _mergeWithUnconfirmedSyncUpdates(
-      db,
-      operationId: opId,
-      nextUpdates: updates,
+    final previous = await _readUnconfirmedMutation(db, opId);
+    final payloadMap = buildSyncMutation(
+      idKey: payloadKey,
+      entityId: entityLocalId,
+      updates: updates,
+      baseValues: baseValues,
+      expectedUpdatedAt: expectedUpdatedAt,
+      previous: previous,
     );
-    final payloadMap = <String, dynamic>{
-      payloadKey: entityLocalId,
-      'updates': merged,
-    };
+    if (localConflict != null) {
+      payloadMap['conflict'] = {
+        ...localConflict,
+        if (previous != null) 'previousMutation': previous,
+      };
+    }
     // Also add a generic local-id key so the housing processor can find
     // the source dossier id (the housing sync needs to resolve the
     // beneficiary from the dossier).
@@ -1640,57 +2075,155 @@ class DossierRepository {
       'payload_json': await OfflineVault.instance.sealString(
         jsonEncode(payloadMap),
       ),
-      'status': SyncOperationStatus.pending.name,
+      'status': payloadMap.containsKey('conflict') ? 'conflict' : 'pending',
       'attempt_count': 0,
       'last_error': null,
       'created_at': now,
       'updated_at': now,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+    if (payloadMap.containsKey('conflict')) {
+      final table = entityType == 'patient'
+          ? 'patients'
+          : entityType == 'housing'
+          ? 'housings'
+          : 'dossiers';
+      await db.update(
+        table,
+        {'sync_state': SyncState.conflict.name},
+        where: entityType == 'housing'
+            ? 'local_id IN (SELECT housing_local_id FROM dossiers WHERE local_id = ?)'
+            : 'local_id = ?',
+        whereArgs: [entityLocalId],
+      );
+    }
   }
 
-  /// Récupère, quand elle existe, la dernière payload d'une sync_operation
-  /// NON confirmée serveur (pending / running / failed) et la fusionne avec
-  /// [nextUpdates]. Cela évite de perdre des champs plus anciens lorsqu'une
-  /// nouvelle save remplace une op déjà partie en réseau.
-  ///
-  /// Cas typique avant ce fix :
-  ///   1. champ A part en `running`
-  ///   2. l'utilisateur modifie champ B avant la réponse serveur
-  ///   3. l'op est remplacée avec seulement B
-  ///   4. si le PATCH de A échoue, A disparaît de la queue
-  ///
-  /// Désormais, la nouvelle op garde A + B tant que le serveur n'a pas
-  /// confirmé la synchronisation.
-  Future<Map<String, dynamic>> _mergeWithUnconfirmedSyncUpdates(
+  /// Child PUT transports still read some fields at the payload root. Keep
+  /// that wire shape alongside the canonical mutation and its local reference.
+  /// A child version is captured only when that child was actually read.
+  Future<void> _enqueueChildUpdate(
     DatabaseExecutor db, {
     required String operationId,
-    required Map<String, dynamic> nextUpdates,
+    required String entityType,
+    required String dossierId,
+    required Map<String, dynamic> updates,
+    required Map<String, dynamic> baseValues,
+    required Map<String, Object?>? existingRow,
+    required String now,
+    List<String> rootFields = const [],
+  }) async {
+    final previous = await _readUnconfirmedMutation(
+      db,
+      operationId,
+      rootFields: rootFields,
+    );
+    final hasReference =
+        previous != null || existingRow?['sync_state'] == SyncState.synced.name;
+    final version = existingRow?['remote_updated_at'] as String?;
+    final canCaptureVersion =
+        _secondaryFields.containsKey(entityType) &&
+        previous == null &&
+        hasReference &&
+        version != null &&
+        DateTime.tryParse(version) != null;
+    // Legacy queued references must not be upgraded from a newer pull. Their
+    // original observation remains unknown until an explicit conflict review.
+    final payload = buildSyncMutation(
+      idKey: 'dossierId',
+      entityId: dossierId,
+      updates: updates,
+      baseValues: hasReference ? baseValues : {},
+      expectedUpdatedAt: canCaptureVersion ? version : null,
+      previous: previous == null
+          ? null
+          : {
+              ...previous,
+              if (previous['concurrency'] == null)
+                'concurrency': previous['localReference'],
+            },
+    );
+    if (previous?['concurrency'] == null && !canCaptureVersion) {
+      payload['localReference'] = payload.remove('concurrency');
+    }
+    if (existingRow?['sync_state'] == SyncState.conflict.name) {
+      payload.putIfAbsent('conflict', () => <String, dynamic>{});
+    }
+    for (final key in rootFields) {
+      payload[key] = payload['updates'][key];
+    }
+    final conflicted = payload.containsKey('conflict');
+    final oldRows = await db.query(
+      'sync_operations',
+      where: 'id = ?',
+      whereArgs: [operationId],
+      limit: 1,
+    );
+    final old = oldRows.isEmpty ? null : oldRows.first;
+    await db.insert('sync_operations', {
+      'id': operationId,
+      'entity_type': entityType,
+      'entity_local_id': dossierId,
+      'operation_type': 'update',
+      'payload_json': await OfflineVault.instance.sealString(
+        jsonEncode(payload),
+      ),
+      'status': conflicted ? 'conflict' : 'pending',
+      'attempt_count': conflicted ? (old?['attempt_count'] ?? 0) : 0,
+      'last_error': conflicted ? (old?['last_error']) : null,
+      'created_at': previous != null ? (old?['created_at'] ?? now) : now,
+      'updated_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    if (conflicted) {
+      await db.update(
+        entityType,
+        {'sync_state': SyncState.conflict.name},
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>?> _readUnconfirmedMutation(
+    DatabaseExecutor db,
+    String operationId, {
+    List<String> rootFields = const [],
   }) async {
     final existing = await db.query(
       'sync_operations',
-      columns: const ['payload_json'],
-      where: 'id = ? AND status IN (?, ?, ?)',
+      columns: const ['payload_json', 'status'],
+      where: 'id = ? AND status IN (?, ?, ?, ?)',
       whereArgs: [
         operationId,
         SyncOperationStatus.pending.name,
         SyncOperationStatus.running.name,
         SyncOperationStatus.failed.name,
+        'conflict',
       ],
       limit: 1,
     );
-    if (existing.isEmpty) return nextUpdates;
-
-    try {
-      final prevRaw = await OfflineVault.instance.openString(
-        existing.first['payload_json'] as String,
-      );
-      final prev = jsonDecode(prevRaw) as Map<String, dynamic>;
-      final prevUpdates = (prev['updates'] as Map?)?.cast<String, dynamic>();
-      if (prevUpdates == null || prevUpdates.isEmpty) return nextUpdates;
-      return {...prevUpdates, ...nextUpdates};
-    } catch (_) {
-      return nextUpdates;
+    if (existing.isEmpty) return null;
+    // Failure must roll back the save, not silently discard the only copy
+    // of an older offline edit whose payload could not be decoded.
+    final raw = await OfflineVault.instance.openString(
+      existing.first['payload_json'] as String,
+    );
+    final payload = jsonDecode(raw) as Map<String, dynamic>;
+    if (!payload.containsKey('updates') && rootFields.isNotEmpty) {
+      if (!rootFields.every((key) => payload[key] is List)) {
+        throw const FormatException('Queued mutation has invalid list fields');
+      }
+      payload['updates'] = {for (final key in rootFields) key: payload[key]};
     }
+    if (payload['updates'] is! Map) {
+      throw const FormatException('Queued mutation has no valid updates');
+    }
+    if (!rootFields.every((key) => payload['updates'][key] is List)) {
+      throw const FormatException('Queued mutation has invalid list updates');
+    }
+    if (existing.first['status'] == 'conflict') {
+      payload.putIfAbsent('conflict', () => <String, dynamic>{});
+    }
+    return payload;
   }
 
   Future<Map<String, dynamic>> fetchFormData(
@@ -1763,6 +2296,17 @@ class DossierRepository {
 
     return Dossier(
       id: row['dossier_local_id'] as String,
+      patientEditBaseline: Map.unmodifiable({
+        for (final entry in row.entries)
+          if (entry.key.startsWith('patient_'))
+            entry.key.substring('patient_'.length): entry.value,
+      }),
+      dossierEditBaseline: Map.unmodifiable({
+        'personnes_presentes_visite': row['dossier_personnes_presentes'],
+        for (final entry in row.entries)
+          if (entry.key.startsWith('dossier_'))
+            entry.key.substring('dossier_'.length): entry.value,
+      }),
       patient: Patient(
         id: row['patient_local_id'] as String,
         firstName: row['patient_first_name'] as String,
@@ -1890,6 +2434,7 @@ class DossierRepository {
       // que NocoDB a « Joris SIM »). Demande utilisateur 2026-04-30.
       // Priorité : conflict > failed > pendingSync > localOnly > synced.
       syncState: _aggregateSyncStates([
+        if (row['child_conflict'] == 1) SyncState.conflict,
         SyncState.values.byName(row['dossier_sync_state'] as String),
         SyncState.values.byName(
           row['patient_sync_state'] as String? ?? SyncState.synced.name,
@@ -1956,48 +2501,35 @@ class DossierRepository {
   /// enqueued. Unknown snake_case keys are passed through as-is.
   Future<void> updatePatient(
     String patientId,
-    Map<String, dynamic> fields,
-  ) async {
+    Map<String, dynamic> fields, {
+    Map<String, dynamic>? observedFields,
+  }) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
+    var enqueued = false;
 
-    // Optimisation 2026-05-13 : diff avec la row SQLite existante pour
-    // ne pousser au serveur QUE les champs réellement modifiés. Avant
-    // ce changement, chaque save de BeneficiaryTab envoyait les 24+
-    // champs du Patient à PATCH /api/beneficiaires/:id même si
-    // l'utilisateur n'avait modifié qu'un seul champ — bande passante
-    // gaspillée + risque de race condition sur des champs intacts
-    // (les `*_json` collections sérialisaient un objet ré-encodé qui
-    // pouvait diverger d'une frame à l'autre sans changement
-    // utilisateur). Demande utilisateur 2026-05-13.
-    final existingRows = await db.query(
-      'patients',
-      where: 'local_id = ?',
-      whereArgs: [patientId],
-      limit: 1,
-    );
-    final changedFields = _diffAgainstRow(
-      existingRows.isEmpty ? null : existingRows.first,
-      fields,
-    );
-
-    if (changedFields.isEmpty) {
-      // Aucun champ n'a changé — on évite l'écriture locale, la mise
-      // à jour de `updated_at`, et le push serveur. Idempotent : si
-      // l'utilisateur tape un caractère puis efface, on ne fait rien.
-      return;
-    }
-
-    // Refonte 2026-05-16 (audit P0 #4) : on wrappe le UPDATE patient
-    // + l'INSERT/UPDATE sync_op dans UNE SEULE transaction SQLite.
-    // Avant ce fix, l'app pouvait être tuée entre les deux writes
-    // (force-quit, crash, batterie critique) → la ligne patient
-    // contenait la nouvelle valeur mais aucune sync_op ne la poussait.
-    // La modif locale était visible côté UI mais jamais propagée au
-    // serveur. `db.transaction` garantit l'atomicité : soit les deux
-    // writes sont commitées ensemble, soit rollback total.
-    final apiUpdates = _mapPatientFieldsToApi(changedFields);
+    // Read, diff, baseline and queued mutation share the same transaction:
+    // a workspace pull cannot change the reference between these steps.
     await db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'patients',
+        where: 'local_id = ?',
+        whereArgs: [patientId],
+        limit: 1,
+      );
+      final changedFields = _diffAgainstRow(
+        existingRows.isEmpty ? null : existingRows.first,
+        fields,
+      );
+
+      if (changedFields.isEmpty) {
+        // Aucun champ n'a changé — on évite l'écriture locale, la mise
+        // à jour de `updated_at`, et le push serveur. Idempotent : si
+        // l'utilisateur tape un caractère puis efface, on ne fait rien.
+        return;
+      }
+
+      final apiUpdates = _mapPatientFieldsToApi(changedFields);
       final localFields = Map<String, dynamic>.from(changedFields);
       localFields['updated_at'] = now;
       localFields['sync_state'] = SyncState.pendingSync.name;
@@ -2013,29 +2545,47 @@ class DossierRepository {
       // local-only modifié).
       if (apiUpdates.isEmpty) return;
 
-      final opId = 'patient_update_$patientId';
-      final mergedUpdates = await _mergeWithUnconfirmedSyncUpdates(
+      await _enqueueEntityUpdate(
         txn,
-        operationId: opId,
-        nextUpdates: apiUpdates,
-      );
-
-      await txn.insert('sync_operations', {
-        'id': opId,
-        'entity_type': 'patient',
-        'entity_local_id': patientId,
-        'operation_type': 'update',
-        'payload_json': await OfflineVault.instance.sealString(
-          jsonEncode({'patientLocalId': patientId, 'updates': mergedUpdates}),
+        entityType: 'patient',
+        entityLocalId: patientId,
+        localConflict: _formConflict(
+          existingRows,
+          changedFields,
+          observedFields,
         ),
-        'status': SyncOperationStatus.pending.name,
-        'attempt_count': 0,
-        'last_error': null,
-        'created_at': now,
-        'updated_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+        payloadKey: 'patientLocalId',
+        updates: apiUpdates,
+        baseValues: _mapPatientFieldsToApi({
+          for (final key in changedFields.keys)
+            if (existingRows.isNotEmpty && existingRows.first.containsKey(key))
+              key: existingRows.first[key],
+        }),
+        expectedUpdatedAt: existingRows.isEmpty
+            ? null
+            : existingRows.first['remote_updated_at'] as String?,
+        now: now,
+      );
+      enqueued = true;
     });
-    SyncEngine().notify();
+    if (enqueued) SyncEngine().notify();
+  }
+
+  Map<String, dynamic>? _formConflict(
+    List<Map<String, Object?>> rows,
+    Map<String, dynamic> changes,
+    Map<String, dynamic>? observed,
+  ) {
+    if (observed == null || rows.isEmpty) return null;
+    final current = rows.first;
+    final fields = <String, dynamic>{
+      for (final key in changes.keys)
+        if (observed.containsKey(key) &&
+            _fieldChanged(observed[key], current[key]))
+          key: {'observed': observed[key], 'current': current[key]},
+    };
+    if (fields.isEmpty) return null;
+    return {'code': 'LOCAL_EDIT_BASE_CHANGED', 'fields': fields};
   }
 
   /// Compare une valeur existante (lue depuis SQLite) avec une nouvelle
@@ -2218,52 +2768,53 @@ class DossierRepository {
     Map<String, dynamic> fields,
   ) async {
     final db = await _database.database;
-    final rows = await db.query(
-      'dossiers',
-      columns: ['housing_local_id'],
-      where: 'local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    final housingId = rows.first['housing_local_id'] as String;
-    final now = DateTime.now().toIso8601String();
-
-    // Lecture row SQLite locale pour calculer un vrai PATCH partiel.
-    // L'ancien code repoussait systématiquement les booléens et les
-    // champs critiques du logement à chaque save Accessibilité. C'était
-    // défensif après un ancien bug serveur, mais le serveur respecte
-    // maintenant `undefined` comme "ne pas toucher". On peut donc
-    // alléger fortement la sync sans risque d'effacer les champs absents.
-    final existingRows = await db.query(
-      'housings',
-      where: 'local_id = ?',
-      whereArgs: [housingId],
-      limit: 1,
-    );
-    final existingRow = existingRows.isEmpty ? null : existingRows.first;
-
-    final changedFields = _diffAgainstRow(existingRow, fields);
-    _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
-
-    if (changedFields.isEmpty) {
-      return; // rien n'a vraiment changé → no-op
-    }
-
-    // Conversion bool→int pour SQLite (fix 2026-05-15).
-    final localFields = <String, dynamic>{};
-    for (final entry in changedFields.entries) {
-      final v = entry.value;
-      localFields[entry.key] = v is bool ? (v ? 1 : 0) : v;
-    }
-    localFields['updated_at'] = now;
-    localFields['sync_state'] = SyncState.pendingSync.name;
-
-    // Refonte 2026-05-16 (audit P0 #4) : UPDATE + INSERT sync_op
-    // dans une seule transaction atomique. Si l'app crash entre les
-    // deux writes, SQLite rollback complet → pas d'état orphelin.
-    final apiUpdates = _mapHousingFieldsToApi(changedFields);
+    var enqueued = false;
     await db.transaction((txn) async {
+      final rows = await txn.query(
+        'dossiers',
+        columns: ['housing_local_id'],
+        where: 'local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+      final housingId = rows.first['housing_local_id'] as String;
+      final now = DateTime.now().toIso8601String();
+
+      // Lecture row SQLite locale pour calculer un vrai PATCH partiel.
+      // L'ancien code repoussait systématiquement les booléens et les
+      // champs critiques du logement à chaque save Accessibilité. C'était
+      // défensif après un ancien bug serveur, mais le serveur respecte
+      // maintenant `undefined` comme "ne pas toucher". On peut donc
+      // alléger fortement la sync sans risque d'effacer les champs absents.
+      final existingRows = await txn.query(
+        'housings',
+        where: 'local_id = ?',
+        whereArgs: [housingId],
+        limit: 1,
+      );
+      final existingRow = existingRows.isEmpty ? null : existingRows.first;
+
+      final changedFields = _diffAgainstRow(existingRow, fields);
+      _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
+
+      if (changedFields.isEmpty) {
+        return; // rien n'a vraiment changé → no-op
+      }
+
+      // Conversion bool→int pour SQLite (fix 2026-05-15).
+      final localFields = <String, dynamic>{};
+      for (final entry in changedFields.entries) {
+        final v = entry.value;
+        localFields[entry.key] = v is bool ? (v ? 1 : 0) : v;
+      }
+      localFields['updated_at'] = now;
+      localFields['sync_state'] = SyncState.pendingSync.name;
+
+      // Refonte 2026-05-16 (audit P0 #4) : UPDATE + INSERT sync_op
+      // dans une seule transaction atomique. Si l'app crash entre les
+      // deux writes, SQLite rollback complet → pas d'état orphelin.
+      final apiUpdates = _mapHousingFieldsToApi(changedFields);
       await txn.update(
         'housings',
         localFields,
@@ -2277,10 +2828,17 @@ class DossierRepository {
         entityLocalId: dossierId,
         payloadKey: 'dossierLocalId',
         updates: apiUpdates,
+        baseValues: _mapHousingFieldsToApi({
+          for (final key in changedFields.keys)
+            if (existingRow != null && existingRow.containsKey(key))
+              key: existingRow[key],
+        }),
+        expectedUpdatedAt: existingRow?['remote_updated_at'] as String?,
         now: now,
       );
+      enqueued = true;
     });
-    SyncEngine().notify();
+    if (enqueued) SyncEngine().notify();
   }
 
   static Map<String, dynamic> _mapHousingFieldsToApi(
@@ -2487,62 +3045,60 @@ class DossierRepository {
   }) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
-    final existing = await db.query(
-      'contexte_de_vie',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-
-    // Optimisation 2026-05-13 : on compare le JSON encoded des sous-
-    // objets `medicalContext` et `autonomy` avec ce qui est déjà en
-    // SQLite. Si le JSON est identique → on ne push pas. Avant ce
-    // changement, chaque toggle de case Médical ou Autonomie poussait
-    // les 2 objets ENTIERS à NocoDB (objets de 20+ champs chacun).
-    final newMedicalJson = medicalContext != null
-        ? jsonEncode(medicalContext.toJson())
-        : null;
-    final newAutonomyJson = autonomy != null
-        ? jsonEncode(autonomy.toJson())
-        : null;
-
-    final existingRow = existing.isNotEmpty ? existing.first : null;
-    final existingMedicalJson = existingRow?['medical_context_json'] as String?;
-    final existingAutonomyJson = existingRow?['autonomy_json'] as String?;
-
-    final medicalChanged =
-        newMedicalJson != null &&
-        _fieldChanged(existingMedicalJson, newMedicalJson);
-    final autonomyChanged =
-        newAutonomyJson != null &&
-        _fieldChanged(existingAutonomyJson, newAutonomyJson);
-
-    if (!medicalChanged && !autonomyChanged) {
-      // Aucun des 2 objets n'a vraiment changé → no-op total.
-      return;
-    }
-
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      'patient_local_id': patientId,
-      'updated_at': now,
-      'sync_state': SyncState.pendingSync.name,
-    };
-    if (medicalChanged) data['medical_context_json'] = newMedicalJson;
-    if (autonomyChanged) data['autonomy_json'] = newAutonomyJson;
-
-    final opUpdates = <String, dynamic>{};
-    if (medicalChanged && medicalContext != null) {
-      opUpdates['medicalContext'] = medicalContext.toJson();
-    }
-    if (autonomyChanged && autonomy != null) {
-      opUpdates['autonomy'] = autonomy.toJson();
-    }
-
-    // Refonte 2026-05-16 (audit P0 #4) : upsert local + enqueue sync_op
-    // dans une seule transaction atomique. Crash entre les deux writes
-    // → rollback complet, pas d'état orphelin.
     await db.transaction((txn) async {
+      final existing = await txn.query(
+        'contexte_de_vie',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+
+      // Optimisation 2026-05-13 : on compare le JSON encoded des sous-
+      // objets `medicalContext` et `autonomy` avec ce qui est déjà en
+      // SQLite. Si le JSON est identique → on ne push pas. Avant ce
+      // changement, chaque toggle de case Médical ou Autonomie poussait
+      // les 2 objets ENTIERS à NocoDB (objets de 20+ champs chacun).
+      final newMedicalJson = medicalContext != null
+          ? jsonEncode(medicalContext.toJson())
+          : null;
+      final newAutonomyJson = autonomy != null
+          ? jsonEncode(autonomy.toJson())
+          : null;
+
+      final existingRow = existing.isNotEmpty ? existing.first : null;
+      final existingMedicalJson =
+          existingRow?['medical_context_json'] as String?;
+      final existingAutonomyJson = existingRow?['autonomy_json'] as String?;
+
+      final medicalChanged =
+          newMedicalJson != null &&
+          _fieldChanged(existingMedicalJson, newMedicalJson);
+      final autonomyChanged =
+          newAutonomyJson != null &&
+          _fieldChanged(existingAutonomyJson, newAutonomyJson);
+
+      if (!medicalChanged && !autonomyChanged) {
+        // Aucun des 2 objets n'a vraiment changé → no-op total.
+        return;
+      }
+
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        'patient_local_id': patientId,
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      };
+      if (medicalChanged) data['medical_context_json'] = newMedicalJson;
+      if (autonomyChanged) data['autonomy_json'] = newAutonomyJson;
+
+      final opUpdates = <String, dynamic>{};
+      if (medicalChanged && medicalContext != null) {
+        opUpdates['medicalContext'] = medicalContext.toJson();
+      }
+      if (autonomyChanged && autonomy != null) {
+        opUpdates['autonomy'] = autonomy.toJson();
+      }
+
       if (existing.isEmpty) {
         data['local_id'] = 'ctx_${dossierId}_${_uuid()}';
         await txn.insert('contexte_de_vie', data);
@@ -2558,25 +3114,21 @@ class DossierRepository {
       if (opUpdates.isEmpty) return;
 
       final opId = 'contexte_update_$dossierId';
-      final merged = await _mergeWithUnconfirmedSyncUpdates(
+      await _enqueueChildUpdate(
         txn,
         operationId: opId,
-        nextUpdates: opUpdates,
+        entityType: 'contexte_de_vie',
+        dossierId: dossierId,
+        updates: opUpdates,
+        baseValues: {
+          if (medicalChanged && existingMedicalJson != null)
+            'medicalContext': jsonDecode(existingMedicalJson),
+          if (autonomyChanged && existingAutonomyJson != null)
+            'autonomy': jsonDecode(existingAutonomyJson),
+        },
+        existingRow: existingRow,
+        now: now,
       );
-      await txn.insert('sync_operations', {
-        'id': opId,
-        'entity_type': 'contexte_de_vie',
-        'entity_local_id': dossierId,
-        'operation_type': 'update',
-        'payload_json': await OfflineVault.instance.sealString(
-          jsonEncode({'dossierId': dossierId, 'updates': merged}),
-        ),
-        'status': SyncOperationStatus.pending.name,
-        'attempt_count': 0,
-        'last_error': null,
-        'created_at': now,
-        'updated_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
     SyncEngine().notify();
   }
@@ -2616,24 +3168,23 @@ class DossierRepository {
   ) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
-    final existing = await db.query(
-      'diagnostic_sanitaires',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-    final sdbJson = diag.sdbInstances.map((e) => e.toJson()).toList();
-    final wcJson = diag.wcInstances.map((e) => e.toJson()).toList();
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      'sdb_instances_json': jsonEncode(sdbJson),
-      'wc_instances_json': jsonEncode(wcJson),
-      'updated_at': now,
-      'sync_state': SyncState.pendingSync.name,
-    };
-
-    // Refonte 2026-05-16 (audit P0 #4) : upsert + enqueue atomique.
     await db.transaction((txn) async {
+      final existing = await txn.query(
+        'diagnostic_sanitaires',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      final sdbJson = diag.sdbInstances.map((e) => e.toJson()).toList();
+      final wcJson = diag.wcInstances.map((e) => e.toJson()).toList();
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        'sdb_instances_json': jsonEncode(sdbJson),
+        'wc_instances_json': jsonEncode(wcJson),
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      };
+
       if (existing.isEmpty) {
         data['local_id'] = 'diag_${dossierId}_${_uuid()}';
         await txn.insert('diagnostic_sanitaires', data);
@@ -2645,24 +3196,23 @@ class DossierRepository {
           whereArgs: [dossierId],
         );
       }
-      await txn.insert('sync_operations', {
-        'id': 'diag_update_$dossierId',
-        'entity_type': 'diagnostic_sanitaires',
-        'entity_local_id': dossierId,
-        'operation_type': 'update',
-        'payload_json': await OfflineVault.instance.sealString(
-          jsonEncode({
-            'dossierId': dossierId,
-            'sdbInstances': sdbJson,
-            'wcInstances': wcJson,
-          }),
-        ),
-        'status': SyncOperationStatus.pending.name,
-        'attempt_count': 0,
-        'last_error': null,
-        'created_at': now,
-        'updated_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      final row = existing.isEmpty ? null : existing.first;
+      await _enqueueChildUpdate(
+        txn,
+        operationId: 'diag_update_$dossierId',
+        entityType: 'diagnostic_sanitaires',
+        dossierId: dossierId,
+        updates: {'sdbInstances': sdbJson, 'wcInstances': wcJson},
+        baseValues: {
+          if (row?['sdb_instances_json'] != null)
+            'sdbInstances': jsonDecode(row!['sdb_instances_json'] as String),
+          if (row?['wc_instances_json'] != null)
+            'wcInstances': jsonDecode(row!['wc_instances_json'] as String),
+        },
+        existingRow: row,
+        rootFields: const ['sdbInstances', 'wcInstances'],
+        now: now,
+      );
     });
     SyncEngine().notify();
   }
@@ -2728,59 +3278,58 @@ class DossierRepository {
   ) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
-    final existing = await db.query(
-      'mesures_anthropometriques',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-
-    // Optimisation 2026-05-13 : diff avec la row existante pour ne
-    // pousser au serveur QUE les champs réellement modifiés. Si l'ergo
-    // tape juste un caractère dans "Hauteur assise" puis stabilise, on
-    // ne push QUE `assisHauteurAssise` au lieu des 5 champs mesures.
-    final fieldCandidates = <String, dynamic>{
-      'debout_hauteur_coude': mesures.deboutHauteurCoude,
-      'assis_hauteur_assise': mesures.assisHauteurAssise,
-      'assis_profondeur_genoux': mesures.assisProfondeurGenoux,
-      'assis_hauteur_coudes': mesures.assisHauteurCoudes,
-      'observations': mesures.observations,
-    };
-    final changedFields = _diffAgainstRow(
-      existing.isEmpty ? null : existing.first,
-      fieldCandidates,
-    );
-
-    if (changedFields.isEmpty && existing.isNotEmpty) {
-      // Aucun champ modifié, et la row existe déjà → no-op.
-      // (Si la row n'existe pas, on doit créer une row même avec des
-      // valeurs vides pour avoir une cible d'update future.)
-      return;
-    }
-
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      ...changedFields,
-      'updated_at': now,
-      'sync_state': SyncState.pendingSync.name,
-    };
-    // Mapping snake→camel pour l'API. On ne push QUE les champs qui
-    // ont changé (cf. `changedFields` ci-dessus).
-    const snakeToCamel = <String, String>{
-      'debout_hauteur_coude': 'deboutHauteurCoude',
-      'assis_hauteur_assise': 'assisHauteurAssise',
-      'assis_profondeur_genoux': 'assisProfondeurGenoux',
-      'assis_hauteur_coudes': 'assisHauteurCoudes',
-      'observations': 'observations',
-    };
-    final updates = <String, dynamic>{};
-    changedFields.forEach((snake, value) {
-      final camel = snakeToCamel[snake];
-      if (camel != null) updates[camel] = value;
-    });
-
-    // Refonte 2026-05-16 (audit P0 #4) : upsert + enqueue atomique.
     await db.transaction((txn) async {
+      final existing = await txn.query(
+        'mesures_anthropometriques',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+
+      // Optimisation 2026-05-13 : diff avec la row existante pour ne
+      // pousser au serveur QUE les champs réellement modifiés. Si l'ergo
+      // tape juste un caractère dans "Hauteur assise" puis stabilise, on
+      // ne push QUE `assisHauteurAssise` au lieu des 5 champs mesures.
+      final fieldCandidates = <String, dynamic>{
+        'debout_hauteur_coude': mesures.deboutHauteurCoude,
+        'assis_hauteur_assise': mesures.assisHauteurAssise,
+        'assis_profondeur_genoux': mesures.assisProfondeurGenoux,
+        'assis_hauteur_coudes': mesures.assisHauteurCoudes,
+        'observations': mesures.observations,
+      };
+      final changedFields = _diffAgainstRow(
+        existing.isEmpty ? null : existing.first,
+        fieldCandidates,
+      );
+
+      if (changedFields.isEmpty && existing.isNotEmpty) {
+        // Aucun champ modifié, et la row existe déjà → no-op.
+        // (Si la row n'existe pas, on doit créer une row même avec des
+        // valeurs vides pour avoir une cible d'update future.)
+        return;
+      }
+
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        ...changedFields,
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      };
+      // Mapping snake→camel pour l'API. On ne push QUE les champs qui
+      // ont changé (cf. `changedFields` ci-dessus).
+      const snakeToCamel = <String, String>{
+        'debout_hauteur_coude': 'deboutHauteurCoude',
+        'assis_hauteur_assise': 'assisHauteurAssise',
+        'assis_profondeur_genoux': 'assisProfondeurGenoux',
+        'assis_hauteur_coudes': 'assisHauteurCoudes',
+        'observations': 'observations',
+      };
+      final updates = <String, dynamic>{};
+      changedFields.forEach((snake, value) {
+        final camel = snakeToCamel[snake];
+        if (camel != null) updates[camel] = value;
+      });
+
       if (existing.isEmpty) {
         data
           ..['debout_hauteur_coude'] = mesures.deboutHauteurCoude
@@ -2801,25 +3350,20 @@ class DossierRepository {
 
       if (updates.isEmpty) return;
       final opId = 'mesures_update_$dossierId';
-      final merged = await _mergeWithUnconfirmedSyncUpdates(
+      await _enqueueChildUpdate(
         txn,
         operationId: opId,
-        nextUpdates: updates,
+        entityType: 'mesures_anthropometriques',
+        dossierId: dossierId,
+        updates: updates,
+        baseValues: {
+          for (final key in changedFields.keys)
+            if (existing.isNotEmpty && snakeToCamel.containsKey(key))
+              snakeToCamel[key]!: existing.first[key],
+        },
+        existingRow: existing.isEmpty ? null : existing.first,
+        now: now,
       );
-      await txn.insert('sync_operations', {
-        'id': opId,
-        'entity_type': 'mesures_anthropometriques',
-        'entity_local_id': dossierId,
-        'operation_type': 'update',
-        'payload_json': await OfflineVault.instance.sealString(
-          jsonEncode({'dossierId': dossierId, 'updates': merged}),
-        ),
-        'status': SyncOperationStatus.pending.name,
-        'attempt_count': 0,
-        'last_error': null,
-        'created_at': now,
-        'updated_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
     SyncEngine().notify();
   }
@@ -2848,48 +3392,47 @@ class DossierRepository {
   ) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
-    final existing = await db.query(
-      'observations_synthese',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-
-    // Optimisation 2026-05-13 : diff pattern aligné sur upsertMesures.
-    final fieldCandidates = <String, dynamic>{
-      'observation_equipements': obs.observationEquipements,
-      'projet_souhait_usage': obs.projetSouhaitUsage,
-      'resume_preconisations': obs.resumePreconisations,
-    };
-    final changedFields = _diffAgainstRow(
-      existing.isEmpty ? null : existing.first,
-      fieldCandidates,
-    );
-
-    if (changedFields.isEmpty && existing.isNotEmpty) {
-      return; // rien changé + row existe → no-op
-    }
-
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      ...changedFields,
-      'updated_at': now,
-      'sync_state': SyncState.pendingSync.name,
-    };
-    // Pattern aligné sur `upsertContexteDeVie`.
-    const snakeToCamel = <String, String>{
-      'observation_equipements': 'observationEquipements',
-      'projet_souhait_usage': 'projetSouhaitUsage',
-      'resume_preconisations': 'resumePreconisations',
-    };
-    final updates = <String, dynamic>{};
-    changedFields.forEach((snake, value) {
-      final camel = snakeToCamel[snake];
-      if (camel != null) updates[camel] = value;
-    });
-
-    // Refonte 2026-05-16 (audit P0 #4) : upsert + enqueue atomique.
     await db.transaction((txn) async {
+      final existing = await txn.query(
+        'observations_synthese',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+
+      // Optimisation 2026-05-13 : diff pattern aligné sur upsertMesures.
+      final fieldCandidates = <String, dynamic>{
+        'observation_equipements': obs.observationEquipements,
+        'projet_souhait_usage': obs.projetSouhaitUsage,
+        'resume_preconisations': obs.resumePreconisations,
+      };
+      final changedFields = _diffAgainstRow(
+        existing.isEmpty ? null : existing.first,
+        fieldCandidates,
+      );
+
+      if (changedFields.isEmpty && existing.isNotEmpty) {
+        return; // rien changé + row existe → no-op
+      }
+
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        ...changedFields,
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      };
+      // Pattern aligné sur `upsertContexteDeVie`.
+      const snakeToCamel = <String, String>{
+        'observation_equipements': 'observationEquipements',
+        'projet_souhait_usage': 'projetSouhaitUsage',
+        'resume_preconisations': 'resumePreconisations',
+      };
+      final updates = <String, dynamic>{};
+      changedFields.forEach((snake, value) {
+        final camel = snakeToCamel[snake];
+        if (camel != null) updates[camel] = value;
+      });
+
       if (existing.isEmpty) {
         data
           ..['observation_equipements'] = obs.observationEquipements
@@ -2908,25 +3451,20 @@ class DossierRepository {
 
       if (updates.isEmpty) return;
       final opId = 'observations_update_$dossierId';
-      final merged = await _mergeWithUnconfirmedSyncUpdates(
+      await _enqueueChildUpdate(
         txn,
         operationId: opId,
-        nextUpdates: updates,
+        entityType: 'observations_synthese',
+        dossierId: dossierId,
+        updates: updates,
+        baseValues: {
+          for (final key in changedFields.keys)
+            if (existing.isNotEmpty && snakeToCamel.containsKey(key))
+              snakeToCamel[key]!: existing.first[key],
+        },
+        existingRow: existing.isEmpty ? null : existing.first,
+        now: now,
       );
-      await txn.insert('sync_operations', {
-        'id': opId,
-        'entity_type': 'observations_synthese',
-        'entity_local_id': dossierId,
-        'operation_type': 'update',
-        'payload_json': await OfflineVault.instance.sealString(
-          jsonEncode({'dossierId': dossierId, 'updates': merged}),
-        ),
-        'status': SyncOperationStatus.pending.name,
-        'attempt_count': 0,
-        'last_error': null,
-        'created_at': now,
-        'updated_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
     SyncEngine().notify();
   }
@@ -2956,60 +3494,67 @@ class DossierRepository {
   }) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
-    final existing = await db.query(
-      'visit_recommendations',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-    // EN LOCAL : on persiste TOUS les items (y compris ceux sans fiche
-    // wiki liée) → une préconisation "vide" en cours de saisie n'est pas
-    // perdue si l'app redémarre avant que l'utilisateur ait choisi
-    // l'item bibliothèque.
-    final itemsJson = items.map((e) => e.toJson()).toList();
-    final newItemsJsonString = jsonEncode(itemsJson);
-
-    // Optimisation 2026-05-13 : diff avec la liste existante. Si le
-    // JSON sérialisé est strictement identique à ce qui est en SQLite,
-    // c'est un no-op (pas de save SQLite, pas de push serveur). Cas
-    // typique : `recommendations_tab._save()` se déclenche au save
-    // debounce après n'importe quel rebuild même quand rien n'a
-    // vraiment changé (ex. focus/blur sur un champ texte).
-    if (existing.isNotEmpty) {
-      final existingItemsJson = existing.first['items_json'] as String?;
-      if (!forceSync && existingItemsJson == newItemsJsonString) {
-        return; // rien changé → no-op total
-      }
-    }
-
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      'items_json': newItemsJsonString,
-      'updated_at': now,
-      'sync_state': SyncState.pendingSync.name,
-    };
-
-    // VERS LE SERVEUR : on ne pousse que les items COMPLETS (wikiItemId
-    // non vide ET qui existe encore dans la wiki library locale). Cf.
-    // audit P0 #5 (2026-05-15) — wikiItemId obsolète → 400 récurrent.
-    final knownWikiIdRows = await db.query('wiki_items', columns: ['id']);
-    final knownWikiIds = knownWikiIdRows
-        .map((r) => (r['id']?.toString() ?? '').trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    final syncItems = items
-        .where((item) {
-          final id = item.wikiItemId.trim();
-          if (id.isEmpty) return false;
-          if (knownWikiIds.isEmpty) return true;
-          return knownWikiIds.contains(id);
-        })
-        .map((e) => e.toJson())
-        .toList();
-
-    // Refonte 2026-05-16 (audit P0 #4) : upsert + enqueue atomique.
-    final opId = 'visitrec_update_$dossierId';
     await db.transaction((txn) async {
+      final existing = await txn.query(
+        'visit_recommendations',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      // EN LOCAL : on persiste TOUS les items (y compris ceux sans fiche
+      // wiki liée) → une préconisation "vide" en cours de saisie n'est pas
+      // perdue si l'app redémarre avant que l'utilisateur ait choisi
+      // l'item bibliothèque.
+      final itemsJson = items.map((e) => e.toJson()).toList();
+      final newItemsJsonString = jsonEncode(itemsJson);
+
+      // Optimisation 2026-05-13 : diff avec la liste existante. Si le
+      // JSON sérialisé est strictement identique à ce qui est en SQLite,
+      // c'est un no-op (pas de save SQLite, pas de push serveur). Cas
+      // typique : `recommendations_tab._save()` se déclenche au save
+      // debounce après n'importe quel rebuild même quand rien n'a
+      // vraiment changé (ex. focus/blur sur un champ texte).
+      if (existing.isNotEmpty) {
+        final existingItemsJson = existing.first['items_json'] as String?;
+        if (!forceSync && existingItemsJson == newItemsJsonString) {
+          return; // rien changé → no-op total
+        }
+      }
+
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        'items_json': newItemsJsonString,
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      };
+
+      // A partial library cache cannot authorize removal from a remote list.
+      // Keep remote links; only unresolved local drafts wait for identity remap.
+      final syncItems = items
+          .where((item) {
+            final id = item.wikiItemId.trim();
+            return id.isNotEmpty && !id.startsWith('local_draft_');
+          })
+          .map((e) => e.toJson())
+          .toList();
+
+      final opId = 'visitrec_update_$dossierId';
+      final row = existing.isEmpty ? null : existing.first;
+      final previous = await _readUnconfirmedMutation(
+        txn,
+        opId,
+        rootFields: const ['items'],
+      );
+      // Keep observed linked items in the reference even if the current
+      // library cache no longer contains them. Drafts were never published.
+      final previousLinkedItems = row?['items_json'] == null
+          ? <dynamic>[]
+          : (jsonDecode(row!['items_json'] as String) as List)
+                .where(
+                  (item) =>
+                      (item['wikiItemId'] as String? ?? '').trim().isNotEmpty,
+                )
+                .toList();
       if (existing.isEmpty) {
         data['local_id'] = 'rec_${dossierId}_${_uuid()}';
         await txn.insert('visit_recommendations', data);
@@ -3022,33 +3567,35 @@ class DossierRepository {
         );
       }
 
-      if (syncItems.isNotEmpty || items.isEmpty) {
-        // `items.isEmpty` = l'utilisateur a tout supprimé, on push la liste
-        // vide pour que le serveur retire ses records. Sinon on attend
-        // qu'au moins un item ait une fiche wiki liée.
-        await txn.insert('sync_operations', {
-          'id': opId,
-          'entity_type': 'visit_recommendations',
-          'entity_local_id': dossierId,
-          'operation_type': 'update',
-          'payload_json': await OfflineVault.instance.sealString(
-            jsonEncode({'dossierId': dossierId, 'items': syncItems}),
-          ),
-          'status': SyncOperationStatus.pending.name,
-          'attempt_count': 0,
-          'last_error': null,
-          'created_at': now,
-          'updated_at': now,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-      } else {
-        // Aucun item complet à pousser. Retire l'éventuelle sync_op
-        // précédente (sinon elle ré-échouerait avec le même 400).
-        await txn.delete('sync_operations', where: 'id = ?', whereArgs: [opId]);
+      if (syncItems.isNotEmpty ||
+          previous != null ||
+          previousLinkedItems.isNotEmpty) {
+        // PUT replaces the remote list. A draft-only edit must withdraw
+        // previously linked items, including an earlier in-flight intention.
+        // With no earlier intention or linked items, drafts stay local-only.
+        await _enqueueChildUpdate(
+          txn,
+          operationId: opId,
+          entityType: 'visit_recommendations',
+          dossierId: dossierId,
+          updates: {'items': syncItems},
+          baseValues: {
+            if (row?['items_json'] != null) 'items': previousLinkedItems,
+          },
+          existingRow: row,
+          rootFields: const ['items'],
+          now: now,
+        );
+      } else if (row?['sync_state'] == SyncState.conflict.name) {
+        await txn.update(
+          'visit_recommendations',
+          {'sync_state': SyncState.conflict.name},
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
       }
     });
-    if (syncItems.isNotEmpty || items.isEmpty) {
-      SyncEngine().notify();
-    }
+    SyncEngine().notify();
   }
 
   /// Met en file d'attente la génération du rapport PDF pour [dossierId].
@@ -3099,20 +3646,42 @@ class DossierRepository {
   /// pushed, and we don't want to clobber them with the server copy.
   Future<bool> refreshDiagnosticSanitaireFromRemote(String dossierId) async {
     final NocodbApiClient api = NocodbApiClient();
-    final remote = await api.fetchDiagnosticSanitairePayload(dossierId);
+    final remote = await api.fetchDiagnosticSanitairePayload(
+      await _remoteDossierIdForRead(dossierId),
+    );
     return mergeRemoteDiagnosticSanitairePayload(dossierId, remote);
   }
 
   Future<bool> refreshMesuresFromRemote(String dossierId) async {
     final NocodbApiClient api = NocodbApiClient();
-    final remote = await api.fetchMesuresPayload(dossierId);
+    final remote = await api.fetchMesuresPayload(
+      await _remoteDossierIdForRead(dossierId),
+    );
     return mergeRemoteMesuresPayload(dossierId, remote);
   }
 
   Future<bool> refreshObservationsFromRemote(String dossierId) async {
     final NocodbApiClient api = NocodbApiClient();
-    final remote = await api.fetchObservationsPayload(dossierId);
+    final remote = await api.fetchObservationsPayload(
+      await _remoteDossierIdForRead(dossierId),
+    );
     return mergeRemoteObservationsPayload(dossierId, remote);
+  }
+
+  Future<String> _remoteDossierIdForRead(String dossierId) async {
+    final db = await _database.database;
+    final rows = await db.query(
+      'dossiers',
+      columns: ['remote_dossier_id'],
+      where: 'local_id = ?',
+      whereArgs: [dossierId],
+    );
+    if (rows.length != 1) throw StateError('Dossier local introuvable.');
+    final mapped = rows.single['remote_dossier_id']?.toString().trim();
+    if ((mapped == null || mapped.isEmpty) && dossierId.startsWith('local_')) {
+      throw StateError('Le dossier attend sa premiere synchronisation.');
+    }
+    return _remoteIdentity(mapped, dossierId);
   }
 
   /// Central guard used by every dossier child table.
@@ -3143,7 +3712,7 @@ class DossierRepository {
       WHERE entity_type = ?
         AND entity_local_id = ?
         AND (
-          status IN ('pending', 'running', 'failed')
+          status IN ('pending', 'running', 'failed', 'conflict')
           OR (status = 'completed' AND updated_at > ?)
         )
       LIMIT 1
@@ -3164,52 +3733,55 @@ class DossierRepository {
     Map<String, dynamic>? remote,
   ) async {
     final db = await _database.database;
-    final canMerge = await _canMergeRemoteChild(
-      db: db,
-      table: 'diagnostic_sanitaires',
-      entityType: 'diagnostic_sanitaires',
-      dossierId: dossierId,
-    );
-    if (!canMerge) return false;
+    return db.transaction((db) async {
+      final canMerge = await _canMergeRemoteChild(
+        db: db,
+        table: 'diagnostic_sanitaires',
+        entityType: 'diagnostic_sanitaires',
+        dossierId: dossierId,
+      );
+      if (!canMerge) return false;
 
-    final existing = await db.query(
-      'diagnostic_sanitaires',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-    if (remote == null) {
-      if (existing.isEmpty) return false;
-      await db.delete(
+      final existing = await db.query(
         'diagnostic_sanitaires',
         where: 'dossier_local_id = ?',
         whereArgs: [dossierId],
+        limit: 1,
       );
+      if (remote == null) {
+        if (existing.isEmpty) return false;
+        await db.delete(
+          'diagnostic_sanitaires',
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+        return true;
+      }
+
+      final sdb = (remote['sdbInstances'] as List?) ?? const [];
+      final wc = (remote['wcInstances'] as List?) ?? const [];
+      final now = DateTime.now().toIso8601String();
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        'sdb_instances_json': jsonEncode(sdb),
+        'wc_instances_json': jsonEncode(wc),
+        'remote_updated_at': _extractRemoteUpdatedAt(remote),
+        'updated_at': now,
+        'sync_state': SyncState.synced.name,
+      };
+      if (existing.isEmpty) {
+        data['local_id'] = 'diag_${dossierId}_${_uuid()}';
+        await db.insert('diagnostic_sanitaires', data);
+      } else {
+        await db.update(
+          'diagnostic_sanitaires',
+          data,
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      }
       return true;
-    }
-
-    final sdb = (remote['sdbInstances'] as List?) ?? const [];
-    final wc = (remote['wcInstances'] as List?) ?? const [];
-    final now = DateTime.now().toIso8601String();
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      'sdb_instances_json': jsonEncode(sdb),
-      'wc_instances_json': jsonEncode(wc),
-      'updated_at': now,
-      'sync_state': SyncState.synced.name,
-    };
-    if (existing.isEmpty) {
-      data['local_id'] = 'diag_${dossierId}_${_uuid()}';
-      await db.insert('diagnostic_sanitaires', data);
-    } else {
-      await db.update(
-        'diagnostic_sanitaires',
-        data,
-        where: 'dossier_local_id = ?',
-        whereArgs: [dossierId],
-      );
-    }
-    return true;
+    });
   }
 
   Future<bool> mergeRemoteMesuresPayload(
@@ -3217,52 +3789,55 @@ class DossierRepository {
     Map<String, dynamic>? remote,
   ) async {
     final db = await _database.database;
-    final canMerge = await _canMergeRemoteChild(
-      db: db,
-      table: 'mesures_anthropometriques',
-      entityType: 'mesures_anthropometriques',
-      dossierId: dossierId,
-    );
-    if (!canMerge) return false;
+    return db.transaction((db) async {
+      final canMerge = await _canMergeRemoteChild(
+        db: db,
+        table: 'mesures_anthropometriques',
+        entityType: 'mesures_anthropometriques',
+        dossierId: dossierId,
+      );
+      if (!canMerge) return false;
 
-    final existing = await db.query(
-      'mesures_anthropometriques',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-    if (remote == null) {
-      if (existing.isEmpty) return false;
-      await db.delete(
+      final existing = await db.query(
         'mesures_anthropometriques',
         where: 'dossier_local_id = ?',
         whereArgs: [dossierId],
+        limit: 1,
       );
+      if (remote == null) {
+        if (existing.isEmpty) return false;
+        await db.delete(
+          'mesures_anthropometriques',
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+        return true;
+      }
+
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        'debout_hauteur_coude': remote['deboutHauteurCoude'],
+        'assis_hauteur_assise': remote['assisHauteurAssise'],
+        'assis_profondeur_genoux': remote['assisProfondeurGenoux'],
+        'assis_hauteur_coudes': remote['assisHauteurCoudes'],
+        'observations': remote['observations']?.toString() ?? '',
+        'remote_updated_at': _extractRemoteUpdatedAt(remote),
+        'updated_at': DateTime.now().toIso8601String(),
+        'sync_state': SyncState.synced.name,
+      };
+      if (existing.isEmpty) {
+        data['local_id'] = 'mes_remote_$dossierId';
+        await db.insert('mesures_anthropometriques', data);
+      } else {
+        await db.update(
+          'mesures_anthropometriques',
+          data,
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      }
       return true;
-    }
-
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      'debout_hauteur_coude': remote['deboutHauteurCoude'],
-      'assis_hauteur_assise': remote['assisHauteurAssise'],
-      'assis_profondeur_genoux': remote['assisProfondeurGenoux'],
-      'assis_hauteur_coudes': remote['assisHauteurCoudes'],
-      'observations': remote['observations']?.toString() ?? '',
-      'updated_at': DateTime.now().toIso8601String(),
-      'sync_state': SyncState.synced.name,
-    };
-    if (existing.isEmpty) {
-      data['local_id'] = 'mes_remote_$dossierId';
-      await db.insert('mesures_anthropometriques', data);
-    } else {
-      await db.update(
-        'mesures_anthropometriques',
-        data,
-        where: 'dossier_local_id = ?',
-        whereArgs: [dossierId],
-      );
-    }
-    return true;
+    });
   }
 
   Future<bool> mergeRemoteObservationsPayload(
@@ -3270,51 +3845,55 @@ class DossierRepository {
     Map<String, dynamic>? remote,
   ) async {
     final db = await _database.database;
-    final canMerge = await _canMergeRemoteChild(
-      db: db,
-      table: 'observations_synthese',
-      entityType: 'observations_synthese',
-      dossierId: dossierId,
-    );
-    if (!canMerge) return false;
+    return db.transaction((db) async {
+      final canMerge = await _canMergeRemoteChild(
+        db: db,
+        table: 'observations_synthese',
+        entityType: 'observations_synthese',
+        dossierId: dossierId,
+      );
+      if (!canMerge) return false;
 
-    final existing = await db.query(
-      'observations_synthese',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-    if (remote == null) {
-      if (existing.isEmpty) return false;
-      await db.delete(
+      final existing = await db.query(
         'observations_synthese',
         where: 'dossier_local_id = ?',
         whereArgs: [dossierId],
+        limit: 1,
       );
+      if (remote == null) {
+        if (existing.isEmpty) return false;
+        await db.delete(
+          'observations_synthese',
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+        return true;
+      }
+
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        'observation_equipements':
+            remote['observationEquipements']?.toString() ?? '',
+        'projet_souhait_usage': remote['projetSouhaitUsage']?.toString() ?? '',
+        'resume_preconisations':
+            remote['resumePreconisations']?.toString() ?? '',
+        'remote_updated_at': _extractRemoteUpdatedAt(remote),
+        'updated_at': DateTime.now().toIso8601String(),
+        'sync_state': SyncState.synced.name,
+      };
+      if (existing.isEmpty) {
+        data['local_id'] = 'obs_remote_$dossierId';
+        await db.insert('observations_synthese', data);
+      } else {
+        await db.update(
+          'observations_synthese',
+          data,
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      }
       return true;
-    }
-
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      'observation_equipements':
-          remote['observationEquipements']?.toString() ?? '',
-      'projet_souhait_usage': remote['projetSouhaitUsage']?.toString() ?? '',
-      'resume_preconisations': remote['resumePreconisations']?.toString() ?? '',
-      'updated_at': DateTime.now().toIso8601String(),
-      'sync_state': SyncState.synced.name,
-    };
-    if (existing.isEmpty) {
-      data['local_id'] = 'obs_remote_$dossierId';
-      await db.insert('observations_synthese', data);
-    } else {
-      await db.update(
-        'observations_synthese',
-        data,
-        where: 'dossier_local_id = ?',
-        whereArgs: [dossierId],
-      );
-    }
-    return true;
+    });
   }
 
   /// Pulls the remote visit recommendations for [dossierId] and merges
@@ -3331,62 +3910,65 @@ class DossierRepository {
     List<Map<String, dynamic>> remoteItems,
   ) async {
     final db = await _database.database;
-    final canMerge = await _canMergeRemoteChild(
-      db: db,
-      table: 'visit_recommendations',
-      entityType: 'visit_recommendations',
-      dossierId: dossierId,
-      // A draft without wikiItemId intentionally has no sync operation.
-      // It can coexist with the remote list and must not freeze the pull.
-      allowPendingWithoutOperation: true,
-    );
-    if (!canMerge) return false;
+    return db.transaction((db) async {
+      final canMerge = await _canMergeRemoteChild(
+        db: db,
+        table: 'visit_recommendations',
+        entityType: 'visit_recommendations',
+        dossierId: dossierId,
+        // A draft without wikiItemId intentionally has no sync operation.
+        // It can coexist with the remote list and must not freeze the pull.
+        allowPendingWithoutOperation: true,
+      );
+      if (!canMerge) return false;
 
-    final existing = await db.query(
-      'visit_recommendations',
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-      limit: 1,
-    );
-
-    // MERGE remote + drafts locaux (items sans wikiItemId, non pushés car
-    // le serveur les refuse). Sans ce merge, un draft en cours de saisie
-    // serait perdu au prochain refresh après le push des items complets.
-    final List<Map<String, dynamic>> localDrafts = [];
-    if (existing.isNotEmpty) {
-      final raw = existing.first['items_json'] as String? ?? '[]';
-      try {
-        final decoded = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
-        for (final item in decoded) {
-          final wikiId = (item['wikiItemId'] as String?) ?? '';
-          if (wikiId.trim().isEmpty) localDrafts.add(item);
-        }
-      } catch (_) {}
-    }
-    final merged = [...remoteItems, ...localDrafts];
-
-    final now = DateTime.now().toIso8601String();
-    final data = <String, dynamic>{
-      'dossier_local_id': dossierId,
-      'items_json': jsonEncode(merged),
-      'updated_at': now,
-      // Si on a des drafts, on garde pendingSync pour que le prochain
-      // refresh ne tente pas de les écraser. Sinon synced.
-      'sync_state': localDrafts.isEmpty
-          ? SyncState.synced.name
-          : SyncState.pendingSync.name,
-    };
-    if (existing.isEmpty) {
-      data['local_id'] = 'rec_${dossierId}_${_uuid()}';
-      await db.insert('visit_recommendations', data);
-    } else {
-      await db.update(
+      final existing = await db.query(
         'visit_recommendations',
-        data,
         where: 'dossier_local_id = ?',
         whereArgs: [dossierId],
+        limit: 1,
       );
-    }
-    return true;
+
+      // MERGE remote + drafts locaux (items sans wikiItemId, non pushés car
+      // le serveur les refuse). Sans ce merge, un draft en cours de saisie
+      // serait perdu au prochain refresh après le push des items complets.
+      final List<Map<String, dynamic>> localDrafts = [];
+      if (existing.isNotEmpty) {
+        final raw = existing.first['items_json'] as String? ?? '[]';
+        try {
+          final decoded = (jsonDecode(raw) as List)
+              .cast<Map<String, dynamic>>();
+          for (final item in decoded) {
+            final wikiId = (item['wikiItemId'] as String?) ?? '';
+            if (wikiId.trim().isEmpty) localDrafts.add(item);
+          }
+        } catch (_) {}
+      }
+      final merged = [...remoteItems, ...localDrafts];
+
+      final now = DateTime.now().toIso8601String();
+      final data = <String, dynamic>{
+        'dossier_local_id': dossierId,
+        'items_json': jsonEncode(merged),
+        'updated_at': now,
+        // Si on a des drafts, on garde pendingSync pour que le prochain
+        // refresh ne tente pas de les écraser. Sinon synced.
+        'sync_state': localDrafts.isEmpty
+            ? SyncState.synced.name
+            : SyncState.pendingSync.name,
+      };
+      if (existing.isEmpty) {
+        data['local_id'] = 'rec_${dossierId}_${_uuid()}';
+        await db.insert('visit_recommendations', data);
+      } else {
+        await db.update(
+          'visit_recommendations',
+          data,
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      }
+      return true;
+    });
   }
 }

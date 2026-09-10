@@ -4,6 +4,11 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import dotenv from 'dotenv';
+import {
+  fetchNocodbRestWithDeadline,
+  parseNocodbRestTimeoutMs,
+  shouldFallbackToRestAfterMcpError,
+} from './nocodbRequestDeadline.mjs';
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
@@ -14,9 +19,16 @@ const API_TOKEN = String(process.env.NOCODB_API_TOKEN || '').trim();
 const AUTH_TOKEN = String(process.env.NOCODB_AUTH_TOKEN || '').trim();
 const BASE_ID = String(process.env.NOCODB_BASE_ID || '').trim();
 const SHOULD_FORCE_REST = process.env.NOCODB_FORCE_REST === '1' || Boolean(process.env.VERCEL);
+// 120 s by default: bounded, while leaving room for large chunk batches.
+const REST_TIMEOUT_MS = parseNocodbRestTimeoutMs(process.env.NOCODB_REST_TIMEOUT_MS);
 
 let clientPromise;
 let transportRef;
+let conditionalSyncTables = new Set();
+
+export function configureConditionalSyncTables(tableIds) {
+  conditionalSyncTables = new Set(tableIds);
+}
 
 const parseToolPayload = (result) => {
   const textItem = result?.content?.find((item) => item.type === 'text');
@@ -136,7 +148,7 @@ const restRequest = async (method, path, { query, body, expectedStatuses = [200]
     throw new Error('REST NocoDB non configuré');
   }
 
-  const response = await fetch(buildRestUrl(path, query), {
+  const { response, text } = await fetchNocodbRestWithDeadline(buildRestUrl(path, query), {
     method,
     headers: {
       Accept: 'application/json',
@@ -144,9 +156,11 @@ const restRequest = async (method, path, { query, body, expectedStatuses = [200]
       [REST_AUTH_HEADER]: REST_AUTH_VALUE,
     },
     body: body == null ? undefined : JSON.stringify(body),
+  }, {
+    timeoutMs: REST_TIMEOUT_MS,
+    method,
+    path,
   });
-
-  const text = await response.text();
   let payload = null;
 
   if (text) {
@@ -166,6 +180,10 @@ const restRequest = async (method, path, { query, body, expectedStatuses = [200]
 
   return payload;
 };
+
+// Deliberately no MCP fallback: callers rely on an atomic REST write guard.
+export const requestConditionalNocodbRest = ({ method, path, body }) =>
+  restRequest(method, path, { body });
 
 const callRestTool = async (name, args = {}) => {
   switch (name) {
@@ -347,6 +365,16 @@ export const getMcpClient = async () => {
 };
 
 export const callNocoTool = async (name, args = {}) => {
+  if (conditionalSyncTables.has(args.tableId)) {
+    const validCreates = name === 'createRecords' && Array.isArray(args.records) &&
+      args.records.length > 0 && args.records.every(record =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(record?.fields?.app_sync_revision ?? ''));
+    if (name === 'updateRecords' || (name === 'createRecords' && !validCreates)) {
+      const error = new Error('SYNC_UNGUARDED_WRITE_FORBIDDEN');
+      error.status = 428;
+      throw error;
+    }
+  }
   if (SHOULD_FORCE_REST && canUseRestFallback(name)) {
     return callRestTool(name, args);
   }
@@ -355,8 +383,12 @@ export const callNocoTool = async (name, args = {}) => {
     return callRestTool(name, args);
   }
 
+  let mutationMayHaveBeenSent = false;
   try {
     const client = await getMcpClient();
+    // After dispatch, any error can hide a committed mutation. Do not infer
+    // replay safety from transport-specific error wording.
+    mutationMayHaveBeenSent = true;
     const result = await client.callTool({ name, arguments: args });
     return parseToolPayload(result);
   } catch (error) {
@@ -365,7 +397,14 @@ export const callNocoTool = async (name, args = {}) => {
     }
 
     await closeMcpClient().catch(() => undefined);
-    if (!isRecoverableMcpError(error)) {
+    const recoverableTransportError = isRecoverableMcpError(error);
+    if (!shouldFallbackToRestAfterMcpError({
+      name,
+      mutationMayHaveBeenSent,
+    })) {
+      throw error;
+    }
+    if (!recoverableTransportError) {
       console.warn(`[nocodb] MCP indisponible, bascule REST pour ${name}.`, error);
     }
     return callRestTool(name, args);

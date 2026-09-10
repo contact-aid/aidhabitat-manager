@@ -50,10 +50,14 @@ class AppConfig {
   }
 
   static void setAppSessionToken(String token) {
+    if (_appSessionTokenRuntime != token) sessionEpoch += 1;
     _appSessionTokenRuntime = token;
   }
 
+  static int sessionEpoch = 0;
+
   static void clearAppSessionToken() {
+    sessionEpoch += 1;
     _appSessionTokenRuntime = '';
   }
 

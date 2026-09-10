@@ -11,8 +11,33 @@ import 'package:pdfx/pdfx.dart';
 
 import '../models/types.dart';
 import '../services/app_config.dart';
+import '../services/document_content_url.dart';
+import '../services/pdf_ink_service.dart';
 import '../services/media_cache_service.dart';
 import 'brand_colors.dart';
+
+export '../services/document_content_url.dart' show documentPreviewUrl;
+
+String documentVisualCacheKey(DocItem doc) {
+  final version = doc.updatedAt.trim().isNotEmpty
+      ? doc.updatedAt.trim()
+      : doc.date.trim();
+  return [
+    doc.id,
+    doc.type,
+    version,
+    doc.localPath?.trim() ?? '',
+    doc.url?.trim() ?? '',
+    _valueFingerprint(doc.dataUrl),
+    _valueFingerprint(doc.annotationsJson),
+  ].join('|');
+}
+
+String _valueFingerprint(String? value) {
+  final v = value ?? '';
+  if (v.isEmpty) return '';
+  return '${v.length}:${v.hashCode}';
+}
 
 // =============================================================================
 // DocThumbnail — vignette polymorphe selon le type du document
@@ -36,7 +61,7 @@ class DocThumbnail extends StatefulWidget {
 }
 
 class _DocThumbnailState extends State<DocThumbnail> {
-  /// Cache des bytes décodés par `doc.id` — partagé entre toutes les
+  /// Cache des bytes décodés par version visuelle — partagé entre toutes les
   /// instances pour que la grille ne refasse pas de `base64Decode` à
   /// chaque rebuild (c'est cette ré-décoding qui faisait clignoter les
   /// vignettes : Flutter voyait un nouvel `Uint8List` à chaque frame et
@@ -44,7 +69,7 @@ class _DocThumbnailState extends State<DocThumbnail> {
   static final Map<String, Uint8List> _bytesCache = {};
 
   /// Cache partagé des aplats d'annotation (PNG bytes décodés) keyed
-  /// par `doc.id`. Invalidé quand `doc.annotationsJson` change (cf.
+  /// par version visuelle. Invalidé quand `doc.annotationsJson` change (cf.
   /// `didUpdateWidget`) pour que la vignette reflète immédiatement la
   /// dernière save.
   static final Map<String, Uint8List> _annotationOverlayCache = {};
@@ -57,9 +82,10 @@ class _DocThumbnailState extends State<DocThumbnail> {
   static Uint8List? _firstPageAnnotationBytes(DocItem doc) {
     final raw = doc.annotationsJson;
     if (raw == null || raw.isEmpty) return null;
+    final cacheKey = documentVisualCacheKey(doc);
     // Cache hit ssi le JSON brut n'a pas changé.
-    if (_annotationCacheJsonKey[doc.id] == raw) {
-      final cached = _annotationOverlayCache[doc.id];
+    if (_annotationCacheJsonKey[cacheKey] == raw) {
+      final cached = _annotationOverlayCache[cacheKey];
       if (cached != null) return cached;
     }
     try {
@@ -69,8 +95,8 @@ class _DocThumbnailState extends State<DocThumbnail> {
       if (dataUrl is! String || dataUrl.isEmpty) return null;
       final bytes = _decodeDataUrl(dataUrl);
       if (bytes == null || bytes.isEmpty) return null;
-      _annotationOverlayCache[doc.id] = bytes;
-      _annotationCacheJsonKey[doc.id] = raw;
+      _annotationOverlayCache[cacheKey] = bytes;
+      _annotationCacheJsonKey[cacheKey] = raw;
       return bytes;
     } catch (_) {
       return null;
@@ -88,24 +114,14 @@ class _DocThumbnailState extends State<DocThumbnail> {
   @override
   void didUpdateWidget(covariant DocThumbnail old) {
     super.didUpdateWidget(old);
-    if (old.doc.id != widget.doc.id ||
-        old.doc.dataUrl != widget.doc.dataUrl) {
-      // Invalidate le cache mémoire pour cet `id` quand le dataUrl a
-      // changé (cas typique : l'utilisateur vient d'annoter + sauver →
-      // `enqueueAnnotatedReuploadBytes` a écrit un nouveau data URL en
-      // SQLite). Sans ça, `_primeBytes` retournait l'ancien décodage
-      // et la vignette restait sur l'image pré-annotation.
-      if (old.doc.dataUrl != widget.doc.dataUrl) {
-        _bytesCache.remove(widget.doc.id);
-      }
+    final oldKey = documentVisualCacheKey(old.doc);
+    final newKey = documentVisualCacheKey(widget.doc);
+    if (oldKey != newKey) {
+      _bytesCache.remove(oldKey);
+      _annotationOverlayCache.remove(oldKey);
+      _annotationCacheJsonKey.remove(oldKey);
+      _evictLocalFileImage(old.doc.localPath);
       _primeBytes();
-    }
-    // Invalidate aussi le cache d'aplat d'annotation quand le JSON a
-    // changé (l'ergo vient de saver une annotation page 1) — sinon la
-    // vignette PDF restait sur l'aplat précédent (ou pas d'aplat du tout).
-    if (old.doc.annotationsJson != widget.doc.annotationsJson) {
-      _annotationOverlayCache.remove(widget.doc.id);
-      _annotationCacheJsonKey.remove(widget.doc.id);
     }
   }
 
@@ -115,14 +131,15 @@ class _DocThumbnailState extends State<DocThumbnail> {
       setState(() => _bytes = null);
       return;
     }
-    final cached = _bytesCache[widget.doc.id];
+    final cacheKey = documentVisualCacheKey(widget.doc);
+    final cached = _bytesCache[cacheKey];
     if (cached != null) {
       setState(() => _bytes = cached);
       return;
     }
     final decoded = _decodeDataUrl(dataUrl);
     if (decoded != null) {
-      _bytesCache[widget.doc.id] = decoded;
+      _bytesCache[cacheKey] = decoded;
     }
     setState(() => _bytes = decoded);
   }
@@ -130,6 +147,7 @@ class _DocThumbnailState extends State<DocThumbnail> {
   @override
   Widget build(BuildContext context) {
     final doc = widget.doc;
+    final visualKey = documentVisualCacheKey(doc);
     if (doc.type == 'image') {
       // BoxFit.contain (vs cover historique) — demande utilisateur
       // 2026-05-06 : « je n'ai pas l'image complète, une partie est
@@ -139,18 +157,18 @@ class _DocThumbnailState extends State<DocThumbnail> {
       if (_bytes != null) {
         return Image.memory(
           _bytes!,
+          key: ValueKey('image-data:$visualKey'),
           fit: BoxFit.contain,
           gaplessPlayback: true, // évite le flash blanc au rebuild
           errorBuilder: _fallback,
         );
       }
-      if (!kIsWeb &&
-          doc.localPath != null &&
-          doc.localPath!.isNotEmpty) {
+      if (!kIsWeb && doc.localPath != null && doc.localPath!.isNotEmpty) {
         final file = File(doc.localPath!);
         if (file.existsSync()) {
           return Image.file(
             file,
+            key: ValueKey('image-file:$visualKey'),
             fit: BoxFit.contain,
             gaplessPlayback: true,
             errorBuilder: _fallback,
@@ -160,7 +178,8 @@ class _DocThumbnailState extends State<DocThumbnail> {
       if (doc.url != null && doc.url!.isNotEmpty) {
         // Télécharge via MediaCacheService (cache persistant offline-first).
         return RemoteImage(
-          url: doc.url!,
+          url: documentPreviewUrl(doc),
+          cacheKey: visualKey,
           fit: BoxFit.contain,
           fallback: _iconPlaceholder(doc.type),
         );
@@ -180,6 +199,7 @@ class _DocThumbnailState extends State<DocThumbnail> {
       if (overlayBytes != null) {
         return Image.memory(
           overlayBytes,
+          key: ValueKey('pdf-overlay:$visualKey'),
           fit: BoxFit.contain,
           gaplessPlayback: true,
           errorBuilder: _fallback,
@@ -202,7 +222,7 @@ class _DocThumbnailState extends State<DocThumbnail> {
           doc.localPath != null &&
           doc.localPath!.isNotEmpty &&
           File(doc.localPath!).existsSync()) {
-        return PdfThumbnail(path: doc.localPath!);
+        return PdfThumbnail(path: doc.localPath!, cacheKey: visualKey);
       }
       // Bytes déjà en mémoire (upload web pas encore synced) : on
       // les passe directement, pas de round-trip réseau.
@@ -210,6 +230,7 @@ class _DocThumbnailState extends State<DocThumbnail> {
         final pdfBytes = _bytes!;
         return PdfThumbnailFromBytes(
           docId: doc.id,
+          cacheKey: visualKey,
           bytesProvider: () async => pdfBytes,
           fallback: _iconPlaceholder('pdf'),
         );
@@ -218,12 +239,14 @@ class _DocThumbnailState extends State<DocThumbnail> {
       // hit instantané au prochain visit).
       final url = doc.url?.trim() ?? '';
       if (url.isNotEmpty) {
+        final previewUrl = documentPreviewUrl(doc);
         return PdfThumbnailFromBytes(
           docId: doc.id,
+          cacheKey: visualKey,
           bytesProvider: () async {
             if (kIsWeb) {
               return await MediaCacheService.instance.webCachedFetch(
-                url,
+                previewUrl,
                 headers: {'X-App-Session': AppConfig.appSessionToken},
               );
             }
@@ -232,7 +255,7 @@ class _DocThumbnailState extends State<DocThumbnail> {
             // l'aperçu sur les docs téléchargés mais pas encore
             // ouverts (donc pas encore décodés en localPath).
             final file = await MediaCacheService.instance.fetch(
-              url,
+              previewUrl,
               headers: MediaCacheService.authHeaders(),
             );
             if (file == null) return null;
@@ -264,6 +287,15 @@ class _DocThumbnailState extends State<DocThumbnail> {
   Widget _fallback(BuildContext ctx, Object err, StackTrace? st) =>
       _iconPlaceholder(widget.doc.type);
 
+  static void _evictLocalFileImage(String? path) {
+    if (kIsWeb || path == null || path.trim().isEmpty) return;
+    try {
+      FileImage(File(path)).evict();
+    } catch (_) {
+      /* best-effort */
+    }
+  }
+
   Widget _iconPlaceholder(String type) {
     final IconData icon;
     final Color color;
@@ -282,9 +314,7 @@ class _DocThumbnailState extends State<DocThumbnail> {
     }
     return Container(
       color: const Color(0xFFFAFAFA),
-      child: Center(
-        child: Icon(icon, size: 56, color: color),
-      ),
+      child: Center(child: Icon(icon, size: 56, color: color)),
     );
   }
 }
@@ -297,7 +327,8 @@ class _DocThumbnailState extends State<DocThumbnail> {
 
 class PdfThumbnail extends StatefulWidget {
   final String path;
-  const PdfThumbnail({super.key, required this.path});
+  final String cacheKey;
+  const PdfThumbnail({super.key, required this.path, required this.cacheKey});
 
   @override
   State<PdfThumbnail> createState() => _PdfThumbnailState();
@@ -318,7 +349,7 @@ class _PdfThumbnailState extends State<PdfThumbnail> {
   @override
   void didUpdateWidget(covariant PdfThumbnail old) {
     super.didUpdateWidget(old);
-    if (old.path != widget.path) {
+    if (old.path != widget.path || old.cacheKey != widget.cacheKey) {
       _bytes = null;
       _failed = false;
       _load();
@@ -326,13 +357,34 @@ class _PdfThumbnailState extends State<PdfThumbnail> {
   }
 
   Future<void> _load() async {
-    final cached = _cache[widget.path];
+    final cacheKey = widget.cacheKey;
+    final cached = _cache[cacheKey];
     if (cached != null) {
       if (!mounted) return;
       setState(() => _bytes = cached);
       return;
     }
     try {
+      if (PdfInkService.instance.supported) {
+        final path = await PdfInkService.instance.render(
+          sourcePath: widget.path,
+          page: 1,
+          width: 700,
+        );
+        final file = File(path);
+        final Uint8List bytes;
+        try {
+          bytes = await file.readAsBytes();
+        } finally {
+          try {
+            await file.delete();
+          } catch (_) {}
+        }
+        if (!mounted || widget.cacheKey != cacheKey) return;
+        _cache[cacheKey] = bytes;
+        setState(() => _bytes = bytes);
+        return;
+      }
       final doc = await PdfDocument.openFile(widget.path);
       final page = await doc.getPage(1);
       final rendered = await page.render(
@@ -344,14 +396,17 @@ class _PdfThumbnailState extends State<PdfThumbnail> {
       await page.close();
       await doc.close();
       if (!mounted) return;
+      if (widget.cacheKey != cacheKey) return;
       if (rendered?.bytes != null) {
-        _cache[widget.path] = rendered!.bytes;
+        _cache[cacheKey] = rendered!.bytes;
         setState(() => _bytes = rendered.bytes);
       } else {
         setState(() => _failed = true);
       }
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (mounted && widget.cacheKey == cacheKey) {
+        setState(() => _failed = true);
+      }
     }
   }
 
@@ -418,9 +473,10 @@ class PdfThumbnailFromBytes extends StatefulWidget {
   /// Identifiant stable du document — clé du cache mémoire des PNG
   /// rendus. Doit être unique par PDF.
   final String docId;
+  final String cacheKey;
 
   /// Fournisseur asynchrone des bytes PDF. Appelé uniquement si le
-  /// PNG n'est pas déjà en cache pour [docId].
+  /// PNG n'est pas déjà en cache pour [cacheKey].
   final Future<Uint8List?> Function() bytesProvider;
 
   /// Widget affiché quand on n'a pas pu produire de preview (bytes
@@ -430,6 +486,7 @@ class PdfThumbnailFromBytes extends StatefulWidget {
   const PdfThumbnailFromBytes({
     super.key,
     required this.docId,
+    required this.cacheKey,
     required this.bytesProvider,
     required this.fallback,
   });
@@ -440,11 +497,11 @@ class PdfThumbnailFromBytes extends StatefulWidget {
 
 class _PdfThumbnailFromBytesState extends State<PdfThumbnailFromBytes> {
   /// Cache mémoire partagé entre toutes les instances : 1 PNG rendu
-  /// par docId. Évite de re-décoder le PDF à chaque rebuild de la
+  /// par version visuelle. Évite de re-décoder le PDF à chaque rebuild de la
   /// grille (scroll, sélection multiple, refresh polling, …).
   static final Map<String, Uint8List> _previewCache = {};
 
-  /// Inflight Future par docId — si plusieurs cards demandent le
+  /// Inflight Future par version visuelle — si plusieurs cards demandent le
   /// preview du même doc en même temps (scroll rapide, polling),
   /// elles partagent une seule décod/render au lieu de décoder en
   /// parallèle.
@@ -462,7 +519,7 @@ class _PdfThumbnailFromBytesState extends State<PdfThumbnailFromBytes> {
   @override
   void didUpdateWidget(covariant PdfThumbnailFromBytes old) {
     super.didUpdateWidget(old);
-    if (old.docId != widget.docId) {
+    if (old.docId != widget.docId || old.cacheKey != widget.cacheKey) {
       _png = null;
       _failed = false;
       _load();
@@ -470,8 +527,10 @@ class _PdfThumbnailFromBytesState extends State<PdfThumbnailFromBytes> {
   }
 
   Future<void> _load() async {
+    final cacheKey = widget.cacheKey;
+    final bytesProvider = widget.bytesProvider;
     // 1. Cache mémoire — instantané.
-    final cached = _previewCache[widget.docId];
+    final cached = _previewCache[cacheKey];
     if (cached != null) {
       if (!mounted) return;
       setState(() => _png = cached);
@@ -479,45 +538,55 @@ class _PdfThumbnailFromBytesState extends State<PdfThumbnailFromBytes> {
     }
 
     // 2. Inflight ? on attend l'autre instance.
-    final pending = _inflight[widget.docId];
+    final pending = _inflight[cacheKey];
     if (pending != null) {
       try {
         final png = await pending;
         if (!mounted) return;
+        if (widget.cacheKey != cacheKey) return;
         if (png != null) {
           setState(() => _png = png);
         } else {
           setState(() => _failed = true);
         }
       } catch (_) {
-        if (mounted) setState(() => _failed = true);
+        if (mounted && widget.cacheKey == cacheKey) {
+          setState(() => _failed = true);
+        }
       }
       return;
     }
 
     // 3. On lance le rendu — un seul Future en vol pour ce docId.
-    final renderFuture = _renderPreview();
-    _inflight[widget.docId] = renderFuture;
+    final renderFuture = _renderPreview(bytesProvider);
+    _inflight[cacheKey] = renderFuture;
     try {
       final png = await renderFuture;
       if (!mounted) return;
+      if (widget.cacheKey != cacheKey) return;
       if (png != null) {
-        _previewCache[widget.docId] = png;
+        _previewCache[cacheKey] = png;
         setState(() => _png = png);
       } else {
         setState(() => _failed = true);
       }
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (mounted && widget.cacheKey == cacheKey) {
+        setState(() => _failed = true);
+      }
     } finally {
-      _inflight.remove(widget.docId);
+      if (_inflight[cacheKey] == renderFuture) {
+        _inflight.remove(cacheKey);
+      }
     }
   }
 
   /// Récupère les bytes du PDF (via `bytesProvider`), ouvre le doc
   /// avec pdfx, rend la page 1 en PNG. Renvoie null si étape échoue.
-  Future<Uint8List?> _renderPreview() async {
-    final bytes = await widget.bytesProvider();
+  Future<Uint8List?> _renderPreview(
+    Future<Uint8List?> Function() bytesProvider,
+  ) async {
+    final bytes = await bytesProvider();
     if (bytes == null || bytes.isEmpty) return null;
     PdfDocument? doc;
     PdfPage? page;
@@ -578,12 +647,14 @@ class _PdfThumbnailFromBytesState extends State<PdfThumbnailFromBytes> {
 
 class RemoteImage extends StatefulWidget {
   final String url;
+  final String cacheKey;
   final BoxFit fit;
   final Widget fallback;
 
   const RemoteImage({
     super.key,
     required this.url,
+    required this.cacheKey,
     required this.fallback,
     this.fit = BoxFit.cover,
   });
@@ -609,7 +680,7 @@ class _RemoteImageState extends State<RemoteImage> {
   @override
   void didUpdateWidget(covariant RemoteImage old) {
     super.didUpdateWidget(old);
-    if (old.url != widget.url) {
+    if (old.url != widget.url || old.cacheKey != widget.cacheKey) {
       _file = null;
       _bytes = null;
       _failed = false;
@@ -618,8 +689,10 @@ class _RemoteImageState extends State<RemoteImage> {
   }
 
   Future<void> _load() async {
+    final cacheKey = '${widget.url}|${widget.cacheKey}';
+    final url = widget.url;
     // 1. Cache mémoire → instantané.
-    final cached = _memCache[widget.url];
+    final cached = _memCache[cacheKey];
     if (cached != null) {
       if (!mounted) return;
       setState(() => _bytes = cached);
@@ -630,12 +703,13 @@ class _RemoteImageState extends State<RemoteImage> {
     //    `X-App-Session` en cas de miss réseau pour les URLs privées.
     if (kIsWeb) {
       final bytes = await MediaCacheService().webCachedFetch(
-        widget.url,
+        url,
         headers: {'X-App-Session': AppConfig.appSessionToken},
       );
       if (!mounted) return;
+      if ('${widget.url}|${widget.cacheKey}' != cacheKey) return;
       if (bytes != null) {
-        _memCache[widget.url] = bytes;
+        _memCache[cacheKey] = bytes;
         setState(() => _bytes = bytes);
         return;
       }
@@ -649,10 +723,11 @@ class _RemoteImageState extends State<RemoteImage> {
     //    renvoie 401 et on perd un round-trip avant de retomber sur le
     //    fallback authentifié ci-dessous.
     final file = await MediaCacheService().fetch(
-      widget.url,
+      url,
       headers: MediaCacheService.authHeaders(),
     );
     if (!mounted) return;
+    if ('${widget.url}|${widget.cacheKey}' != cacheKey) return;
     if (file != null) {
       setState(() => _file = file);
       return;
@@ -664,27 +739,28 @@ class _RemoteImageState extends State<RemoteImage> {
     //    but est de servir l'image quand le filesystem ne peut pas être
     //    écrit (ex: quota plein) plutôt que d'afficher l'icône d'erreur.
     try {
-      final uri = _buildAuthedUri(widget.url);
+      final uri = _buildAuthedUri(url);
       if (uri == null) throw Exception('bad url');
-      final resp = await http.get(
-        uri,
-        headers: {'X-App-Session': AppConfig.appSessionToken},
-      ).timeout(const Duration(seconds: 20));
+      final resp = await http
+          .get(uri, headers: {'X-App-Session': AppConfig.appSessionToken})
+          .timeout(const Duration(seconds: 20));
       if (resp.statusCode >= 200 &&
           resp.statusCode < 300 &&
           resp.bodyBytes.isNotEmpty) {
-        _memCache[widget.url] = resp.bodyBytes;
+        _memCache[cacheKey] = resp.bodyBytes;
         if (!mounted) return;
+        if ('${widget.url}|${widget.cacheKey}' != cacheKey) return;
         setState(() => _bytes = resp.bodyBytes);
         return;
       }
       // ignore: avoid_print
-      print('[docs img] HTTP ${resp.statusCode} for ${widget.url}');
+      print('[docs img] HTTP ${resp.statusCode} for $url');
     } catch (e) {
       // ignore: avoid_print
-      print('[docs img] fetch failed for ${widget.url}: $e');
+      print('[docs img] fetch failed for $url: $e');
     }
     if (!mounted) return;
+    if ('${widget.url}|${widget.cacheKey}' != cacheKey) return;
     setState(() => _failed = true);
   }
 
@@ -705,6 +781,7 @@ class _RemoteImageState extends State<RemoteImage> {
     if (_file != null) {
       return Image.file(
         _file!,
+        key: ValueKey('remote-file:${widget.cacheKey}'),
         fit: widget.fit,
         errorBuilder: (_, _, _) => widget.fallback,
       );
@@ -712,6 +789,7 @@ class _RemoteImageState extends State<RemoteImage> {
     if (_bytes != null) {
       return Image.memory(
         _bytes!,
+        key: ValueKey('remote-bytes:${widget.cacheKey}'),
         fit: widget.fit,
         errorBuilder: (_, _, _) => widget.fallback,
       );

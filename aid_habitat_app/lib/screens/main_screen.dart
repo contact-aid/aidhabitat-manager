@@ -21,6 +21,8 @@ import '../services/data_service.dart';
 import '../services/feedback_activity_service.dart';
 import '../services/references_service.dart';
 import '../services/sync_engine.dart';
+import '../services/local_database.dart';
+import 'sync_ownership_review_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({
@@ -211,11 +213,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       await _dataService.fetchDossiers(),
       widget.currentUser,
     );
-    final pendingOperations = await _dataService.fetchPendingOperations();
+    final pendingCount = await _dataService.countPendingSyncOperations();
     if (mounted) {
       setState(() {
         _dossiers = dossiers;
-        _pendingSyncCount = pendingOperations.length;
+        _pendingSyncCount = pendingCount;
         _isLoading = false;
       });
     }
@@ -326,6 +328,20 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   /// le dialog n'affichait que la première — l'ergo perdait
   /// silencieusement les autres modifs en attente.
   Future<void> _showFailingOpDetails() async {
+    final topFailure = await _syncEngine.inspectTopFailure();
+    if (!mounted) return;
+    if (topFailure?['entityType'] == 'sync_ownership') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => SyncOwnershipReviewScreen(
+            database: LocalDatabase.instance,
+            onReviewed: _syncEngine.requestSync,
+          ),
+        ),
+      );
+      if (mounted) _handleSyncNow();
+      return;
+    }
     final failures = await _syncEngine.inspectAllFailures();
     if (!mounted) return;
     if (failures.isEmpty) {

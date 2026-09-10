@@ -13,6 +13,8 @@ import 'document_file_naming.dart';
 import 'document_repository.dart';
 import 'dossier_repository.dart';
 import 'local_database.dart';
+import 'wiki_sync_commit.dart';
+import 'visit_recommendations_wiki_remap.dart';
 import 'nocodb_api_client.dart';
 import 'report_generation_service.dart';
 import 'sync_repository.dart';
@@ -75,6 +77,7 @@ const Set<String> _kPermanent4xxMarkers = {
 /// appliquent exactement la même classification. La suite de tests
 /// `test/services/sync_errors_test.dart` verrouille ce contrat.
 bool isTransientErrorLike(Object error) {
+  if (error is TransientRemoteException) return true;
   if (error is TimeoutException) return true;
   if (error is SocketException) return true;
   if (error is HandshakeException) return true;
@@ -136,11 +139,16 @@ class NocodbSyncService {
   NocodbSyncService({
     NocodbApiClient? apiClient,
     SyncRepository? syncRepository,
+    LocalDatabase? database,
   }) : _apiClient = apiClient ?? NocodbApiClient(),
-       _syncRepository = syncRepository ?? SyncRepository();
+       _database = database ?? LocalDatabase.instance,
+       _syncRepository = syncRepository ?? SyncRepository(database: database);
 
   final NocodbApiClient _apiClient;
+  final LocalDatabase _database;
   final SyncRepository _syncRepository;
+  static Future<SyncRunResult>? _pushInFlight;
+  static int? _pushEpoch;
 
   /// Maximum number of entities processed in parallel. Operations on the
   /// same entity (same entity_type + entity_local_id) always run sequentially
@@ -161,7 +169,7 @@ class NocodbSyncService {
     required String idColumn,
     required String idValue,
   }) async {
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     final rows = await db.query(
       table,
       columns: ['remote_updated_at'],
@@ -176,7 +184,32 @@ class NocodbSyncService {
     return s.isEmpty ? null : s;
   }
 
-  Future<SyncRunResult> pushPendingChanges() async {
+  // DataService and SyncEngine own separate service instances but share SQLite.
+  // A manual push must join the active drain, not start a second set of workers.
+  Future<SyncRunResult> pushPendingChanges() {
+    final active = _pushInFlight;
+    if (active != null) {
+      if (_pushEpoch == AppConfig.sessionEpoch) return active;
+      return active.then((_) => pushPendingChanges());
+    }
+    late final Future<SyncRunResult> run;
+    final session = SyncSessionScope();
+    _pushEpoch = session.epoch;
+    run = session.run(_pushPendingChanges).whenComplete(() {
+      if (identical(_pushInFlight, run)) _pushInFlight = null;
+    });
+    _pushInFlight = run;
+    return run;
+  }
+
+  Future<SyncRunResult> _pushPendingChanges() async {
+    if (ConnectivityService().isOffline) {
+      return SyncRunResult(
+        pushedOperations: 0,
+        failedOperations: 0,
+        message: 'Hors ligne — modifications conservees en attente',
+      );
+    }
     // Auto-guérison : réhabilite toute opération précédemment marquée
     // `failed` dont l'erreur ressemble à un 5xx / timeout / déconnexion,
     // pour qu'elle soit retentée silencieusement à ce cycle. Évite que
@@ -202,12 +235,19 @@ class NocodbSyncService {
       // empêcher la suite du cycle.
     }
 
-    final operations = await _syncRepository.fetchRunnableOperations();
+    final existingConflicts = await _syncRepository
+        .countConflictingOperations();
+    final operations = await _syncRepository.fetchRunnableOperations(
+      includePayloads: false,
+    );
     if (operations.isEmpty) {
-      return const SyncRunResult(
+      return SyncRunResult(
         pushedOperations: 0,
         failedOperations: 0,
-        message: 'Aucune opération à synchroniser',
+        conflictCount: existingConflicts,
+        message: existingConflicts > 0
+            ? 'Synchronisation : $existingConflicts conflit(s) a resoudre'
+            : 'Aucune opération à synchroniser',
       );
     }
 
@@ -276,7 +316,7 @@ class NocodbSyncService {
     final queue = List<List<SyncOperation>>.from(groupList);
     final results = <_GroupResult>[];
     Future<void> worker() async {
-      while (queue.isNotEmpty) {
+      while (queue.isNotEmpty && SyncSessionScope.current!.isCurrent) {
         final group = queue.removeAt(0);
         final r = await _processGroup(group);
         results.add(r);
@@ -298,18 +338,15 @@ class NocodbSyncService {
     var pushed = 0;
     var failed = 0;
     var deferred = 0;
+    var conflicts = existingConflicts;
     final failures = <String>[];
     for (final r in results) {
       pushed += r.pushed;
       failed += r.failed;
       deferred += r.deferred;
+      conflicts += r.conflicts;
       failures.addAll(r.failures);
     }
-    // Le compteur `conflicts` était déjà toujours 0 dans l'ancien
-    // for-loop (les conflits sont auto-résolus et comptés comme
-    // `pushed`). On le garde à 0 pour préserver la sémantique
-    // observée par les callers + le banner UI.
-    const conflicts = 0;
 
     final message = (failed == 0 && conflicts == 0)
         ? deferred > 0
@@ -330,28 +367,78 @@ class NocodbSyncService {
   }
 
   Future<_GroupResult> _processGroup(List<SyncOperation> group) async {
+    var conflicts = 0;
     var pushed = 0;
     var failed = 0;
     var deferred = 0;
     final failures = <String>[];
 
-    for (final operation in group) {
-      await _syncRepository.markRunning(operation.id);
+    for (final snapshot in group) {
+      if (SyncSessionScope.current?.isCurrent == false) break;
+      SyncOperation? operation;
       try {
-        await _processOperation(operation);
-        await _syncRepository.markCompleted(
+        operation = await _syncRepository.loadRunnablePayload(snapshot);
+        if (operation == null ||
+            !await _syncRepository.tryMarkRunning(operation)) {
+          deferred += 1;
+          break;
+        }
+      } catch (_) {
+        // Keep unreadable bytes untouched and isolate this entity from peers.
+        if (SyncSessionScope.current?.isCurrent != false &&
+            await _syncRepository.markPreparationFailure(snapshot)) {
+          failed += 1;
+          failures.add('Sauvegarde locale à vérifier');
+        } else {
+          deferred += 1;
+        }
+        break;
+      }
+      try {
+        SyncSessionScope.current?.check();
+        final bool acknowledged;
+        if (operation.entityType == 'wiki_item') {
+          acknowledged = await _processWikiItemOperation(
+            operation,
+            jsonDecode(operation.payloadJson) as Map<String, dynamic>,
+          );
+        } else {
+          await _processOperation(operation);
+          SyncSessionScope.current?.check();
+          final ownsChildVersion = const {
+            'mesures_anthropometriques',
+            'observations_synthese',
+            'diagnostic_sanitaires',
+          }.contains(operation.entityType);
+          acknowledged = ownsChildVersion
+              ? await _syncRepository.markCompletedForPayload(operation)
+              : await _syncRepository.markCompleted(
+                  operationId: operation.id,
+                  entityType: operation.entityType,
+                  entityLocalId: operation.entityLocalId,
+                );
+        }
+        if (acknowledged) {
+          pushed += 1;
+        } else {
+          deferred += 1;
+          break;
+        }
+      } on ConflictException catch (e) {
+        final retained = await _syncRepository.markConflict(
           operationId: operation.id,
           entityType: operation.entityType,
           entityLocalId: operation.entityLocalId,
+          error: e.message,
+          expectedPayloadJson: operation.payloadJson,
+          remoteData: e.remoteData,
         );
-        pushed += 1;
-      } on ConflictException catch (e) {
-        // Auto-résolution « local wins » (cf. commentaire identique
-        // dans le for-loop principal). On résout puis on continue à
-        // pousser les ops suivantes du groupe — utile si l'op
-        // suivante est sur un champ différent qui ne conflictera pas.
-        await _autoResolveConflictForceLocal(operation, e);
-        pushed += 1;
+        if (retained) {
+          conflicts += 1;
+        } else {
+          deferred += 1;
+        }
+        break;
       } on TransientRemoteException catch (e) {
         // ignore: avoid_print
         print(
@@ -423,128 +510,40 @@ class NocodbSyncService {
       pushed: pushed,
       failed: failed,
       deferred: deferred,
+      conflicts: conflicts,
       failures: failures,
     );
   }
 
-  /// Résout automatiquement un conflit 409 en faisant gagner la
-  /// version LOCALE (last-write-wins). Étapes :
-  ///
-  ///   1. Re-process l'op avec `forceWrite=true` → le PATCH est rejoué
-  ///      SANS `expectedUpdatedAt`, donc le serveur accepte la modif
-  ///      locale au lieu de la rejeter en 409.
-  ///   2. Si le retry réussit → modifs préservées, op marquée completed.
-  ///   3. Si le retry échoue (vraie erreur réseau / 5xx / 4xx définitif)
-  ///      → l'op repasse en `failed` pour retry au cycle suivant.
-  ///
-  /// Refonte 2026-05-12 — avant cette méthode prenait la version
-  /// remote en abandonnant les modifs locales, ce qui causait :
-  /// « changement de situation familiale pas pris en compte lors de
-  /// la génération PDF ». Désormais on préserve toujours le local
-  /// (l'ergo est solo dev sur 2 devices, le conflit "vraiment
-  /// concurrent" est extrêmement rare).
-  Future<void> _autoResolveConflictForceLocal(
-    SyncOperation operation,
-    ConflictException exception,
+  Future<String?> _expectedVersion(
+    Map<String, dynamic> payload,
+    Future<String?> Function() legacyVersion,
   ) async {
-    // ignore: avoid_print
-    print(
-      '[sync] conflict ${operation.entityType}:'
-      '${operation.entityLocalId} → retry force-local (op="${operation.id}", '
-      'err="${exception.message}")',
-    );
-    try {
-      await _processOperation(operation, forceWrite: true);
-      // Retry réussi → modifs locales préservées.
-      await _syncRepository.markCompleted(
-        operationId: operation.id,
-        entityType: operation.entityType,
-        entityLocalId: operation.entityLocalId,
-      );
-      // ignore: avoid_print
-      print(
-        '[sync] conflict resolved force-local ${operation.entityType}:'
-        '${operation.entityLocalId} → push OK',
-      );
-    } catch (retryError) {
-      // ignore: avoid_print
-      print(
-        '[sync] retry force-local ÉCHEC ${operation.entityType}:'
-        '${operation.entityLocalId} err=$retryError',
-      );
-      // Refonte 2026-05-16 (audit P0 #1) : on NE doit JAMAIS marquer
-      // une op `synced` quand son retry a échoué — les modifs locales
-      // restent en cache local mais le serveur ne les a JAMAIS reçues.
-      // L'ancien comportement « take remote en dernier recours » faisait
-      // silencieusement perdre la saisie de l'ergo (cas typique : timeout
-      // réseau pendant le retry force-local après un 409 — la donnée
-      // locale est correcte, le serveur attend simplement un retry).
-      //
-      // Désormais : on classe l'erreur comme transitoire ou permanente
-      // et on marque l'op en conséquence. Le cycle de sync suivant
-      // re-tentera (via `rehabilitateTransientFailures` si transient,
-      // via action utilisateur explicite si permanent).
-      if (isTransientErrorLike(retryError)) {
-        await _syncRepository.markTransientFailure(
-          operationId: operation.id,
-          entityType: operation.entityType,
-          entityLocalId: operation.entityLocalId,
-          error: 'Retry force-local échoué (transient) : $retryError',
-        );
-      } else {
-        await _syncRepository.markFailed(
-          operationId: operation.id,
-          entityType: operation.entityType,
-          entityLocalId: operation.entityLocalId,
-          error: 'Retry force-local échoué : $retryError',
-        );
-      }
+    final guard = payload['concurrency'];
+    if (guard == null) return legacyVersion();
+    if (guard is! Map || guard['version'] != 1) {
+      throw StateError('Unsupported queued mutation version');
     }
+    final expected = guard['expectedUpdatedAt'];
+    if (expected is! String || DateTime.tryParse(expected) == null) {
+      throw ConflictException('La version de reference doit etre verifiee.');
+    }
+    return expected;
   }
 
-  /// Callback optionnel câblé par `DataService` au boot pour que ce
-  /// service puisse déclencher un pull workspace après une
-  /// auto-résolution de conflit, SANS importer DataService directement
-  /// (ce qui créerait un cycle d'imports). Cf. `DataService.initialize`.
-  Future<void> Function()? onConflictAutoResolved;
-
-  /// Traite une `sync_operation`.
-  ///
-  /// [forceWrite] (par défaut `false`) : si `true`, court-circuite
-  /// l'optimistic locking (`expectedUpdatedAt`) côté push pour faire
-  /// gagner la version locale en cas de conflit 409 antérieur. Utilisé
-  /// par `_autoResolveConflictForceLocal` qui réinjecte une op après
-  /// un 409 — sans ce flag, le retry retomberait sur le même 409 et
-  /// on perdrait définitivement les modifs locales (rapporté
-  /// 2026-05-12 : « changement de situation familiale pas pris en
-  /// compte lors de la génération PDF »).
-  Future<void> _processOperation(
-    SyncOperation operation, {
-    bool forceWrite = false,
-  }) async {
+  /// Dispatches a queued mutation without bypassing its version guard.
+  Future<void> _processOperation(SyncOperation operation) async {
     final payload = jsonDecode(operation.payloadJson) as Map<String, dynamic>;
 
     switch (operation.entityType) {
       case 'dossier':
-        await _processDossierOperation(
-          operation,
-          payload,
-          forceWrite: forceWrite,
-        );
+        await _processDossierOperation(operation, payload);
         return;
       case 'patient':
-        await _processPatientOperation(
-          operation,
-          payload,
-          forceWrite: forceWrite,
-        );
+        await _processPatientOperation(operation, payload);
         return;
       case 'housing':
-        await _processHousingOperation(
-          operation,
-          payload,
-          forceWrite: forceWrite,
-        );
+        await _processHousingOperation(operation, payload);
         return;
       case 'document':
         await _processDocumentOperation(operation, payload);
@@ -553,28 +552,16 @@ class NocodbSyncService {
         await _processNotePageOperation(operation, payload);
         return;
       case 'contexte_de_vie':
-        await _processContexteDeVieOperation(
-          operation,
-          payload,
-          forceWrite: forceWrite,
-        );
+        await _processContexteDeVieOperation(operation, payload);
         return;
       case 'diagnostic_sanitaires':
         await _processDiagnosticSanitairesOperation(operation, payload);
         return;
       case 'mesures_anthropometriques':
-        await _processMesuresOperation(
-          operation,
-          payload,
-          forceWrite: forceWrite,
-        );
+        await _processMesuresOperation(operation, payload);
         return;
       case 'observations_synthese':
-        await _processObservationsOperation(
-          operation,
-          payload,
-          forceWrite: forceWrite,
-        );
+        await _processObservationsOperation(operation, payload);
         return;
       case 'visit_recommendations':
         await _processVisitRecommendationsOperation(operation, payload);
@@ -782,9 +769,8 @@ class NocodbSyncService {
   /// and writes them into the NocoDB context table.
   Future<void> _processContexteDeVieOperation(
     SyncOperation operation,
-    Map<String, dynamic> payload, {
-    bool forceWrite = false,
-  }) async {
+    Map<String, dynamic> payload,
+  ) async {
     if (operation.operationType != 'update') {
       throw Exception(
         'Opération contexte de vie non supportée: ${operation.operationType}',
@@ -799,48 +785,30 @@ class NocodbSyncService {
     // localement. Le serveur (sendConflictIfStale) renvoie 409 si la
     // ligne a été modifiée depuis — l'op est alors marquée `conflict`
     // et l'écran de résolution est proposé à l'utilisateur.
-    // Skip si `forceWrite=true` (retry après 409, cf. _processOperation).
-    final expected = forceWrite
-        ? null
-        : await _readRemoteUpdatedAt(
-            table: 'dossiers',
-            idColumn: 'local_id',
-            idValue: dossierId,
-          );
+    final expected = await _expectedVersion(
+      payload,
+      () => _readRemoteUpdatedAt(
+        table: 'dossiers',
+        idColumn: 'local_id',
+        idValue: dossierId,
+      ),
+    );
     final updatesWithGuard = <String, dynamic>{
       ...updates,
       if (expected != null) 'expectedUpdatedAt': expected,
+      if (payload['concurrency'] is Map) 'concurrency': payload['concurrency'],
     };
     // ignore: avoid_print
     print(
       '[sync] PATCH /api/dossiers/$dossierId (contexte) '
       'keys=${updates.keys.toList()} '
-      'expectedUpdatedAt=${expected ?? (forceWrite ? "skipped (force)" : "null")}',
+      'expectedUpdatedAt=${expected ?? "null"}',
     );
     final newUpdatedAt = await _apiClient.updateDossier(
       dossierId: dossierId,
       updates: updatesWithGuard,
     );
-    // Mark the local contexte_de_vie row as synced.
-    final db = await LocalDatabase.instance.database;
-    await db.update(
-      'contexte_de_vie',
-      {'sync_state': SyncState.synced.name},
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-    );
-    // Fix 2026-05-13 : on persiste aussi le nouveau `remote_updated_at`
-    // sur la table `dossiers` (la garde optimiste lit ce champ via
-    // `_readRemoteUpdatedAt`). Sans ça, une 2ème édition consécutive
-    // du contexte renvoyait l'ancien `expectedUpdatedAt` → 409 garanti.
-    if (newUpdatedAt != null) {
-      await db.update(
-        'dossiers',
-        {'remote_updated_at': newUpdatedAt},
-        where: 'local_id = ?',
-        whereArgs: [dossierId],
-      );
-    }
+    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
   }
 
   /// Push des mesures anthropométriques via `PUT /api/mesures/:dossierId`.
@@ -849,17 +817,13 @@ class NocodbSyncService {
   /// `upsertMesures` n'enqueueait pas de sync_op.
   Future<void> _processMesuresOperation(
     SyncOperation operation,
-    Map<String, dynamic> payload, {
-    // ignore: unused_element_parameter
-    bool forceWrite = false,
-  }) async {
+    Map<String, dynamic> payload,
+  ) async {
     if (operation.operationType != 'update') {
       throw Exception(
         'Opération mesures non supportée: ${operation.operationType}',
       );
     }
-    // Note : pas d'`expectedUpdatedAt` sur PUT /api/mesures (replace
-    // complet, pas PATCH partiel), donc forceWrite est ignoré ici.
     final dossierId = payload['dossierId']?.toString();
     final updates = (payload['updates'] as Map?)?.cast<String, dynamic>();
     if (dossierId == null || dossierId.isEmpty || updates == null) {
@@ -870,14 +834,15 @@ class NocodbSyncService {
       '[sync] PUT /api/mesures/$dossierId '
       'keys=${updates.keys.toList()}',
     );
-    await _apiClient.updateMesures(dossierId: dossierId, updates: updates);
-    final db = await LocalDatabase.instance.database;
-    await db.update(
-      'mesures_anthropometriques',
-      {'sync_state': SyncState.synced.name},
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
+    final expected = await _expectedVersion(payload, () async => null);
+    final remoteId = await _resolveChildDossierId(dossierId);
+    final newUpdatedAt = await _apiClient.updateMesures(
+      dossierId: remoteId,
+      updates: updates,
+      expectedUpdatedAt: expected,
+      concurrency: (payload['concurrency'] as Map?)?.cast<String, dynamic>(),
     );
+    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
   }
 
   /// Push des observations de synthèse via
@@ -886,17 +851,13 @@ class NocodbSyncService {
   /// préconisations », « Observation sur les équipements »).
   Future<void> _processObservationsOperation(
     SyncOperation operation,
-    Map<String, dynamic> payload, {
-    // ignore: unused_element_parameter
-    bool forceWrite = false,
-  }) async {
+    Map<String, dynamic> payload,
+  ) async {
     if (operation.operationType != 'update') {
       throw Exception(
         'Opération observations non supportée: ${operation.operationType}',
       );
     }
-    // Note : pas d'`expectedUpdatedAt` sur PUT /api/observations
-    // (replace complet), donc forceWrite est ignoré ici.
     final dossierId = payload['dossierId']?.toString();
     final updates = (payload['updates'] as Map?)?.cast<String, dynamic>();
     if (dossierId == null || dossierId.isEmpty || updates == null) {
@@ -907,14 +868,15 @@ class NocodbSyncService {
       '[sync] PUT /api/observations/$dossierId '
       'keys=${updates.keys.toList()}',
     );
-    await _apiClient.updateObservations(dossierId: dossierId, updates: updates);
-    final db = await LocalDatabase.instance.database;
-    await db.update(
-      'observations_synthese',
-      {'sync_state': SyncState.synced.name},
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
+    final expected = await _expectedVersion(payload, () async => null);
+    final remoteId = await _resolveChildDossierId(dossierId);
+    final newUpdatedAt = await _apiClient.updateObservations(
+      dossierId: remoteId,
+      updates: updates,
+      expectedUpdatedAt: expected,
+      concurrency: (payload['concurrency'] as Map?)?.cast<String, dynamic>(),
     );
+    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
   }
 
   /// Pushes a Diagnostic sanitaires update (salle de bain + WC instances)
@@ -932,14 +894,17 @@ class NocodbSyncService {
     if (dossierId == null || dossierId.isEmpty) {
       throw Exception('Payload diagnostic sanitaires incomplet');
     }
+    final updates = payload['updates'] is Map
+        ? (payload['updates'] as Map).cast<String, dynamic>()
+        : payload;
     final sdb =
-        (payload['sdbInstances'] as List?)
+        (updates['sdbInstances'] as List?)
             ?.whereType<Map>()
             .map((e) => e.cast<String, dynamic>())
             .toList() ??
         const <Map<String, dynamic>>[];
     final wc =
-        (payload['wcInstances'] as List?)
+        (updates['wcInstances'] as List?)
             ?.whereType<Map>()
             .map((e) => e.cast<String, dynamic>())
             .toList() ??
@@ -949,18 +914,27 @@ class NocodbSyncService {
       '[sync] PUT /api/diagnostic-sanitaires/$dossierId '
       'sdb=${sdb.length} wc=${wc.length}',
     );
-    await _apiClient.updateDiagnosticSanitaires(
-      dossierId: dossierId,
+    final expected = await _expectedVersion(payload, () async => null);
+    final remoteId = await _resolveChildDossierId(dossierId);
+    final newUpdatedAt = await _apiClient.updateDiagnosticSanitaires(
+      dossierId: remoteId,
       sdbInstances: sdb,
       wcInstances: wc,
+      expectedUpdatedAt: expected,
+      concurrency: (payload['concurrency'] as Map?)?.cast<String, dynamic>(),
     );
-    final db = await LocalDatabase.instance.database;
-    await db.update(
-      'diagnostic_sanitaires',
-      {'sync_state': SyncState.synced.name},
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-    );
+    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
+  }
+
+  Future<String> _resolveChildDossierId(String dossierId) async {
+    final remoteId = await _syncRepository.resolveRemoteDossierId(dossierId);
+    if (remoteId != null) return remoteId;
+    if (dossierId.startsWith('local_')) {
+      throw TransientRemoteException(
+        'Le dossier doit etre synchronise en premier.',
+      );
+    }
+    return dossierId;
   }
 
   /// Pushes the visit recommendations list (wiki-linked items + notes) via
@@ -993,13 +967,6 @@ class NocodbSyncService {
       dossierId: dossierId,
       items: items,
     );
-    final db = await LocalDatabase.instance.database;
-    await db.update(
-      'visit_recommendations',
-      {'sync_state': SyncState.synced.name},
-      where: 'dossier_local_id = ?',
-      whereArgs: [dossierId],
-    );
   }
 
   /// Pushes a patient update (beneficiary) to NocoDB via the Express API.
@@ -1010,9 +977,8 @@ class NocodbSyncService {
   /// via linked records.
   Future<void> _processPatientOperation(
     SyncOperation operation,
-    Map<String, dynamic> payload, {
-    bool forceWrite = false,
-  }) async {
+    Map<String, dynamic> payload,
+  ) async {
     if (operation.operationType != 'update') {
       throw Exception(
         'Opération patient non supportée: ${operation.operationType}',
@@ -1025,55 +991,38 @@ class NocodbSyncService {
     }
     final remoteId = await _resolveRemotePatientId(localId) ?? localId;
     // Optimistic concurrency (cf. _processContexteDeVieOperation).
-    // Skip `expectedUpdatedAt` quand `forceWrite=true` : le retry après
-    // un 409 ne doit pas retomber sur le même conflit, last-write-wins.
-    final expected = forceWrite
-        ? null
-        : await _readRemoteUpdatedAt(
-            table: 'patients',
-            idColumn: 'local_id',
-            idValue: localId,
-          );
+    final expected = await _expectedVersion(
+      payload,
+      () => _readRemoteUpdatedAt(
+        table: 'patients',
+        idColumn: 'local_id',
+        idValue: localId,
+      ),
+    );
     final updatesWithGuard = <String, dynamic>{
       ...updates,
       if (expected != null) 'expectedUpdatedAt': expected,
+      if (payload['concurrency'] is Map) 'concurrency': payload['concurrency'],
     };
     // ignore: avoid_print
     print(
       '[sync] PATCH /api/beneficiaires/$remoteId '
       'updates=${updates.keys.toList()} '
-      'expectedUpdatedAt=${expected ?? (forceWrite ? "skipped (force)" : "null")}',
+      'expectedUpdatedAt=${expected ?? "null"}',
     );
     final newUpdatedAt = await _apiClient.updateBeneficiary(
       patientId: remoteId,
       updates: updatesWithGuard,
     );
-    // Mark as synced locally once the push succeeds.
-    // Fix 2026-05-13 : on persiste aussi le nouveau `remote_updated_at`
-    // renvoyé par le serveur. Sans ça, une seconde édition consécutive
-    // (avant le prochain pull) renvoie l'ancien `expectedUpdatedAt` →
-    // 409 garanti → retry force-local bruyant. Si le serveur ne renvoie
-    // pas le champ (ancien déploiement), on laisse `remote_updated_at`
-    // tel quel — le prochain pull le mettra à jour.
-    final db = await LocalDatabase.instance.database;
-    await db.update(
-      'patients',
-      {
-        'sync_state': SyncState.synced.name,
-        if (newUpdatedAt != null) 'remote_updated_at': newUpdatedAt,
-      },
-      where: 'local_id = ?',
-      whereArgs: [localId],
-    );
+    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
   }
 
   /// Pushes a housing update to NocoDB. The housing row is resolved to a
   /// beneficiary remote ID by joining `dossiers` and `patients`.
   Future<void> _processHousingOperation(
     SyncOperation operation,
-    Map<String, dynamic> payload, {
-    bool forceWrite = false,
-  }) async {
+    Map<String, dynamic> payload,
+  ) async {
     if (operation.operationType != 'update') {
       throw Exception(
         'Opération housing non supportée: ${operation.operationType}',
@@ -1090,8 +1039,7 @@ class NocodbSyncService {
     // Optimistic concurrency : on s'appuie sur la `housing_local_id`
     // référencée par le dossier pour récupérer le timestamp serveur du
     // logement (le `local_id` du logement est `housing_<dossierId>`).
-    // Skip si `forceWrite=true` (cf. _processPatientOperation).
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     final dRows = await db.query(
       'dossiers',
       columns: ['housing_local_id'],
@@ -1102,47 +1050,36 @@ class NocodbSyncService {
     final housingLocalId = dRows.isEmpty
         ? null
         : dRows.first['housing_local_id'] as String?;
-    final expected = (forceWrite || housingLocalId == null)
-        ? null
-        : await _readRemoteUpdatedAt(
-            table: 'housings',
-            idColumn: 'local_id',
-            idValue: housingLocalId,
-          );
+    final expected = await _expectedVersion(
+      payload,
+      () async => housingLocalId == null
+          ? null
+          : await _readRemoteUpdatedAt(
+              table: 'housings',
+              idColumn: 'local_id',
+              idValue: housingLocalId,
+            ),
+    );
     final updatesWithGuard = <String, dynamic>{
       ...updates,
       if (expected != null) 'expectedUpdatedAt': expected,
+      if (payload['concurrency'] is Map) 'concurrency': payload['concurrency'],
     };
     // ignore: avoid_print
     print(
       '[sync] PATCH /api/logements/by-beneficiary/$remoteId '
       'updates=${updates.keys.toList()} '
-      'expectedUpdatedAt=${expected ?? (forceWrite ? "skipped (force)" : "null")}',
+      'expectedUpdatedAt=${expected ?? "null"}',
     );
     final newUpdatedAt = await _apiClient.updateLogement(
       beneficiaryId: remoteId,
       updates: updatesWithGuard,
     );
-    if (housingLocalId != null) {
-      // Fix 2026-05-13 : on persiste aussi le nouveau `remote_updated_at`
-      // renvoyé par le serveur. Sans ça, le 2e save consécutif (avant
-      // le prochain pull) renvoie l'ancien `expectedUpdatedAt` → 409
-      // garanti → retry force-local bruyant à chaque save. Cf. fix
-      // identique dans _processPatientOperation et _processContexteDeVie.
-      await db.update(
-        'housings',
-        {
-          'sync_state': SyncState.synced.name,
-          if (newUpdatedAt != null) 'remote_updated_at': newUpdatedAt,
-        },
-        where: 'local_id = ?',
-        whereArgs: [housingLocalId],
-      );
-    }
+    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
   }
 
   Future<String?> _resolveRemotePatientId(String localId) async {
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     final rows = await db.query(
       'patients',
       columns: ['remote_patient_id'],
@@ -1159,7 +1096,7 @@ class NocodbSyncService {
   Future<String?> _resolveRemoteBeneficiaryIdFromDossier(
     String dossierLocalId,
   ) async {
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     final rows = await db.rawQuery(
       '''
       SELECT p.remote_patient_id
@@ -1178,10 +1115,8 @@ class NocodbSyncService {
 
   Future<void> _processDossierOperation(
     SyncOperation operation,
-    Map<String, dynamic> payload, {
-    // ignore: unused_element_parameter
-    bool forceWrite = false,
-  }) async {
+    Map<String, dynamic> payload,
+  ) async {
     if (operation.operationType == 'create') {
       final firstName = payload['firstName']?.toString() ?? '';
       final lastName = payload['lastName']?.toString() ?? '';
@@ -1261,14 +1196,20 @@ class NocodbSyncService {
       // Store the remote IDs locally so future updates reference them.
       final remotePatientId = result['id']?.toString();
       final remoteDossierId = result['dossierId']?.toString();
-      if (remotePatientId != null && remotePatientId.isNotEmpty) {
-        await _syncRepository.storeRemoteIds(
-          patientLocalId: patientLocalId,
-          remotePatientId: remotePatientId,
-          dossierLocalId: dossierLocalId,
-          remoteDossierId: remoteDossierId,
+      if (remotePatientId == null ||
+          remotePatientId.trim().isEmpty ||
+          remoteDossierId == null ||
+          remoteDossierId.trim().isEmpty) {
+        throw TransientRemoteException(
+          'Creation response missing remote identities',
         );
       }
+      await _syncRepository.storeRemoteIds(
+        patientLocalId: patientLocalId,
+        remotePatientId: remotePatientId,
+        dossierLocalId: dossierLocalId,
+        remoteDossierId: remoteDossierId,
+      );
       return;
     }
 
@@ -1299,22 +1240,18 @@ class NocodbSyncService {
       }
       final newUpdatedAt = await _apiClient.updateDossier(
         dossierId: urlDossierId,
-        updates: updates,
+        updates: {
+          ...updates,
+          if (payload.containsKey('concurrency'))
+            'expectedUpdatedAt': await _expectedVersion(
+              payload,
+              () async => null,
+            ),
+          if (payload['concurrency'] is Map)
+            'concurrency': payload['concurrency'],
+        },
       );
-      // Fix 2026-05-13 : on persiste le nouveau `remote_updated_at` du
-      // dossier (idem _processContexteDeVieOperation / _processPatientOp).
-      // Évite qu'une PATCH contexte consécutive ne tape un 409 fictif
-      // parce que cette opération métadonnées vient de bump l'updatedAt
-      // serveur sans que le cache local le sache.
-      if (newUpdatedAt != null) {
-        final db = await LocalDatabase.instance.database;
-        await db.update(
-          'dossiers',
-          {'remote_updated_at': newUpdatedAt},
-          where: 'local_id = ?',
-          whereArgs: [dossierId],
-        );
-      }
+      await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
       return;
     }
 
@@ -1412,6 +1349,7 @@ class NocodbSyncService {
     );
 
     await _syncRepository.storeDocumentRemoteData(
+      operationId: operation.id,
       documentLocalId: operation.entityLocalId,
       remotePath: uploaded['remotePath']?.toString() ?? '',
       publicUrl: uploaded['publicUrl']?.toString() ?? '',
@@ -1430,7 +1368,7 @@ class NocodbSyncService {
     final tags =
         (payload['tags'] as List?)?.map((tag) => '$tag').toList() ?? [];
 
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     final uploadRows = await db.query(
       'sync_operations',
       columns: const ['id'],
@@ -1556,7 +1494,7 @@ class NocodbSyncService {
   /// purgatoire local.
   Future<void> _purgeLocalDocument(String localId) async {
     if (localId.isEmpty) return;
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     await db.delete('documents', where: 'local_id = ?', whereArgs: [localId]);
   }
 
@@ -1565,11 +1503,11 @@ class NocodbSyncService {
   /// returns, we swap the local id for the server-assigned one so future
   /// edits go through `update` instead of `create`. The pending image data
   /// URL column is cleared on success so it's not re-uploaded.
-  Future<void> _processWikiItemOperation(
+  Future<bool> _processWikiItemOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     final imageDataUrl = payload['imageDataUrl']?.toString() ?? '';
 
     if (operation.operationType == 'create') {
@@ -1579,7 +1517,6 @@ class NocodbSyncService {
       final tags =
           (payload['tags'] as List?)?.map((t) => t.toString()).toList() ??
           const <String>[];
-      final localId = operation.entityLocalId;
 
       if (title.isEmpty) throw Exception('Titre wiki obligatoire');
 
@@ -1591,25 +1528,14 @@ class NocodbSyncService {
         imageUrl: payload['imageUrl']?.toString() ?? '',
         imageDataUrl: imageDataUrl,
       );
-      // Replace the local draft row (id = localId) with the remote one.
-      await db.transaction((txn) async {
-        await txn.delete('wiki_items', where: 'id = ?', whereArgs: [localId]);
-        final now = DateTime.now().toIso8601String();
-        await txn.insert('wiki_items', {
-          'id': saved.id,
-          'title': saved.title,
-          'description': saved.description,
-          'image_url': saved.imageUrl,
-          'tags_json': jsonEncode(saved.tags),
-          'category': saved.category,
-          'created_at': saved.createdAt,
-          'updated_at': saved.updatedAt,
-          'last_synced_at': now,
-          'pending_image_data_url': null,
-          'sync_state': SyncState.synced.name,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-      });
-      return;
+      SyncSessionScope.current?.check();
+      return commitWikiSyncResponse(
+        database: db,
+        operation: operation,
+        saved: saved,
+        remapReferences: _remapWikiReferences,
+        validateSession: SyncSessionScope.current?.check,
+      );
     }
 
     if (operation.operationType == 'update') {
@@ -1635,41 +1561,40 @@ class NocodbSyncService {
         ),
         imageDataUrl: imageDataUrl.isEmpty ? null : imageDataUrl,
       );
-      final now = DateTime.now().toIso8601String();
-      await db.update(
-        'wiki_items',
-        {
-          'title': saved.title,
-          'description': saved.description,
-          'image_url': saved.imageUrl,
-          'tags_json': jsonEncode(saved.tags),
-          'category': saved.category,
-          'updated_at': saved.updatedAt,
-          'last_synced_at': now,
-          'pending_image_data_url': null,
-          'sync_state': SyncState.synced.name,
-        },
-        where: 'id = ?',
-        whereArgs: [itemId],
+      SyncSessionScope.current?.check();
+      return commitWikiSyncResponse(
+        database: db,
+        operation: operation,
+        saved: saved,
+        remapReferences: _remapWikiReferences,
+        validateSession: SyncSessionScope.current?.check,
       );
-      return;
     }
 
     if (operation.operationType == 'delete') {
       final itemId = payload['itemId']?.toString() ?? operation.entityLocalId;
-      if (itemId.isEmpty) return;
+      if (itemId.isEmpty) throw StateError('Missing wiki deletion identity');
       await _apiClient.deleteWikiItem(itemId);
-      await db.delete(
-        'wiki_items',
-        where: 'id IN (?, ?)',
-        whereArgs: [operation.entityLocalId, itemId],
+      SyncSessionScope.current?.check();
+      return commitWikiSyncResponse(
+        database: db,
+        operation: operation,
+        remapReferences: _remapWikiReferences,
+        validateSession: SyncSessionScope.current?.check,
       );
-      return;
     }
 
     throw Exception(
       'Opération wiki_item non supportée: ${operation.operationType}',
     );
+  }
+
+  Future<void> _remapWikiReferences(
+    Transaction txn,
+    String oldId,
+    String newId,
+  ) async {
+    await remapVisitRecommendationReferencesInTransaction(txn, oldId, newId);
   }
 
   /// Pushes a retirement fund update. The fund payload comes fully serialized
@@ -1705,7 +1630,7 @@ class NocodbSyncService {
       fund: fund,
     );
 
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     final now = DateTime.now().toIso8601String();
     await db.update(
       'retirement_funds',
@@ -1760,7 +1685,7 @@ class NocodbSyncService {
 
     final photoUrl = await _apiClient.uploadProfilePhoto(dataUrl);
 
-    final db = await LocalDatabase.instance.database;
+    final db = await _database.database;
     await db.update(
       'app_users',
       {
@@ -1888,12 +1813,14 @@ class _GroupResult {
   final int pushed;
   final int failed;
   final int deferred;
+  final int conflicts;
   final List<String> failures;
 
   const _GroupResult({
     required this.pushed,
     required this.failed,
     required this.deferred,
+    this.conflicts = 0,
     required this.failures,
   });
 }

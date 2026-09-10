@@ -22,6 +22,14 @@ import 'package:aid_habitat_app/services/nocodb_sync_service.dart';
 ///     `RemoteLoginResult.rejected` (api_client.dart).
 void main() {
   group('isTransientErrorLike', () {
+    test('typed transient API errors remain deferred during a retry', () {
+      expect(
+        isTransientErrorLike(
+          TransientRemoteException('Remote update failed (503)'),
+        ),
+        isTrue,
+      );
+    });
     test('TimeoutException → transient', () {
       expect(isTransientErrorLike(TimeoutException('boom')), isTrue);
     });
@@ -237,20 +245,18 @@ void main() {
       expect(isTransientErrorLike('plain string error'), isFalse);
     });
 
-    test('TransientRemoteException → NON détecté par `isTransientErrorLike` '
-        '(géré séparément par un `on TransientRemoteException` upstream)', () {
-      // `_processGroup` capture `TransientRemoteException` AVANT le
-      // catch-all qui appelle `isTransientErrorLike`. Donc cette fonction
-      // n'est jamais appelée avec ce type — on documente le contrat ici
-      // pour qu'un futur refactor ne se trompe pas en pensant qu'il faut
-      // ajouter une `is TransientRemoteException` check.
-      expect(
-        isTransientErrorLike(
-          TransientRemoteException('upstream said 503', statusCode: 503),
-        ),
-        isFalse,
-      );
-    });
+    test(
+      'TransientRemoteException remains transient in nested retry handlers',
+      () {
+        // The retry after a 409 uses this classifier, unlike the initial push.
+        expect(
+          isTransientErrorLike(
+            TransientRemoteException('upstream said 503', statusCode: 503),
+          ),
+          isTrue,
+        );
+      },
+    );
   });
 
   group('SessionTokenStatus enum', () {

@@ -25,5 +25,13 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "bower_components",
+    "jspm_packages",
+    "dist",
+    "aid_habitat_app/build",
+    "aid_habitat_app/.dart_tool"
+  ]
 }

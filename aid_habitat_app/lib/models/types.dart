@@ -22,7 +22,7 @@ enum HeatingMode { ELECTRIC, GAS, WOOD, OIL, OTHER }
 
 enum SyncState { localOnly, pendingSync, syncing, synced, syncError, conflict }
 
-enum SyncOperationStatus { pending, running, completed, failed }
+enum SyncOperationStatus { pending, running, completed, failed, conflict }
 
 enum LocalUserRole { admin, ergo }
 
@@ -1172,6 +1172,9 @@ class VisitRecommendationItem {
 }
 
 class Dossier {
+  // Raw SQLite values observed when the form was opened, before UI defaults.
+  final Map<String, dynamic>? patientEditBaseline;
+  final Map<String, dynamic>? dossierEditBaseline;
   final String id;
   final Patient patient;
   final DossierStatus status;
@@ -1198,6 +1201,8 @@ class Dossier {
   final bool beneficiaryPrepared;
 
   Dossier({
+    this.patientEditBaseline,
+    this.dossierEditBaseline,
     required this.id,
     required this.patient,
     required this.status,
@@ -1229,6 +1234,8 @@ class Dossier {
     bool? beneficiaryPrepared,
   }) {
     return Dossier(
+      patientEditBaseline: patientEditBaseline,
+      dossierEditBaseline: dossierEditBaseline,
       id: id,
       patient: patient ?? this.patient,
       status: status ?? this.status,
@@ -1257,6 +1264,7 @@ class DocItem {
   final String title;
   final String? url;
   final String date;
+  final String updatedAt;
   final String? localPath;
 
   /// Web-only: base64 data URL (`data:<mime>;base64,…`) of the freshly
@@ -1291,6 +1299,7 @@ class DocItem {
     required this.title,
     this.url,
     required this.date,
+    this.updatedAt = '',
     this.localPath,
     this.dataUrl,
     this.tags = const [],
@@ -1306,6 +1315,7 @@ class DocItem {
     String? title,
     String? url,
     String? date,
+    String? updatedAt,
     String? localPath,
     String? dataUrl,
     List<String>? tags,
@@ -1320,6 +1330,7 @@ class DocItem {
       title: title ?? this.title,
       url: url ?? this.url,
       date: date ?? this.date,
+      updatedAt: updatedAt ?? this.updatedAt,
       localPath: localPath ?? this.localPath,
       dataUrl: dataUrl ?? this.dataUrl,
       tags: tags ?? this.tags,

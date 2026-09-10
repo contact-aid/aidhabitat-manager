@@ -82,6 +82,56 @@ void main() {
 
   group('file de synchronisation offline', () {
     test(
+      'iOS boot recovers recent interrupted writes but not this process',
+      () async {
+        final startup = DateTime.now();
+        await insertOperation(
+          id: 'previous_process',
+          status: 'running',
+          payload: '{"writeId":"retained"}',
+          updatedAt: startup.subtract(const Duration(seconds: 1)),
+        );
+        await insertOperation(
+          id: 'current_process',
+          status: 'running',
+          payload: '{"value":"active"}',
+          updatedAt: startup.add(const Duration(seconds: 1)),
+        );
+        await insertOperation(
+          id: 'unresolved',
+          status: 'conflict',
+          payload: '{"value":"conflict"}',
+          updatedAt: startup.subtract(const Duration(minutes: 1)),
+        );
+        final repository = SyncRepository.forTesting(
+          databaseProvider: () async => db,
+        );
+        expect(
+          await repository.purgeStalePendingOperations(
+            interruptedBefore: startup,
+          ),
+          1,
+        );
+        final rows = await db.query('sync_operations');
+        final byId = {for (final row in rows) row['id']: row};
+        expect(byId['previous_process']!['status'], 'pending');
+        expect(
+          byId['previous_process']!['payload_json'],
+          '{"writeId":"retained"}',
+        );
+        expect(byId['current_process']!['status'], 'running');
+        expect(byId['unresolved']!['status'], 'conflict');
+        // A delayed/duplicate boot task must still use the original cutoff.
+        expect(
+          await repository.purgeStalePendingOperations(
+            interruptedBefore: startup,
+          ),
+          0,
+        );
+      },
+    );
+
+    test(
       'une opération interrompue survit au redémarrage avec son gros payload',
       () async {
         final payload = '{"previewDataUrl":"${'x' * 600000}"}';
@@ -93,7 +143,7 @@ void main() {
         );
 
         // Une nouvelle instance simule le repository recréé au redémarrage.
-        final repositoryAfterRestart = SyncRepository(
+        final repositoryAfterRestart = SyncRepository.forTesting(
           databaseProvider: () async => db,
         );
         final repaired = await repositoryAfterRestart
@@ -133,7 +183,9 @@ void main() {
           updatedAt: DateTime.now().subtract(const Duration(minutes: 12)),
         );
 
-        final repository = SyncRepository(databaseProvider: () async => db);
+        final repository = SyncRepository.forTesting(
+          databaseProvider: () async => db,
+        );
         final recovered = await repository.recoverInterruptedDocumentUploads(
           maxRunningAge: const Duration(minutes: 10),
         );
@@ -163,7 +215,9 @@ void main() {
         error: 'Remote upload failed (413): Content Too Large',
       );
 
-      final repository = SyncRepository(databaseProvider: () async => db);
+      final repository = SyncRepository.forTesting(
+        databaseProvider: () async => db,
+      );
       await repository.purgeStalePendingOperations();
 
       final rows = await db.query(
@@ -187,7 +241,9 @@ void main() {
         error: 'Remote update failed (500)',
       );
 
-      final repository = SyncRepository(databaseProvider: () async => db);
+      final repository = SyncRepository.forTesting(
+        databaseProvider: () async => db,
+      );
       await repository.purgeStalePendingOperations();
 
       final runnable = await repository.fetchRunnableOperations();
@@ -207,7 +263,9 @@ void main() {
         payload: '{"drawingJson":"offline strokes"}',
       );
 
-      final repository = SyncRepository(databaseProvider: () async => db);
+      final repository = SyncRepository.forTesting(
+        databaseProvider: () async => db,
+      );
       final operation = (await repository.fetchRunnableOperations()).single;
       await repository.markRunning(operation.id);
 
@@ -233,7 +291,7 @@ void main() {
     });
 
     test(
-      'un ancien conflit est rejoué sans supprimer son payload local',
+      'un ancien conflit reste bloque sans supprimer son payload local',
       () async {
         const payload = '{"drawingJson":"terrain data to preserve"}';
         await db.insert('note_pages', {
@@ -248,8 +306,10 @@ void main() {
           error: 'Ancien conflit 409',
         );
 
-        final repository = SyncRepository(databaseProvider: () async => db);
-        final unstuck = await repository.unstickConflictedEntities();
+        final repository = SyncRepository.forTesting(
+          databaseProvider: () async => db,
+        );
+        final unstuck = await repository.restoreConflictedEntities();
 
         expect(unstuck, 1);
         final rows = await db.query(
@@ -258,14 +318,13 @@ void main() {
           whereArgs: const ['sync_legacy_conflict'],
         );
         expect(rows, hasLength(1));
-        expect(rows.single['status'], 'pending');
+        expect(rows.single['status'], 'conflict');
         expect(rows.single['payload_json'], payload);
-        expect(rows.single['attempt_count'], 0);
-        expect(rows.single['last_error'], isNull);
+        expect(rows.single['attempt_count'], 3);
+        expect(rows.single['last_error'], 'Ancien conflit 409');
 
         final runnable = await repository.fetchRunnableOperations();
-        expect(runnable, hasLength(1));
-        expect(runnable.single.payloadJson, payload);
+        expect(runnable, isEmpty);
       },
     );
   });
