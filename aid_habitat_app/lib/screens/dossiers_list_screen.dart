@@ -664,7 +664,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
   /// longs ("Châteauneuf-d'Ille-et-Vilaine", "Saint-Méen-le-Grand"…)
   /// ne soient plus tronqués — ce qui pousse mécaniquement REVENUS et
   /// COMMUNAUTÉ DE COMMUNE vers la droite.
-  static const int _flexBeneficiary = 3;
+  static const int _flexBeneficiary = 5;
   static const int _flexCommune = 4;
   static const int _flexRevenus = 2;
   static const int _flexEpci = 4;

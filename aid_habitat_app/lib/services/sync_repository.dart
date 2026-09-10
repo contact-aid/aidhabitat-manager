@@ -1313,7 +1313,7 @@ class SyncRepository {
     );
   }
 
-  /// Liste TOUTES les opérations en `failed` (résumés courts) — utilisée
+  /// Liste les erreurs et conflits, sans exposer leur contenu sauvegarde.
   /// par le drawer "ops en échec" pour permettre une action par op
   /// (réessayer / abandonner) au lieu d'un batch global.
   Future<List<Map<String, String?>>> fetchAllFailingOperations() async {
@@ -1328,9 +1328,10 @@ class SyncRepository {
         'last_error',
         'attempt_count',
         'updated_at',
+        'status',
       ],
-      where: 'status = ?',
-      whereArgs: [SyncOperationStatus.failed.name],
+      where: 'status IN (?, ?)',
+      whereArgs: ['failed', 'conflict'],
       orderBy: 'updated_at DESC',
     );
     return rows.map((r) {
@@ -1342,8 +1343,40 @@ class SyncRepository {
         'lastError': r['last_error'] as String?,
         'attemptCount': '${r['attempt_count'] ?? 0}',
         'updatedAt': r['updated_at'] as String?,
+        'status': r['status'] as String?,
       };
     }).toList();
+  }
+
+  Future<String?> conflictDossierId(String operationId) async {
+    final db = await _database.database;
+    final operations = await db.query(
+      'sync_operations',
+      columns: ['entity_type', 'entity_local_id'],
+      where: 'id = ? AND status = ?',
+      whereArgs: [operationId, 'conflict'],
+    );
+    if (operations.length != 1) return null;
+    final op = operations.single;
+    final column = switch (op['entity_type']) {
+      'patient' => 'patient_local_id',
+      'housing' => 'housing_local_id',
+      'dossier' ||
+      'mesures_anthropometriques' ||
+      'observations_synthese' ||
+      'diagnostic_sanitaires' => 'local_id',
+      _ => null,
+    };
+    if (column == null) return null;
+    final dossiers = await db.query(
+      'dossiers',
+      columns: ['local_id'],
+      where: '$column = ?',
+      whereArgs: [op['entity_local_id']],
+      limit: 2,
+    );
+    // Never guess which dossier to review when the binding is ambiguous.
+    return dossiers.length == 1 ? dossiers.single['local_id'] as String : null;
   }
 
   /// Réinitialise UNE op à `pending` (attempt_count=0, last_error=null).
@@ -1358,8 +1391,8 @@ class SyncRepository {
         'last_error': null,
         'updated_at': DateTime.now().toIso8601String(),
       },
-      where: 'id = ?',
-      whereArgs: [operationId],
+      where: 'id = ? AND status = ?',
+      whereArgs: [operationId, SyncOperationStatus.failed.name],
     );
   }
 
@@ -1370,8 +1403,8 @@ class SyncRepository {
     final db = await _database.database;
     return db.delete(
       'sync_operations',
-      where: 'id = ?',
-      whereArgs: [operationId],
+      where: 'id = ? AND status = ?',
+      whereArgs: [operationId, SyncOperationStatus.failed.name],
     );
   }
 

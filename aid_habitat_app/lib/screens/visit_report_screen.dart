@@ -18,6 +18,7 @@ import '../services/note_window_web_stub.dart'
 import 'package:lucide_icons/lucide_icons.dart';
 import '../components/notes_panel_title_banner.dart';
 import '../models/types.dart';
+import '../models/sanitary_rooms_validation.dart';
 import '../models/visit_report_categories.dart';
 import '../services/app_config.dart';
 import '../services/connectivity_service.dart';
@@ -2040,26 +2041,11 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       );
     }
 
-    // — Niveaux et pièces (subSection 1) : ≥ 1 niveau ayant à la fois
-    //   « Salle de bain » ET « WC » dans ses pièces.
-    final levels = <List<String>>[
-      if (h.basement) h.basementRooms,
-      if (h.rdc) h.rdcRooms,
-      if (h.floor) h.floorRooms,
-      if (h.secondFloor) h.secondFloorRooms,
-      if (h.thirdFloor) h.thirdFloorRooms,
-    ];
-    bool hasBoth = levels.any((rooms) {
-      final norm = rooms.map((r) => r.toLowerCase().trim()).toSet();
-      final hasSdb = norm.any((r) => r.contains('salle de bain'));
-      final hasWc = norm.any((r) => r.contains('wc'));
-      return hasSdb && hasWc;
-    });
-    if (!hasBoth) {
+    if (!hasBathroomAndWc(h)) {
       missing.add(
         _MissingField(
           label:
-              'Niveaux et pièces — au moins 1 niveau avec « Salle de bain » et « WC »',
+              'Niveaux et pièces — une salle de bain et un WC dans le logement, même à des niveaux différents',
           tabIndex: tab,
           subSectionIndex: 1,
         ),

@@ -420,7 +420,13 @@ class _DocumentsScreenState extends State<DocumentsScreen>
       _showError('Caméra non dispo sur ordinateur — choisissez une image.');
       await _pickFromGallery();
     } catch (err) {
-      _showError('Caméra indisponible: $err');
+      _showError(
+        err is PlatformException &&
+                (err.code == 'camera_access_denied' ||
+                    err.code == 'camera_access_restricted')
+            ? 'Accès à la caméra refusé. Vérifiez les autorisations de caméra dans les réglages de l’appareil ou du navigateur.'
+            : 'Caméra indisponible. Réessayez ou importez une photo existante.',
+      );
     } finally {
       _isPicking = false;
     }
@@ -4849,7 +4855,20 @@ class _RemoteImageAnnotatorWrapperState
   }
 }
 
+@visibleForTesting
+Widget documentViewportForTesting(
+  Uint8List bytes,
+  VoidCallback onChanged, {
+  required bool web,
+}) => _ImageAnnotator(
+  imageBytes: bytes,
+  onChanged: onChanged,
+  rotationQuarterTurns: 0,
+  webViewportControls: web,
+);
+
 class _ImageAnnotator extends StatefulWidget {
+  final bool webViewportControls;
   final double? pageAspectRatio;
   final Uint8List? pdfOverlayBytes;
 
@@ -4880,6 +4899,7 @@ class _ImageAnnotator extends StatefulWidget {
 
   const _ImageAnnotator({
     super.key,
+    this.webViewportControls = kIsWeb,
     this.imagePath,
     this.imageBytes,
     required this.onChanged,
@@ -4919,6 +4939,27 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   List<_AnnotStroke>? _touchDrawingBaseline;
   List<List<_AnnotStroke>>? _touchRedoBaseline;
   double _zoom = 1;
+  Size _viewportSize = Size.zero;
+  bool _webPanMode = false;
+
+  void _stepWebZoom(int direction) {
+    if (!widget.webViewportControls || _viewportSize.isEmpty) return;
+    _zoomResetController.stop();
+    final current = _transformationController.value;
+    final scale = current.getMaxScaleOnAxis();
+    final next =
+        ((scale + direction * 0.1) * 1000000).round().clamp(500000, 5000000) /
+        1000000;
+    final center = _viewportSize.center(Offset.zero);
+    final sceneCenter = _transformationController.toScene(center);
+    _transformationController.value = Matrix4.identity()
+      ..setEntry(0, 0, next)
+      ..setEntry(1, 1, next)
+      ..setEntry(2, 2, next)
+      ..setEntry(0, 3, center.dx - sceneCenter.dx * next)
+      ..setEntry(1, 3, center.dy - sceneCenter.dy * next);
+    setState(() => _webPanMode = true);
+  }
 
   // Outils courants. Crayon noir simple, comme les notes rapides (quick toolset).
   _AnnotTool _tool = _AnnotTool.pen;
@@ -5279,6 +5320,7 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   }
 
   void _handlePointerDown(PointerDownEvent event) {
+    if (widget.webViewportControls && _webPanMode) return;
     if (_isDrawingDevice(event)) {
       _activeDrawingPointer = event.pointer;
       _activeDrawingPointerIsTouch = false;
@@ -5385,6 +5427,7 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
                   constraints.maxWidth,
                   constraints.maxHeight,
                 );
+                _viewportSize = viewportSize;
                 final turns = _normalizedRotationQuarterTurns;
                 final surfaceSize = widget.pageAspectRatio != null
                     ? pdfInkCanvasSize(
@@ -5403,12 +5446,14 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
                   // Le déplacement à un doigt ferait bouger la page pendant
                   // un trait Pencil. Le pinch reste disponible, tandis que le
                   // swipe horizontal change de page.
-                  panEnabled: false,
+                  panEnabled: widget.webViewportControls && _webPanMode,
                   boundaryMargin: const EdgeInsets.all(160),
                   trackpadScrollCausesScale: true,
                   scaleFactor: 140,
                   onInteractionStart: (_) => _zoomResetController.stop(),
-                  onInteractionEnd: (_) => _animateZoomToOrigin(),
+                  onInteractionEnd: (_) {
+                    if (!widget.webViewportControls) _animateZoomToOrigin();
+                  },
                   child: SizedBox(
                     width: viewportSize.width,
                     height: viewportSize.height,
@@ -5493,20 +5538,38 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (widget.webViewportControls) ...[
+            _ToolButton(
+              icon: LucideIcons.zoomOut,
+              tooltip: 'Réduire de 10 %',
+              onTap: _zoom <= 0.5 ? null : () => _stepWebZoom(-1),
+            ),
+            _ToolButton(
+              icon: LucideIcons.zoomIn,
+              tooltip: 'Agrandir de 10 %',
+              onTap: _zoom >= 5 ? null : () => _stepWebZoom(1),
+            ),
+            _ToolButton(
+              icon: LucideIcons.hand,
+              tooltip: 'Déplacer l’image',
+              selected: _webPanMode,
+              onTap: () => setState(() => _webPanMode = true),
+            ),
+          ],
           _ToolButton(
             // `LucideIcons.pencil` (crayon classique) — même icône que
             // les autres notes (NotesWidget, plan_canvas) pour la
             // cohérence visuelle. Avant on utilisait `penTool` (stylo
             // plume) qui détonnait avec le reste de l'app.
             icon: LucideIcons.pencil,
-            selected: _tool == _AnnotTool.pen,
+            selected: _tool == _AnnotTool.pen && !_webPanMode,
             tooltip: 'Crayon',
             onTap: () => _setTool(_AnnotTool.pen),
           ),
           const SizedBox(width: 6),
           _ToolButton(
             icon: LucideIcons.eraser,
-            selected: _tool == _AnnotTool.eraser,
+            selected: _tool == _AnnotTool.eraser && !_webPanMode,
             tooltip: 'Gomme',
             onTap: () => _setTool(_AnnotTool.eraser),
           ),
@@ -5543,6 +5606,9 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   }
 
   void _setTool(_AnnotTool tool) {
+    if (widget.webViewportControls && _webPanMode) {
+      setState(() => _webPanMode = false);
+    }
     if (tool == _tool) return;
     setState(() {
       _previousTool = _tool;

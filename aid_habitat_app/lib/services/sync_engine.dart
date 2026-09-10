@@ -312,6 +312,9 @@ class SyncEngine {
   Future<List<Map<String, String?>>> inspectAllFailures() =>
       _syncRepository.fetchAllFailingOperations();
 
+  Future<String?> conflictDossierId(String operationId) =>
+      _syncRepository.conflictDossierId(operationId);
+
   /// Réinitialise UNE op à `pending` puis kick le sync engine sans
   /// attendre le prochain tick. Utilisé par le bouton « Réessayer »
   /// par-op du drawer.

@@ -72,6 +72,47 @@ void main() {
     });
   }
 
+  test('details include conflicts and retry/discard preserve them', () async {
+    await insertOperation('conflict', status: 'conflict');
+    await insertOperation('failed', status: 'failed');
+    await insertOperation('pending');
+    final details = await repository.fetchAllFailingOperations();
+    expect(
+      details.map((op) => op['status']),
+      unorderedEquals(['failed', 'conflict']),
+    );
+    final before = await db.query(
+      'sync_operations',
+      where: 'id = ?',
+      whereArgs: ['conflict'],
+    );
+    expect(await repository.resetSingleOperationToPending('conflict'), 0);
+    expect(await repository.discardSingleOperation('conflict'), 0);
+    expect(await repository.resetFailedToPending(), 1);
+    expect(
+      await db.query(
+        'sync_operations',
+        where: 'id = ?',
+        whereArgs: ['conflict'],
+      ),
+      before,
+    );
+  });
+
+  test('conflict navigation refuses ambiguous dossier bindings', () async {
+    await db.insert('dossiers', {'local_id': 'd1', 'patient_local_id': 'p1'});
+    await insertOperation(
+      'c',
+      status: 'conflict',
+      entityType: 'patient',
+      entityId: 'p1',
+    );
+    expect(await repository.conflictDossierId('c'), 'd1');
+    await db.insert('dossiers', {'local_id': 'd2', 'patient_local_id': 'p1'});
+    expect(await repository.conflictDossierId('c'), isNull);
+    expect(await repository.conflictDossierId('missing'), isNull);
+  });
+
   Future<Map<String, Object?>> document() async => (await db.query(
     'documents',
     where: 'local_id = ?',

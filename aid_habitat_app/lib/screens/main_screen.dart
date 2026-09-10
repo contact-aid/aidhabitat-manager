@@ -23,6 +23,7 @@ import '../services/references_service.dart';
 import '../services/sync_engine.dart';
 import '../services/local_database.dart';
 import 'sync_ownership_review_screen.dart';
+import 'conflict_resolution_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({
@@ -346,8 +347,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     if (failures.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Aucune opération en échec détectée.')),
+        const SnackBar(
+          content: Text(
+            'Aucun blocage dans la file locale. Actualisation en cours.',
+          ),
+        ),
       );
+      _handleSyncNow();
       return;
     }
     await showModalBottomSheet<void>(
@@ -368,11 +374,39 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               syncEngine: _syncEngine,
               initialFailures: failures,
               scrollController: scrollController,
+              onReviewConflict: _reviewConflict,
             );
           },
         );
       },
     );
+  }
+
+  Future<void> _reviewConflict(String operationId) async {
+    final dossierId = await _syncEngine.conflictDossierId(operationId);
+    final dossier = dossierId == null
+        ? null
+        : await _dataService.fetchDossierById(dossierId);
+    if (!mounted) return;
+    if (dossier == null || !_dossiers.any((d) => d.id == dossier.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Comparaison indisponible pour cette opération. Les modifications locales sont conservées.',
+          ),
+        ),
+      );
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (ctx) => ConflictResolutionScreen(
+          localDossier: dossier,
+          onResolved: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+    );
+    if (mounted) _handleSyncNow();
   }
 
   @override
@@ -913,11 +947,13 @@ class _NavEntry {
 /// action par-op (Réessayer / Abandonner). Hérite d'un état local de la
 /// liste pour pouvoir retirer les ops une à une sans re-fetcher tout.
 class _FailingOpsSheet extends StatefulWidget {
+  final Future<void> Function(String) onReviewConflict;
   final SyncEngine syncEngine;
   final List<Map<String, String?>> initialFailures;
   final ScrollController scrollController;
 
   const _FailingOpsSheet({
+    required this.onReviewConflict,
     required this.syncEngine,
     required this.initialFailures,
     required this.scrollController,
@@ -950,9 +986,15 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
     await _refreshList();
     if (!mounted) return;
     setState(() => _busyIds.remove(opId));
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Opération relancée')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          reset > 0
+              ? 'Opération relancée'
+              : 'État modifié. Consultez les détails actualisés.',
+        ),
+      ),
+    );
   }
 
   Future<void> _discard(String opId) async {
@@ -1014,8 +1056,8 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                   Expanded(
                     child: Text(
                       _failures.isEmpty
-                          ? 'Aucune opération en échec'
-                          : '${_failures.length} opération${_failures.length > 1 ? 's' : ''} en échec',
+                          ? 'Aucun blocage dans la file locale'
+                          : '${_failures.length} opération(s) à vérifier',
                       style: const TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w700,
@@ -1023,7 +1065,8 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                       ),
                     ),
                   ),
-                  if (_failures.length > 1)
+                  if (_failures.where((op) => op['status'] == 'failed').length >
+                      1)
                     TextButton.icon(
                       onPressed: _busyIds.isEmpty ? _retryAll : null,
                       icon: const Icon(Icons.refresh, size: 16),
@@ -1032,12 +1075,6 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                 ],
               ),
               const SizedBox(height: 4),
-              const Text(
-                'Réessaye en cas d\'erreur réseau temporaire, abandonne '
-                'seulement si la modification ne pourra jamais aboutir '
-                '(ressource supprimée côté serveur, payload obsolète…).',
-                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-              ),
             ],
           ),
         ),
@@ -1048,7 +1085,7 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                   child: Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
-                      'Tout est synchronisé ✨',
+                      'Aucun blocage dans la file locale',
                       style: TextStyle(color: Color(0xFF64748B)),
                     ),
                   ),
@@ -1062,6 +1099,44 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                     final op = _failures[i];
                     final id = op['id'] ?? '';
                     final busy = _busyIds.contains(id);
+                    if (op['status'] == 'conflict') {
+                      return ListTile(
+                        leading: const Icon(Icons.compare_arrows),
+                        title: const Text('Conflit de synchronisation'),
+                        subtitle: Text(
+                          '${op['entityType']} · ${op['entityLocalId']}\n${op['lastError'] ?? 'Comparaison des versions nécessaire.'}',
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Comparer les versions',
+                          icon: const Icon(Icons.chevron_right),
+                          onPressed: busy
+                              ? null
+                              : () async {
+                                  setState(() => _busyIds.add(id));
+                                  try {
+                                    await widget.onReviewConflict(id);
+                                    await _refreshList();
+                                  } catch (_) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Comparaison indisponible. Les modifications locales sont conservées.',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _busyIds.remove(id));
+                                    }
+                                  }
+                                },
+                        ),
+                      );
+                    }
                     return _FailingOpCard(
                       entityType: op['entityType'] ?? '?',
                       operationType: op['operationType'] ?? '?',
