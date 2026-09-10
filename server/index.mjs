@@ -8525,6 +8525,13 @@ const saveSecondaryRecord = async (tableId, projection, existing, fields) => {
   const persistedFields = Object.fromEntries(Object.entries({
     ...(!existing ? { uuid_source: uuid } : {}), ...fields,
   }).filter(([, value]) => value !== undefined));
+  // NocoDB stores these application clocks at whole-second precision.
+  // Send that precision explicitly; keep strict readback checks for all fields.
+  for (const key of ['updated_at', 'created_at']) {
+    if (typeof persistedFields[key] === 'string') {
+      persistedFields[key] = persistedFields[key].replace(/\.\d{3}Z$/, '.000Z');
+    }
+  }
   if (existing) {
     await updateRecord(tableId, existing.id, persistedFields);
   } else {

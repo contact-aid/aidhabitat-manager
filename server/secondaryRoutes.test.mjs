@@ -135,7 +135,10 @@ async function runRoutes() {
       if (normalizeReadback) {
         if (row.debout_hauteur_coude != null) row.debout_hauteur_coude = Number(row.debout_hauteur_coude);
         if (row.sdb_instances_json != null) row.sdb_instances_json = JSON.stringify(JSON.parse(row.sdb_instances_json), null, 2);
-        if (row.updated_at) row.updated_at = row.updated_at.replace('T', ' ').replace('Z', '+00:00');
+        // The production DateTime columns return whole-second precision.
+        for (const key of ['updated_at', 'created_at']) {
+          if (row[key]) row[key] = row[key].replace(/\.\d+Z$/, 'Z').replace('T', ' ').replace('Z', '+00:00');
+        }
       }
       didWrite = true;
       return json(method === 'PATCH' ? [row] : row);
