@@ -142,7 +142,8 @@ class _WikiScreenState extends State<WikiScreen> {
                   .toLowerCase();
           return haystack.contains(search);
         })
-        .toList(growable: false);
+        .toList(growable: false)
+      ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
   }
 
   Future<void> _openItem(WikiItem item) async {
@@ -369,6 +370,7 @@ class _WikiScreenState extends State<WikiScreen> {
     }
 
     final sortedTags = _availableTags.toList()..sort();
+    final filteredItems = _filteredItems;
 
     return Stack(
       children: [
@@ -475,7 +477,7 @@ class _WikiScreenState extends State<WikiScreen> {
                     ),
                   ),
                 )
-              else if (_filteredItems.isEmpty)
+              else if (filteredItems.isEmpty)
                 const Expanded(
                   child: Center(child: Text('Aucun element trouve')),
                 )
@@ -491,9 +493,9 @@ class _WikiScreenState extends State<WikiScreen> {
                           // image plus haut qu'un logo).
                           mainAxisExtent: 260,
                         ),
-                    itemCount: _filteredItems.length,
+                    itemCount: filteredItems.length,
                     itemBuilder: (context, index) {
-                      final item = _filteredItems[index];
+                      final item = filteredItems[index];
                       final primaryTag = item.tags.isNotEmpty
                           ? item.tags.first
                           : null;
