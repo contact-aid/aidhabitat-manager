@@ -178,6 +178,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 8),
                         TextField(
                           controller: _passwordController,
+                          onTapOutside: (_) => FocusScope.of(context).unfocus(),
                           obscureText: !_isPasswordVisible,
                           enabled: !_isSubmitting,
                           decoration: _inputDecoration().copyWith(

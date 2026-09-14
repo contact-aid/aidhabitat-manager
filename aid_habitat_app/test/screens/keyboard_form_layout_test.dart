@@ -3,6 +3,7 @@ import 'package:aid_habitat_app/screens/login_screen.dart';
 import 'package:aid_habitat_app/screens/wiki_screen.dart';
 import 'package:aid_habitat_app/services/auth_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -13,6 +14,73 @@ class _Auth extends Fake implements AuthService {
 
 void main() {
   setUp(() => GoogleFonts.config.allowRuntimeFetching = false);
+  testWidgets(
+    'touch outside login field dismisses keyboard without clearing password',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1180, 820);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: LoginScreen(authService: _Auth(), onLoggedIn: (_) {}),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final field = find.byType(TextField);
+      await tester.enterText(field, 'kept-password');
+      await tester.pump();
+      expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue,
+      );
+      await tester.tap(
+        find.byTooltip('Afficher le mot de passe'),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump();
+      expect(tester.widget<TextField>(field).obscureText, isFalse);
+      expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue,
+      );
+      await tester.tapAt(const Offset(30, 100), kind: PointerDeviceKind.touch);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isFalse,
+      );
+      expect(tester.testTextInput.isVisible, isFalse);
+      expect(tester.widget<TextField>(field).controller!.text, 'kept-password');
+      await tester.tap(field, kind: PointerDeviceKind.touch);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue,
+      );
+      await tester.tap(find.text('Connexion'), kind: PointerDeviceKind.touch);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
   for (final size in [const Size(1180, 820), const Size(820, 1180)]) {
     testWidgets('library editing remains scrollable with keyboard $size', (
       tester,
