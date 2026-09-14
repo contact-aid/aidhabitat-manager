@@ -12,6 +12,11 @@ void main() {
   setUp(() async {
     db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     await db.execute('''
+      CREATE TABLE kv_store (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
       CREATE TABLE sync_operations (
         id TEXT PRIMARY KEY, entity_type TEXT NOT NULL,
         entity_local_id TEXT NOT NULL, operation_type TEXT NOT NULL,

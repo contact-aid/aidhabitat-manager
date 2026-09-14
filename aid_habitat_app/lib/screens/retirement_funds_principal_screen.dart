@@ -1008,7 +1008,7 @@ class _NewPrincipalFundDialogState extends State<_NewPrincipalFundDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(28, 24, 28, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,

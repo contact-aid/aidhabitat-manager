@@ -6,17 +6,23 @@ import '../services/auth_service.dart';
 import '../services/data_service.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.onLoggedIn, this.infoMessage});
+  const LoginScreen({
+    super.key,
+    required this.onLoggedIn,
+    this.infoMessage,
+    this.authService,
+  });
 
   final ValueChanged<LocalAppUser> onLoggedIn;
   final String? infoMessage;
+  final AuthService? authService;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final AuthService _authService = AuthService();
+  late final AuthService _authService = widget.authService ?? AuthService();
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = true;
   bool _isSubmitting = false;
@@ -100,7 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 520),
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(32.0),
             child: Container(
               padding: const EdgeInsets.all(32),
@@ -145,6 +151,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         const SizedBox(height: 8),
                         DropdownButtonFormField<String>(
+                          isExpanded: true,
                           initialValue: _selectedEmail,
                           items: _users
                               .map(

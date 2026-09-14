@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:google_fonts/google_fonts.dart';
@@ -617,6 +617,10 @@ List<String> _wikiTagOptions(
   return options;
 }
 
+@visibleForTesting
+Widget buildWikiItemDialogForTesting(WikiItem item) =>
+    _WikiItemDialog(item: item, availableTags: const ['Autre']);
+
 class _WikiItemDialog extends StatefulWidget {
   const _WikiItemDialog({required this.item, required this.availableTags});
 
@@ -810,181 +814,194 @@ class _WikiItemDialogState extends State<_WikiItemDialog> {
                               child: Container(
                                 color: Colors.white,
                                 padding: const EdgeInsets.all(28),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    _FormLabel(text: 'Titre'),
-                                    const SizedBox(height: 8),
-                                    TextField(
-                                      controller: _titleController,
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w700,
-                                        color: Color(0xFF0E1116),
-                                      ),
-                                      decoration: _inputDecoration(),
-                                    ),
-                                    const SizedBox(height: 20),
-                                    _FormLabel(text: 'Tags'),
-                                    const SizedBox(height: 8),
-                                    _WikiTagDropdown(
-                                      value: selectedTag,
-                                      options: tagOptions,
-                                      allowEmpty: true,
-                                      borderRadius: 18,
-                                      onChanged: (value) {
-                                        setState(() {
-                                          _selectedTags =
-                                              (value == null || value.isEmpty)
-                                              ? []
-                                              : [value];
-                                        });
-                                      },
-                                    ),
-                                    const SizedBox(height: 20),
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        Expanded(
-                                          child: _FormLabel(
-                                            text: 'Descriptions',
-                                          ),
+                                child: SingleChildScrollView(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      _FormLabel(text: 'Titre'),
+                                      const SizedBox(height: 8),
+                                      TextField(
+                                        controller: _titleController,
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF0E1116),
                                         ),
-                                        Material(
-                                          color: canAddDescription
-                                              ? const Color(0xFFEDE8F5)
-                                              : const Color(0xFFF1F2F4),
-                                          shape: const CircleBorder(),
-                                          child: InkWell(
-                                            onTap: canAddDescription
-                                                ? _addDescription
-                                                : null,
-                                            customBorder: const CircleBorder(),
-                                            child: Padding(
-                                              padding: const EdgeInsets.all(6),
-                                              child: Icon(
-                                                Icons.add,
-                                                size: 18,
-                                                color: canAddDescription
-                                                    ? kBrandPurple
-                                                    : const Color(0xFFB8C0C8),
-                                                semanticLabel:
-                                                    'Ajouter une description',
+                                        decoration: _inputDecoration(),
+                                      ),
+                                      const SizedBox(height: 20),
+                                      _FormLabel(text: 'Tags'),
+                                      const SizedBox(height: 8),
+                                      _WikiTagDropdown(
+                                        value: selectedTag,
+                                        options: tagOptions,
+                                        allowEmpty: true,
+                                        borderRadius: 18,
+                                        onChanged: (value) {
+                                          setState(() {
+                                            _selectedTags =
+                                                (value == null || value.isEmpty)
+                                                ? []
+                                                : [value];
+                                          });
+                                        },
+                                      ),
+                                      const SizedBox(height: 20),
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          Expanded(
+                                            child: _FormLabel(
+                                              text: 'Descriptions',
+                                            ),
+                                          ),
+                                          Material(
+                                            color: canAddDescription
+                                                ? const Color(0xFFEDE8F5)
+                                                : const Color(0xFFF1F2F4),
+                                            shape: const CircleBorder(),
+                                            child: InkWell(
+                                              onTap: canAddDescription
+                                                  ? _addDescription
+                                                  : null,
+                                              customBorder:
+                                                  const CircleBorder(),
+                                              child: Padding(
+                                                padding: const EdgeInsets.all(
+                                                  6,
+                                                ),
+                                                child: Icon(
+                                                  Icons.add,
+                                                  size: 18,
+                                                  color: canAddDescription
+                                                      ? kBrandPurple
+                                                      : const Color(0xFFB8C0C8),
+                                                  semanticLabel:
+                                                      'Ajouter une description',
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    AnimatedContainer(
-                                      duration: kSoftMedium,
-                                      curve: kSoftCurve,
-                                      height: hasMultipleDescriptions
-                                          ? 180
-                                          : 104,
-                                      child: ReorderableListView.builder(
-                                        buildDefaultDragHandles: false,
-                                        proxyDecorator:
-                                            _descriptionReorderProxy,
-                                        onReorder: (oldIndex, newIndex) {
-                                          if (newIndex > oldIndex) {
-                                            newIndex -= 1;
-                                          }
-                                          _moveDescription(oldIndex, newIndex);
-                                        },
-                                        itemCount: _descCtrls.length,
-                                        itemBuilder: (context, i) {
-                                          return Padding(
-                                            key: ObjectKey(_descCtrls[i]),
-                                            padding: EdgeInsets.only(
-                                              bottom: i == _descCtrls.length - 1
-                                                  ? 0
-                                                  : 8,
-                                            ),
-                                            child: Row(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.center,
-                                              children: [
-                                                AnimatedSize(
-                                                  duration: kSoftMedium,
-                                                  curve: kSoftCurve,
-                                                  child: hasMultipleDescriptions
-                                                      ? ReorderableDragStartListener(
-                                                          index: i,
-                                                          child:
-                                                              const _DescriptionDragHandle(),
-                                                        )
-                                                      : const SizedBox.shrink(),
-                                                ),
-                                                AnimatedContainer(
-                                                  duration: kSoftMedium,
-                                                  curve: kSoftCurve,
-                                                  width: hasMultipleDescriptions
-                                                      ? 8
-                                                      : 0,
-                                                ),
-                                                Expanded(
-                                                  child: MouseRegion(
-                                                    cursor:
-                                                        SystemMouseCursors.text,
-                                                    child: TextField(
-                                                      controller: _descCtrls[i],
-                                                      maxLines: 3,
-                                                      minLines: 2,
-                                                      textAlignVertical:
-                                                          TextAlignVertical.top,
-                                                      style: const TextStyle(
-                                                        fontSize: 14,
-                                                        color: Color(
-                                                          0xFF5C6670,
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      AnimatedContainer(
+                                        duration: kSoftMedium,
+                                        curve: kSoftCurve,
+                                        height: hasMultipleDescriptions
+                                            ? 180
+                                            : 104,
+                                        child: ReorderableListView.builder(
+                                          buildDefaultDragHandles: false,
+                                          proxyDecorator:
+                                              _descriptionReorderProxy,
+                                          onReorder: (oldIndex, newIndex) {
+                                            if (newIndex > oldIndex) {
+                                              newIndex -= 1;
+                                            }
+                                            _moveDescription(
+                                              oldIndex,
+                                              newIndex,
+                                            );
+                                          },
+                                          itemCount: _descCtrls.length,
+                                          itemBuilder: (context, i) {
+                                            return Padding(
+                                              key: ObjectKey(_descCtrls[i]),
+                                              padding: EdgeInsets.only(
+                                                bottom:
+                                                    i == _descCtrls.length - 1
+                                                    ? 0
+                                                    : 8,
+                                              ),
+                                              child: Row(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.center,
+                                                children: [
+                                                  AnimatedSize(
+                                                    duration: kSoftMedium,
+                                                    curve: kSoftCurve,
+                                                    child:
+                                                        hasMultipleDescriptions
+                                                        ? ReorderableDragStartListener(
+                                                            index: i,
+                                                            child:
+                                                                const _DescriptionDragHandle(),
+                                                          )
+                                                        : const SizedBox.shrink(),
+                                                  ),
+                                                  AnimatedContainer(
+                                                    duration: kSoftMedium,
+                                                    curve: kSoftCurve,
+                                                    width:
+                                                        hasMultipleDescriptions
+                                                        ? 8
+                                                        : 0,
+                                                  ),
+                                                  Expanded(
+                                                    child: MouseRegion(
+                                                      cursor: SystemMouseCursors
+                                                          .text,
+                                                      child: TextField(
+                                                        controller:
+                                                            _descCtrls[i],
+                                                        maxLines: 3,
+                                                        minLines: 2,
+                                                        textAlignVertical:
+                                                            TextAlignVertical
+                                                                .top,
+                                                        style: const TextStyle(
+                                                          fontSize: 14,
+                                                          color: Color(
+                                                            0xFF5C6670,
+                                                          ),
+                                                          height: 1.5,
                                                         ),
-                                                        height: 1.5,
+                                                        decoration:
+                                                            _inputDecoration(),
                                                       ),
-                                                      decoration:
-                                                          _inputDecoration(),
                                                     ),
                                                   ),
-                                                ),
-                                              ],
-                                            ),
-                                          );
-                                        },
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 20),
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: FilledButton(
-                                        onPressed: () {
-                                          Navigator.of(
-                                            context,
-                                          ).pop(_buildUpdatedItem());
-                                        },
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: kBrandPurple,
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 16,
+                                      const SizedBox(height: 20),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: FilledButton(
+                                          onPressed: () {
+                                            Navigator.of(
+                                              context,
+                                            ).pop(_buildUpdatedItem());
+                                          },
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: kBrandPurple,
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 16,
+                                            ),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(18),
+                                            ),
                                           ),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              18,
+                                          child: const Text(
+                                            'Enregistrer',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 14,
                                             ),
                                           ),
                                         ),
-                                        child: const Text(
-                                          'Enregistrer',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 14,
-                                          ),
-                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -1170,6 +1187,10 @@ class _WikiItemDraft {
     this.imageDataUrl = '',
   });
 }
+
+@visibleForTesting
+Widget buildWikiCreateDialogForTesting() =>
+    const _WikiCreateDialog(availableTags: ['Autre']);
 
 class _WikiCreateDialog extends StatefulWidget {
   const _WikiCreateDialog({required this.availableTags});
@@ -1377,9 +1398,10 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
                     borderRadius: BorderRadius.circular(20),
                   ),
                   insetPadding: const EdgeInsets.all(24),
+                  clipBehavior: Clip.antiAlias,
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 520),
-                    child: Padding(
+                    child: SingleChildScrollView(
                       padding: const EdgeInsets.fromLTRB(28, 24, 28, 20),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -1702,12 +1724,15 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
             else
               const Icon(LucideIcons.image, size: 18, color: Color(0xFF8A939D)),
             const SizedBox(width: 10),
-            Text(
-              _pickingImage ? 'Chargement…' : 'Choisir une image (optionnel)',
-              style: const TextStyle(
-                color: Color(0xFF8A939D),
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
+            Flexible(
+              child: Text(
+                _pickingImage ? 'Chargement…' : 'Choisir une image (optionnel)',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF8A939D),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
               ),
             ),
           ],
