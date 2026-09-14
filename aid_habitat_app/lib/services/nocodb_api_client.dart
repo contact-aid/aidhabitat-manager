@@ -1109,13 +1109,7 @@ class NocodbApiClient {
       );
     }
 
-    final payload = jsonDecode(responseBody) as Map<String, dynamic>;
-    final data = (payload['data'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final document = (data['document'] as Map?)?.cast<String, dynamic>();
-    if (document == null) {
-      throw Exception('Unexpected document payload');
-    }
-    return document;
+    return _confirmedUploadedDocument(responseBody);
   }
 
   /// Upload chunked d'un document — pour les fichiers ≥ 1.5 MB. Splitte
@@ -1248,13 +1242,30 @@ class NocodbApiClient {
       );
     }
 
-    final payload = jsonDecode(finalizeResponse.body) as Map<String, dynamic>;
-    final data = (payload['data'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final document = (data['document'] as Map?)?.cast<String, dynamic>();
-    if (document == null) {
-      throw Exception('Unexpected finalize payload');
+    return _confirmedUploadedDocument(finalizeResponse.body);
+  }
+
+  Map<String, dynamic> _confirmedUploadedDocument(String body) {
+    dynamic payload;
+    try {
+      payload = jsonDecode(body);
+    } on FormatException {
+      throw TransientRemoteException('Document upload confirmation malformed');
     }
-    return document;
+    final data = payload is Map ? payload['data'] : null;
+    final document = data is Map ? data['document'] : null;
+    if (payload is! Map ||
+        payload['success'] != true ||
+        document is! Map ||
+        document['remotePath'] is! String ||
+        (document['remotePath'] as String).trim().isEmpty ||
+        document['publicUrl'] is! String ||
+        (document['publicUrl'] as String).trim().isEmpty) {
+      // A 2xx alone does not prove that a usable remote file was recorded.
+      // Keep the same queued upload and local revision available for retry.
+      throw TransientRemoteException('Document upload confirmation incomplete');
+    }
+    return document.cast<String, dynamic>();
   }
 
   /// Supprime un document côté serveur. [remoteDocumentId] est le
