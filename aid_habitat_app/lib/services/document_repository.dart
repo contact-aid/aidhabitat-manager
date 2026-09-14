@@ -946,9 +946,9 @@ class DocumentRepository {
             annotationSourcePath:
                 mimeType == 'application/pdf' && preservePdfSidecars
                 ? annotationSourcePath ??
-                    await resolveDocumentStoragePath(
-                      snapshot['local_file_path'] as String? ?? '',
-                    )
+                      await resolveDocumentStoragePath(
+                        snapshot['local_file_path'] as String? ?? '',
+                      )
                 : null,
           );
     final random = Random.secure();
@@ -1579,6 +1579,29 @@ class DocumentRepository {
             limit: 1,
           );
           if (pending.isNotEmpty) continue;
+
+          final retiredRows = await txn.query(
+            'kv_store',
+            where: 'key = ?',
+            whereArgs: ['document_retired_content:${existing['local_id']}'],
+            limit: 1,
+          );
+          if (retiredRows.isNotEmpty) {
+            final retired =
+                (jsonDecode(retiredRows.single['value'] as String) as List)
+                    .cast<String>();
+            final incomingIdentity = (remotePath ?? '').isNotEmpty
+                ? remotePath
+                : publicUrl;
+            final currentIdentity =
+                (existing['remote_file_path'] as String? ?? '').isNotEmpty
+                ? existing['remote_file_path']
+                : existing['remote_public_url'];
+            if (incomingIdentity != currentIdentity &&
+                retired.contains(incomingIdentity)) {
+              continue;
+            }
+          }
 
           final versions = await txn.query(
             'kv_store',

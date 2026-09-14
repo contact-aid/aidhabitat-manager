@@ -7,6 +7,7 @@ import 'package:aid_habitat_app/components/doc_thumbnails.dart';
 import 'package:aid_habitat_app/services/document_repository.dart';
 import 'package:aid_habitat_app/services/document_revision_store.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
+import 'package:aid_habitat_app/services/sync_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -273,6 +274,66 @@ void main() {
         remote(revision: 'v1', timestamp: first),
       ]);
       expect((await row())['remote_file_path'], url('v2'));
+    },
+  );
+
+  for (final timestamp in [null, first, third]) {
+    test(
+      'acknowledged upload rejects superseded content ($timestamp)',
+      () async {
+        await operation('running');
+        final sync = SyncRepository.forTesting(
+          databaseProvider: () async => db,
+        );
+        await sync.storeDocumentRemoteData(
+          operationId: 'op',
+          documentLocalId: 'doc',
+          remotePath: url('v2'),
+          publicUrl: url('v2'),
+        );
+        await sync.markCompleted(
+          operationId: 'op',
+          entityType: 'document',
+          entityLocalId: 'doc',
+        );
+        repository = makeRepository();
+        // No prior pull/version marker, as with an imported document.
+        await repository.mergeRemoteDocuments('patient', [
+          remote(revision: 'v1', timestamp: timestamp),
+        ]);
+        expect((await row())['remote_file_path'], url('v2'));
+        expect((await row())['local_file_path'], original.path);
+        expect((await row())['sync_state'], 'synced');
+        // A genuinely new immutable content path must still be accepted.
+        await repository.mergeRemoteDocuments('patient', [
+          remote(revision: 'v3', timestamp: third),
+        ]);
+        expect((await row())['remote_file_path'], url('v3'));
+      },
+    );
+  }
+
+  test(
+    'upload binding rolls back when retired marker cannot be stored',
+    () async {
+      await operation('running');
+      await db.execute("""
+      CREATE TRIGGER reject_retired BEFORE INSERT ON kv_store
+      WHEN NEW.key LIKE 'document_retired_content:%'
+      BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END
+    """);
+      final sync = SyncRepository.forTesting(databaseProvider: () async => db);
+      await expectLater(
+        sync.storeDocumentRemoteData(
+          operationId: 'op',
+          documentLocalId: 'doc',
+          remotePath: url('v2'),
+          publicUrl: url('v2'),
+        ),
+        throwsA(isA<DatabaseException>()),
+      );
+      expect((await row())['remote_file_path'], url('v1'));
+      expect((await db.query('sync_operations')).single['status'], 'running');
     },
   );
 

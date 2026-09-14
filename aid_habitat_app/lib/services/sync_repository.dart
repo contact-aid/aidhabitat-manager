@@ -1005,35 +1005,73 @@ class SyncRepository {
     required String publicUrl,
   }) async {
     final db = await _database.database;
-    await db.update(
-      'documents',
-      {
-        'remote_file_path': remotePath,
-        'remote_public_url': publicUrl,
+    await db.transaction((txn) async {
+      final previous = await txn.query(
+        'documents',
+        columns: ['remote_file_path', 'remote_public_url'],
+        where: 'local_id = ?',
+        whereArgs: [documentLocalId],
+        limit: 1,
+      );
+      final changed = await txn.update(
+        'documents',
+        {
+          'remote_file_path': remotePath,
+          'remote_public_url': publicUrl,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where:
+            'local_id = ? AND pending_delete = 0 '
+            'AND EXISTS (SELECT 1 FROM sync_operations '
+            'WHERE id = ? AND entity_type = ? AND entity_local_id = ? '
+            'AND operation_type = ? AND status = ?) '
+            'AND NOT EXISTS (SELECT 1 FROM sync_operations '
+            'WHERE id != ? AND entity_type = ? AND entity_local_id = ? '
+            'AND operation_type = ? AND status != ?)',
+        whereArgs: [
+          documentLocalId,
+          operationId,
+          'document',
+          documentLocalId,
+          'upload_file',
+          SyncOperationStatus.running.name,
+          operationId,
+          'document',
+          documentLocalId,
+          'upload_file',
+          SyncOperationStatus.completed.name,
+        ],
+      );
+      if (changed == 0 || previous.isEmpty) return;
+      final oldPath = previous.single['remote_file_path'] as String?;
+      final oldUrl = previous.single['remote_public_url'] as String?;
+      final retired = <String>{
+        if (oldPath != null && oldPath.isNotEmpty && oldPath != remotePath)
+          oldPath,
+        if (oldUrl != null && oldUrl.isNotEmpty && oldUrl != publicUrl) oldUrl,
+      };
+      if (retired.isEmpty) return;
+      // Content URLs are immutable. Retain replaced identities atomically with
+      // the ACK so delayed pulls cannot reinstall them after the queue completes.
+      final key = 'document_retired_content:$documentLocalId';
+      final markers = await txn.query(
+        'kv_store',
+        where: 'key = ?',
+        whereArgs: [key],
+        limit: 1,
+      );
+      if (markers.isNotEmpty) {
+        retired.addAll(
+          (jsonDecode(markers.single['value'] as String) as List)
+              .cast<String>(),
+        );
+      }
+      await txn.insert('kv_store', {
+        'key': key,
+        'value': jsonEncode(retired.toList()),
         'updated_at': DateTime.now().toIso8601String(),
-      },
-      where:
-          'local_id = ? AND pending_delete = 0 '
-          'AND EXISTS (SELECT 1 FROM sync_operations '
-          'WHERE id = ? AND entity_type = ? AND entity_local_id = ? '
-          'AND operation_type = ? AND status = ?) '
-          'AND NOT EXISTS (SELECT 1 FROM sync_operations '
-          'WHERE id != ? AND entity_type = ? AND entity_local_id = ? '
-          'AND operation_type = ? AND status != ?)',
-      whereArgs: [
-        documentLocalId,
-        operationId,
-        'document',
-        documentLocalId,
-        'upload_file',
-        SyncOperationStatus.running.name,
-        operationId,
-        'document',
-        documentLocalId,
-        'upload_file',
-        SyncOperationStatus.completed.name,
-      ],
-    );
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
   }
 
   Future<void> storeNotePageRemoteData({

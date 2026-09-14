@@ -3072,9 +3072,13 @@ class _PreviewScreenState extends State<DocumentPreview> {
       );
       if (bytes == null || !mounted) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Export impossible. Vos modifications restent ouvertes.'),
-          ));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Export impossible. Vos modifications restent ouvertes.',
+              ),
+            ),
+          );
         }
         return;
       }
@@ -5108,8 +5112,8 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   /// Export l'image + l'annotation aplatie en PNG (bytes).
   Future<Uint8List?> exportFlatPng({int quarterTurns = 0}) async {
     try {
-      final source = widget.imageBytes ??
-          await File(widget.imagePath!).readAsBytes();
+      final source =
+          widget.imageBytes ?? await File(widget.imagePath!).readAsBytes();
       return await exportDocumentImage(
         source: source,
         viewport: _canvasSize,
