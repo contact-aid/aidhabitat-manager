@@ -410,7 +410,7 @@ class NocodbApiClient {
   /// `*_rooms_json`) can be persisted directly into SQLite without being
   /// filtered through the Dossier / Patient / Housing model shape.
   Future<List<Map<String, dynamic>>> fetchDossierPayloads() async {
-    if (!AppConfig.hasRemoteConfig) return const [];
+    if (!AppConfig.hasRemoteConfig) throw StateError('Remote config missing');
 
     final response = await _client
         .get(Uri.parse('$_baseUrl/api/dossiers'), headers: _headers)
@@ -424,8 +424,10 @@ class NocodbApiClient {
     if (payload is! List) {
       throw Exception('Unexpected dossiers payload');
     }
-
-    return payload.whereType<Map<String, dynamic>>().toList();
+    if (payload.any((item) => item is! Map<String, dynamic>)) {
+      throw Exception('Unexpected dossier entry');
+    }
+    return payload.cast<Map<String, dynamic>>();
   }
 
   /// Create a new beneficiary on the server. The server automatically creates

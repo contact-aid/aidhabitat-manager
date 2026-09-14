@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 import '../models/types.dart';
+import '../models/dossier_refresh_phase.dart';
 import '../models/visit_report_categories.dart';
 import 'access_members_repository.dart';
 import 'auth_service.dart';
@@ -48,6 +49,10 @@ class DataService {
   /// disponibles dans SQLite. Les préchargements VAD, notes et référentiels
   /// peuvent continuer ensuite sans retarder le dashboard.
   Stream<void> get onDossierRecordsUpdated => _dossierRecordsController.stream;
+  final _dossierRefreshController =
+      StreamController<DossierRefreshPhase>.broadcast(sync: true);
+  Stream<DossierRefreshPhase> get onDossierRefresh =>
+      _dossierRefreshController.stream;
 
   Future<void> initialize() async {
     await _dossierRepository.initialize();
@@ -950,6 +955,11 @@ class DataService {
   }
 
   Future<bool> refreshWorkspaceFromRemote() async {
+    final session = SyncSessionScope.current ?? SyncSessionScope();
+    var recordsReady = false;
+    if (session.isCurrent) {
+      _dossierRefreshController.add(DossierRefreshPhase.loading);
+    }
     try {
       // Use the raw-payload path so ALL server-returned fields (including
       // those with no Dart model representation — cheminement_*, rooms_json,
@@ -958,9 +968,14 @@ class DataService {
       // mergeRemoteDossierPayloads préserve aussi les colonnes réellement
       // locales que le serveur ne connaît pas.
       final rawPayloads = await _nocodbApiClient.fetchDossierPayloads();
-      if (rawPayloads.isEmpty) return false;
-      await _dossierRepository.mergeRemoteDossierPayloads(rawPayloads);
+      session.check();
+      if (rawPayloads.isNotEmpty) {
+        await _dossierRepository.mergeRemoteDossierPayloads(rawPayloads);
+      }
+      session.check();
+      recordsReady = true;
       _dossierRecordsController.add(null);
+      _dossierRefreshController.add(DossierRefreshPhase.ready);
       // Les données globales doivent être terminées AVANT que le
       // SyncEngine annonce la fin du pull. L'ancien fire-and-forget
       // pouvait laisser Bibliothèque et Caisses vides après une
@@ -998,6 +1013,9 @@ class DataService {
       _nocodbApiClient.fetchAnahStatus().catchError((_) => <String, dynamic>{});
       return true;
     } catch (e) {
+      if (!recordsReady && session.isCurrent) {
+        _dossierRefreshController.add(DossierRefreshPhase.failed);
+      }
       // Avant : `catch (_) { return false; }` → impossible de diagnostiquer
       // un état "pages vides" causé par 401 / 500 / timeout serveur. On
       // logue désormais l'erreur (visible dans `flutter run`) tout en

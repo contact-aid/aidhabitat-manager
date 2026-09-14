@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../components/feedback_tab.dart';
+import '../components/dossier_loading_status.dart';
+import '../models/dossier_refresh_phase.dart';
 import '../components/report_generation_overlay.dart';
 import '../components/sidebar.dart';
 import '../components/soft_transitions.dart';
@@ -49,6 +51,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   late final SyncEngine _syncEngine;
   StreamSubscription<SyncEngineState>? _syncSubscription;
   StreamSubscription<void>? _dossierRecordsSubscription;
+  StreamSubscription<DossierRefreshPhase>? _dossierRefreshSubscription;
+  DossierRefreshPhase _dossierRefreshPhase = DossierRefreshPhase.loading;
+  int _dossierReadGeneration = 0;
+  bool _remoteDossierResponseReady = false;
   StreamSubscription<bool>? _connectivitySubscription;
 
   String _activeView = 'dashboard';
@@ -101,29 +107,22 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _connectivitySubscription = connectivity.offlineStream.listen((offline) {
       if (mounted) setState(() => _isOffline = offline);
     });
-    // Préchargement parallèle de TOUTES les données du workspace dès
-    // l'arrivée sur l'écran principal — sans bloquer le rendu. Sans ça,
-    // chaque écran (Bibliothèque, Caisses de retraite, …) faisait son
-    // propre fetch à sa première ouverture après login → l'user voyait
-    // une grille vide pendant 1-3s sur iPad PWA.
-    //
-    // Maintenant : tout fetch en parallèle pendant que l'user regarde
-    // le dashboard. Quand il navigue vers Bibliothèque ou Caisses, la
-    // SQLite locale est déjà chaude → rendu instantané depuis le
-    // cache, et le refresh remote interne au screen est un no-op (les
-    // données sont déjà mergées).
-    //
-    // Ces appels sont best-effort : ils échouent silencieusement si on
-    // est offline, et chaque écran a son propre fallback offline-first
-    // sur le cache SQLite de toute façon.
+    _dossierRefreshSubscription = _dataService.onDossierRefresh.listen((
+      phase,
+    ) async {
+      if (!mounted) return;
+      _remoteDossierResponseReady = phase == DossierRefreshPhase.ready;
+      if (phase == DossierRefreshPhase.ready) {
+        await _refreshDossiers();
+        if (!mounted) return;
+        unawaited(ReferencesService().ensureLoaded());
+      } else {
+        setState(() => _dossierRefreshPhase = phase);
+      }
+    });
+    // The workspace refresh warms catalogues after dossier records arrive.
+    // Do not compete with that first request using duplicate startup fetches.
     // ignore: discarded_futures
-    ReferencesService().ensureLoaded();
-    // ignore: discarded_futures
-    _dataService.refreshWikiItemsFromRemote();
-    // ignore: discarded_futures
-    _dataService.refreshRetirementFundsFromRemote();
-    // ignore: discarded_futures
-    _dataService.refreshPrincipalRetirementFundsFromRemote();
     _loadData();
   }
 
@@ -132,6 +131,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _syncSubscription?.cancel();
     _dossierRecordsSubscription?.cancel();
+    _dossierRefreshSubscription?.cancel();
     _connectivitySubscription?.cancel();
     // SyncEngine is a process-lifetime singleton — do not dispose it with the
     // screen, or later screens will lose the stream and the engine.
@@ -184,40 +184,56 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _refreshDossiers() async {
-    final dossiers = _authService.filterDossiersForUser(
-      await _dataService.fetchDossiers(),
-      widget.currentUser,
-    );
-    if (!mounted) return;
-    // Keep _selectedDossier in sync with the refreshed list so any edit
-    // done in the dossier card (ex: numberPeople, firstName, city…) is
-    // immediately visible when the user opens the visit report.
-    Dossier? refreshedSelected = _selectedDossier;
-    if (_selectedDossier != null) {
-      try {
-        refreshedSelected = dossiers.firstWhere(
-          (d) => d.id == _selectedDossier!.id,
-        );
-      } catch (_) {
-        // Not in list anymore (deleted?) — keep the last snapshot.
+  Future<bool> _refreshDossiers() async {
+    final generation = ++_dossierReadGeneration;
+    try {
+      final dossiers = _authService.filterDossiersForUser(
+        await _dataService.fetchDossiers(),
+        widget.currentUser,
+      );
+      if (!mounted || generation != _dossierReadGeneration) return false;
+      // Keep _selectedDossier in sync with the refreshed list so any edit
+      // done in the dossier card (ex: numberPeople, firstName, city…) is
+      // immediately visible when the user opens the visit report.
+      Dossier? refreshedSelected = _selectedDossier;
+      if (_selectedDossier != null) {
+        try {
+          refreshedSelected = dossiers.firstWhere(
+            (d) => d.id == _selectedDossier!.id,
+          );
+        } catch (_) {
+          // Not in list anymore (deleted?) — keep the last snapshot.
+        }
       }
+      setState(() {
+        _dossiers = dossiers;
+        _selectedDossier = refreshedSelected;
+        _isLoading = false;
+        if (_remoteDossierResponseReady) {
+          _dossierRefreshPhase = DossierRefreshPhase.ready;
+        }
+      });
+      return true;
+    } catch (_) {
+      if (mounted && generation == _dossierReadGeneration) {
+        setState(() {
+          _isLoading = false;
+          _dossierRefreshPhase = DossierRefreshPhase.failed;
+        });
+      }
+      return false;
     }
-    setState(() {
-      _dossiers = dossiers;
-      _selectedDossier = refreshedSelected;
-    });
   }
 
   Future<void> _loadData() async {
-    final dossiers = _authService.filterDossiersForUser(
-      await _dataService.fetchDossiers(),
-      widget.currentUser,
-    );
-    final pendingCount = await _dataService.countPendingSyncOperations();
+    await _refreshDossiers();
+    if (!mounted) return;
+    final pendingCount = await _dataService
+        .countPendingSyncOperations()
+        .catchError((_) => 0);
+    if (!mounted) return;
     if (mounted) {
       setState(() {
-        _dossiers = dossiers;
         _pendingSyncCount = pendingCount;
         _isLoading = false;
       });
@@ -669,6 +685,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildContent() {
+    if ((_activeView == 'dashboard' || _activeView == 'dossiers') &&
+        needsDossierLoadingStatus(
+          hasDossiers: _dossiers.isNotEmpty,
+          phase: _dossierRefreshPhase,
+        )) {
+      return DossierLoadingStatus(
+        offline: _isOffline,
+        failed:
+            _dossierRefreshPhase == DossierRefreshPhase.failed ||
+            _lastSyncError != null,
+        onRetry: _handleSyncNow,
+      );
+    }
     if (_activeView == 'dossier_detail' && _selectedDossier != null) {
       return DossierScreen(
         dossier: _selectedDossier!,
