@@ -13,6 +13,7 @@ import 'document_file_naming.dart';
 import 'document_repository.dart';
 import 'dossier_repository.dart';
 import 'local_database.dart';
+import 'document_storage_path.dart';
 import 'wiki_sync_commit.dart';
 import 'visit_recommendations_wiki_remap.dart';
 import 'nocodb_api_client.dart';
@@ -1322,7 +1323,7 @@ class NocodbSyncService {
     List<int>? bytes;
 
     if (localPath != null && localPath.isNotEmpty) {
-      file = File(localPath);
+      file = File(await resolveDocumentStoragePath(localPath));
       if (!await file.exists()) {
         throw Exception('Fichier local introuvable: $localPath');
       }

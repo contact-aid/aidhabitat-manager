@@ -181,6 +181,10 @@ void main() {
         isFalse,
       );
       final local = baseline.copyWith(localPath: '/revision/v1');
+      final web = baseline.copyWith(dataUrl: 'data:application/pdf;base64,QQ==');
+      expect(samePdfEditingRevision(web, web.copyWith(url: '/ack')), isTrue);
+      expect(samePdfEditingRevision(web,
+        web.copyWith(dataUrl: 'data:application/pdf;base64,Qg==')), isFalse);
       expect(
         samePdfEditingRevision(local, local.copyWith(url: '/uploaded/v1')),
         isTrue,

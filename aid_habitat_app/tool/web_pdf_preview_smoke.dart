@@ -22,6 +22,7 @@ Future<void> main() async {
     ..hidden = true;
   html.document.body!.append(signal);
   try {
+    final imageMode = Uri.base.queryParameters['image'] == '1';
     final db = await databaseFactoryFfiWebNoWebWorker.openDatabase(
       'web_pdf_smoke.sqlite',
     );
@@ -37,7 +38,12 @@ Future<void> main() async {
         ),
       );
     }
-    final original = await pdf.save();
+    final photo = img.Image(width: 480, height: 320);
+    img.fill(photo, color: img.ColorRgb8(240, 210, 10));
+    img.fillRect(photo, x1: 0, y1: 0, x2: 99, y2: 99,
+      color: img.ColorRgb8(255, 0, 0));
+    final original = imageMode ? img.encodePng(photo) : await pdf.save();
+    final mime = imageMode ? 'image/png' : 'application/pdf';
     final png = img.Image(width: 600, height: 400, numChannels: 4);
     img.fillRect(
       png,
@@ -54,13 +60,13 @@ Future<void> main() async {
       'local_id': 'smoke-pdf',
       'patient_local_id': 'synthetic-patient',
       'title': 'Devis test',
-      'file_name': 'devis test.pdf',
-      'file_ext': 'pdf',
-      'mime_type': 'application/pdf',
+      'file_name': imageMode ? 'image test.png' : 'devis test.pdf',
+      'file_ext': imageMode ? 'png' : 'pdf',
+      'mime_type': mime,
       'tags_json': '[]',
       'local_file_data_url':
-          'data:application/pdf;base64,${base64Encode(original)}',
-      'annotations_json': overlays,
+          'data:$mime;base64,${base64Encode(original)}',
+      'annotations_json': imageMode ? null : overlays,
       'created_at': '2026-09-09T10:00:00Z',
       'updated_at': '2026-09-09T10:00:00Z',
       'sync_state': 'synced',
@@ -69,6 +75,9 @@ Future<void> main() async {
     var downloads = 0;
     Future<void> report() async {
       final current = (await repository.fetchDocument('smoke-pdf'))!;
+      final decoded = imageMode
+          ? img.decodePng(base64Decode(current.dataUrl!.split(',').last))
+          : null;
       signal.text = jsonEncode({
         'ready': true,
         'saves': saves,
@@ -76,6 +85,7 @@ Future<void> main() async {
         'dataUrl': current.dataUrl,
         'annotations': current.annotationsJson,
         'operations': (await db.query('sync_operations')).length,
+        if (decoded != null) 'dimensions': [decoded.width, decoded.height],
       });
     }
 
@@ -93,10 +103,13 @@ Future<void> main() async {
       await db.execute('DROP TRIGGER fail_pdf');
       signal.attributes['data-retry-ready'] = 'true';
     });
-    runApp(
+    var generation = 0;
+    Future<void> openPreview() async {
+      runApp(
       MaterialApp(
         home: Scaffold(
           body: DocumentPreview(
+            key: ValueKey(generation++),
             doc: (await repository.fetchDocument('smoke-pdf'))!,
             repository: repository,
             onDelete: () {},
@@ -108,7 +121,13 @@ Future<void> main() async {
           ),
         ),
       ),
-    );
+      );
+    }
+    html.document.on['smoke-reopen'].listen((_) async {
+      await openPreview();
+      signal.attributes['data-generation'] = '$generation';
+    });
+    await openPreview();
     await report();
   } catch (error, stack) {
     signal.text = jsonEncode({'error': '$error', 'stack': '$stack'});

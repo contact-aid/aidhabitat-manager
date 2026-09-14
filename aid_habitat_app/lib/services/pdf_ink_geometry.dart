@@ -1,10 +1,16 @@
 import 'dart:ui';
 import '../models/types.dart';
+import 'document_storage_path.dart';
 
 bool samePdfEditingRevision(DocItem baseline, DocItem current) {
   if (baseline.id != current.id) return false;
   if ((baseline.localPath ?? '').isNotEmpty) {
-    return baseline.localPath == current.localPath;
+    final key = documentStorageKey(baseline.localPath!);
+    return baseline.localPath == current.localPath ||
+        (key != null && key == documentStorageKey(current.localPath ?? ''));
+  }
+  if ((baseline.dataUrl ?? '').isNotEmpty) {
+    return baseline.dataUrl == current.dataUrl;
   }
   return baseline.url == current.url && baseline.dataUrl == current.dataUrl;
 }

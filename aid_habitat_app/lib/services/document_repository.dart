@@ -18,6 +18,7 @@ import 'media_cache_service.dart';
 import 'native_file_protection.dart';
 import 'offline_vault.dart';
 import 'pdf_ink_geometry.dart';
+import 'document_storage_path.dart';
 import 'sync_engine.dart';
 
 @visibleForTesting
@@ -944,7 +945,10 @@ class DocumentRepository {
             sourceFile: sourceFile,
             annotationSourcePath:
                 mimeType == 'application/pdf' && preservePdfSidecars
-                ? annotationSourcePath ?? snapshot['local_file_path'] as String?
+                ? annotationSourcePath ??
+                    await resolveDocumentStoragePath(
+                      snapshot['local_file_path'] as String? ?? '',
+                    )
                 : null,
           );
     final random = Random.secure();
@@ -970,6 +974,7 @@ class DocumentRepository {
           current['local_file_data_url'] != snapshot['local_file_data_url'] ||
           current['patient_local_id'] != snapshot['patient_local_id'] ||
           ((snapshot['local_file_path'] as String? ?? '').isEmpty &&
+              (snapshot['local_file_data_url'] as String? ?? '').isEmpty &&
               (current['remote_file_path'] != snapshot['remote_file_path'] ||
                   current['remote_public_url'] !=
                       snapshot['remote_public_url'])) ||
@@ -1877,8 +1882,9 @@ class DocumentRepository {
     final annotationsJson = await OfflineVault.instance.openNullableString(
       row['annotations_json'] as String?,
     );
-    final localPath = row['local_file_path'] as String?;
+    var localPath = row['local_file_path'] as String?;
     if (!kIsWeb && localPath != null && localPath.trim().isNotEmpty) {
+      localPath = await resolveDocumentStoragePath(localPath);
       await NativeFileProtection.instance.protectPath(localPath);
     }
 

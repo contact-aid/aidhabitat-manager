@@ -7,7 +7,6 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
@@ -31,7 +30,7 @@ import '../models/types.dart';
 import '../models/visit_report_categories.dart';
 import '../services/file_drop_listener.dart' show DroppedFile;
 import '../services/image_compressor.dart';
-import '../services/image_rotation_worker.dart';
+import '../services/document_image_export.dart';
 import '../services/web_file_picker.dart';
 import '../services/web_file_saver.dart';
 import '../services/app_config.dart';
@@ -2908,12 +2907,16 @@ class _PreviewScreenState extends State<DocumentPreview> {
     if (source == null || source.isEmpty) {
       throw StateError('fichier indisponible');
     }
-    Uint8List imageSource = source;
     final annotator = _annotatorKey.currentState;
-    if (annotator != null && annotator.hasVisibleStrokes) {
-      imageSource = await annotator.exportFlatPng() ?? source;
-    }
-    final bytes = await rotateImageToPng(imageSource, delta);
+    final bytes = annotator != null
+        ? await annotator.exportFlatPng(quarterTurns: delta)
+        : await exportDocumentImage(
+            source: source,
+            viewport: const Size(1, 1),
+            paintInk: (_, _) {},
+            quarterTurns: delta,
+          );
+    if (bytes == null) throw StateError('Export image impossible');
     final originalName = publicDocumentFileName(
       storedName: widget.doc.name,
       title: widget.doc.title,
@@ -2983,11 +2986,10 @@ class _PreviewScreenState extends State<DocumentPreview> {
   Future<void> _reuploadFlattenedImage() async {
     final annotator = _annotatorKey.currentState;
     if (annotator == null) throw StateError('annotations indisponibles');
-    var bytes = await annotator.exportFlatPng();
+    final bytes = await annotator.exportFlatPng(
+      quarterTurns: _rotationQuarterTurns,
+    );
     if (bytes == null) throw StateError('export des annotations impossible');
-    if (_rotationQuarterTurns % 4 != 0) {
-      bytes = await rotateImageToPng(bytes, _rotationQuarterTurns);
-    }
     _contentBaseline = await _repository.enqueueAnnotatedReuploadBytes(
       documentId: widget.doc.id,
       bytes: bytes,
@@ -3065,9 +3067,15 @@ class _PreviewScreenState extends State<DocumentPreview> {
     // download path.
     final annotator = _annotatorKey.currentState;
     if (widget.doc.type == 'image' && annotator != null) {
-      final bytes = await annotator.exportFlatPng();
+      final bytes = await annotator.exportFlatPng(
+        quarterTurns: _rotationQuarterTurns,
+      );
       if (bytes == null || !mounted) {
-        widget.onDownload();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Export impossible. Vos modifications restent ouvertes.'),
+          ));
+        }
         return;
       }
       final publicName = publicDocumentFileName(
@@ -3233,7 +3241,7 @@ class _PreviewScreenState extends State<DocumentPreview> {
           ),
           const SizedBox(width: 8),
           _TopbarButton(
-            icon: Icons.rotate_90_degrees_cw_rounded,
+            icon: LucideIcons.rotateCw,
             tooltip: 'Pivoter le document de 90°',
             onPressed: _saving ? null : _rotateClockwise,
           ),
@@ -5098,60 +5106,16 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   }
 
   /// Export l'image + l'annotation aplatie en PNG (bytes).
-  bool get hasVisibleStrokes => _strokes.isNotEmpty;
-
-  Future<Uint8List?> exportFlatPng() async {
+  Future<Uint8List?> exportFlatPng({int quarterTurns = 0}) async {
     try {
-      final boundary =
-          _boundaryKey.currentContext?.findRenderObject()
-              as RenderRepaintBoundary?;
-      if (boundary == null) return null;
-      // Pixel ratio plus élevé → meilleure qualité.
-      final image = await boundary.toImage(pixelRatio: 2.5);
-      try {
-        // Exclude BoxFit.contain margins from the saved image. Keeping them
-        // would shrink the visible document on each subsequent rotation.
-        final source =
-            widget.imageBytes ?? await File(widget.imagePath!).readAsBytes();
-        final codec = await ui.instantiateImageCodec(source);
-        late Size sourceSize;
-        try {
-          final frame = await codec.getNextFrame();
-          sourceSize = Size(
-            frame.image.width.toDouble(),
-            frame.image.height.toDouble(),
-          );
-          frame.image.dispose();
-        } finally {
-          codec.dispose();
-        }
-        final bounds = Size(image.width.toDouble(), image.height.toDouble());
-        final fitted = applyBoxFit(
-          BoxFit.contain,
-          sourceSize,
-          bounds,
-        ).destination;
-        final crop = Alignment.center.inscribe(fitted, Offset.zero & bounds);
-        final recorder = ui.PictureRecorder();
-        final canvas = Canvas(recorder);
-        canvas.drawImageRect(image, crop, Offset.zero & fitted, Paint());
-        final picture = recorder.endRecording();
-        final cropped = await picture.toImage(
-          fitted.width.round(),
-          fitted.height.round(),
-        );
-        picture.dispose();
-        try {
-          final byteData = await cropped.toByteData(
-            format: ui.ImageByteFormat.png,
-          );
-          return byteData?.buffer.asUint8List();
-        } finally {
-          cropped.dispose();
-        }
-      } finally {
-        image.dispose();
-      }
+      final source = widget.imageBytes ??
+          await File(widget.imagePath!).readAsBytes();
+      return await exportDocumentImage(
+        source: source,
+        viewport: _canvasSize,
+        paintInk: _AnnotPainter(strokes: List.of(_strokes)).paint,
+        quarterTurns: quarterTurns,
+      );
     } catch (_) {
       return null;
     }

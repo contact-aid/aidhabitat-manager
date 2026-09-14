@@ -19,7 +19,7 @@ const server = http.createServer(async (request, response) => {
   } catch { response.writeHead(404).end(); }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const browser = await chromium.launch({ ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : { channel: 'chrome' }), headless: true });
 let page;
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
