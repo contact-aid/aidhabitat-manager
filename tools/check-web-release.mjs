@@ -4,6 +4,7 @@
 // Vérifie les fichiers indispensables Flutter web, soit depuis un dossier local
 // `build/web`, soit depuis une URL publique/staging.
 
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -11,7 +12,10 @@ import process from 'node:process';
 const args = process.argv.slice(2);
 
 const usage = () => {
-  console.error('Usage: node tools/check-web-release.mjs --dir <build/web> | --url <https://app.example.fr>');
+  console.error(
+    'Usage: node tools/check-web-release.mjs (--dir <build/web> | --url <https://app.example.fr>) '
+      + '[--expected-build-number <n>] [--expected-git-sha <40-char-sha>]',
+  );
   process.exit(1);
 };
 
@@ -23,6 +27,8 @@ const readArg = (name) => {
 
 const dir = readArg('--dir');
 const url = readArg('--url');
+const expectedBuildNumber = readArg('--expected-build-number');
+const expectedGitSha = readArg('--expected-git-sha').toLowerCase();
 
 if ((!dir && !url) || (dir && url)) usage();
 
@@ -82,11 +88,13 @@ async function checkBytes(assetPath, minBytes, label = assetPath) {
     const bytes = await fetchBytes(assetPath);
     if (bytes.length < minBytes) {
       failures.push(`${label}: trop petit (${bytes.length} octets)`);
-      return;
+      return null;
     }
     checked.push(label);
+    return bytes;
   } catch (error) {
     failures.push(`${label}: ${error.message}`);
+    return null;
   }
 }
 
@@ -173,16 +181,18 @@ await checkUnavailable('flutter_service_worker.js', 'flutter_service_worker.js')
 await checkUnavailable('manifest.json', 'manifest.json');
 await checkLiveSecurityHeaders();
 
+let servedVersion = null;
 await checkText('version.json', (text) => {
   try {
     const version = JSON.parse(text);
+    servedVersion = version;
     return typeof version.frameworkVersion === 'string' || typeof version.app_name === 'string';
   } catch {
     return false;
   }
 }, 'version.json');
 
-await Promise.all([
+const [mainDartBytes] = await Promise.all([
   checkBytes('main.dart.js', 500_000, 'main.dart.js'),
   checkBytes('flutter.js', 8_000, 'flutter.js'),
   checkBytes('sqlite3.wasm', 100_000, 'sqlite3.wasm'),
@@ -195,6 +205,45 @@ await Promise.all([
   checkBytes('icons/Icon-maskable-192.png', 1_000, 'icons/Icon-maskable-192.png'),
   checkBytes('icons/Icon-maskable-512.png', 1_000, 'icons/Icon-maskable-512.png'),
 ]);
+
+if (expectedBuildNumber) {
+  const actualBuildNumber = String(
+    servedVersion?.build_number ?? servedVersion?.buildNumber ?? '',
+  );
+  if (actualBuildNumber !== expectedBuildNumber) {
+    failures.push(`version.json: build ${actualBuildNumber || '(absent)'}, ${expectedBuildNumber} attendu`);
+  } else {
+    checked.push(`build-number-${expectedBuildNumber}`);
+  }
+}
+
+if (expectedGitSha) {
+  if (!/^[a-f0-9]{40}$/.test(expectedGitSha)) {
+    failures.push('expected-git-sha: SHA complet de 40 caractères hexadécimaux requis');
+  } else {
+    const releaseText = await checkText('release.json', () => true, 'release.json');
+    try {
+      const release = JSON.parse(releaseText);
+      const actualMainHash = mainDartBytes
+        ? createHash('sha256').update(mainDartBytes).digest('hex')
+        : '';
+      if (release.gitSha !== expectedGitSha) {
+        failures.push(`release.json: SHA ${release.gitSha || '(absent)'}, ${expectedGitSha} attendu`);
+      } else if (release.mainDartSha256 !== actualMainHash) {
+        failures.push('release.json: empreinte main.dart.js incohérente');
+      } else if (
+        expectedBuildNumber
+        && String(release.buildNumber ?? '') !== expectedBuildNumber
+      ) {
+        failures.push('release.json: numéro de build incohérent avec version.json');
+      } else {
+        checked.push(`git-sha-${expectedGitSha}`);
+      }
+    } catch {
+      failures.push('release.json: JSON invalide');
+    }
+  }
+}
 
 const indexWithoutComments = stripHtmlComments(indexHtml);
 if (

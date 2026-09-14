@@ -104,7 +104,10 @@ const checks = [
   {
     name: 'Flutter web workflow checks the generated PWA bundle',
     file: '.github/workflows/flutter-web-build.yml',
-    assert: (source) => source.includes('npm run release:web-check -- --dir aid_habitat_app/build/web'),
+    assert: (source) => (
+      source.includes('npm run release:web-check -- "${args[@]}"')
+      && source.includes('--expected-git-sha "${{ github.sha }}"')
+    ),
   },
   {
     name: 'Package exposes the live stack release check',

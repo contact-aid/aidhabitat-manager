@@ -1,16 +1,16 @@
 # ---------------------------------------------------------------------------
 # GitHub Actions — build & deploy du backend Express (API + génération PDF).
 #
-# Déclenché à chaque push sur `main` qui touche au code serveur. Build
-# l'image Docker via Dockerfile.api, push sur ghcr.io, puis trigger un
-# webhook Easypanel pour redéployer le service "aidhabitat-api".
+# Chaque push serveur valide et construit l'image sans la publier. Publication
+# et déploiement sont des décisions manuelles explicites : cela évite de
+# remplacer `latest` avant de découvrir qu'un prérequis de déploiement manque.
 #
 # Beaucoup plus rapide que le build web (pas de Flutter SDK à installer)
 # — typiquement ~1 min avec cache, ~3 min cold.
 #
 # Secrets requis (à configurer sur GitHub → repo → Settings → Secrets):
-#   - EASYPANEL_API_WEBHOOK : URL de webhook Easypanel pour redéployer
-#       le service "aidhabitat-api". Obligatoire pour ce workflow.
+#   - EASYPANEL_API_WEBHOOK : URL du webhook du service API réellement vérifié.
+#       Obligatoire uniquement quand `deploy_api=true`.
 # Variable optionnelle API_HEALTH_BASE_URL : origine HTTPS publique de l'API
 #   (sans identifiants, chemin ni query), par defaut https://api.aidhabitat.fr.
 # Le webhook accepte ne suffit pas : SHA actif attendu + readiness sont verifies.
@@ -37,16 +37,31 @@ on:
       - 'tools/api-health-version.test.mjs'
       - '.github/workflows/build-deploy-api.yml'
   workflow_dispatch:
+    inputs:
+      publish_image:
+        description: "Publish the validated API image to GHCR"
+        required: false
+        type: boolean
+        default: false
+      deploy_api:
+        description: "Trigger the verified Easypanel API webhook and verify the live SHA"
+        required: false
+        type: boolean
+        default: false
+      image_tag:
+        description: "Explicit GHCR channel; use latest only after confirming Easypanel follows it"
+        required: false
+        default: "candidate"
 
 concurrency:
   group: api-deploy
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-and-push:
+  validate-build-and-optional-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -80,7 +95,7 @@ jobs:
         run: npm run check:critical
 
       - name: Verify release safeguards
-        run: node --test tools/release-artifact-check.test.mjs tools/wait-api-readiness.test.mjs tools/api-health-version.test.mjs
+        run: node --test tools/release-artifact-check.test.mjs tools/publication-workflows.test.mjs tools/wait-api-readiness.test.mjs tools/api-health-version.test.mjs
 
       - name: Validate API health target
         env:
@@ -95,10 +110,36 @@ jobs:
             node --check "$f"
           done
 
+      - name: Validate publication decision
+        env:
+          PUBLISH_IMAGE: ${{ inputs.publish_image }}
+          DEPLOY_API: ${{ inputs.deploy_api }}
+          IMAGE_TAG: ${{ inputs.image_tag || 'candidate' }}
+        run: |
+          if ! [[ "$IMAGE_TAG" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]]; then
+            echo "::error::Invalid image_tag."
+            exit 1
+          fi
+          if [ "$DEPLOY_API" = "true" ] && [ "$PUBLISH_IMAGE" != "true" ]; then
+            echo "::error::deploy_api=true requires publish_image=true."
+            exit 1
+          fi
+
+      - name: Validate API deployment prerequisite
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_api }}
+        env:
+          EASYPANEL_WEBHOOK: ${{ secrets.EASYPANEL_API_WEBHOOK }}
+        run: |
+          if [ -z "$EASYPANEL_WEBHOOK" ]; then
+            echo "::error::Missing EASYPANEL_API_WEBHOOK; no image has been published."
+            exit 1
+          fi
+
       # --------------------------------------------------------------
       # 2. Login sur GitHub Container Registry (ghcr.io)
       # --------------------------------------------------------------
       - name: Login to GitHub Container Registry
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_image }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -117,11 +158,11 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/aidhabitat-api
           tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ inputs.image_tag || 'candidate' }}
+            type=sha,prefix=${{ inputs.image_tag || 'candidate' }}-,format=long
 
       # --------------------------------------------------------------
-      # 4. Build & push image Docker
+      # 4. Build the image; push only after an explicit manual decision.
       # --------------------------------------------------------------
       # Context = racine du repo (le Dockerfile.api a besoin de server/
       # + shared/ + package*.json). `.dockerignore` racine exclut
@@ -131,7 +172,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.api
-          push: true
+          push: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_image }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -143,17 +184,15 @@ jobs:
       # 5. Trigger redéploiement Easypanel
       # --------------------------------------------------------------
       - name: Trigger Easypanel redeploy
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_api }}
         env:
           EASYPANEL_WEBHOOK: ${{ secrets.EASYPANEL_API_WEBHOOK }}
         run: |
-          if [ -z "$EASYPANEL_WEBHOOK" ]; then
-            echo "::error::Missing EASYPANEL_API_WEBHOOK; refusing to report an undeployed API as successful."
-            exit 1
-          fi
           echo "Triggering Easypanel redeploy…"
           node tools/release-artifact-check.mjs post-webhook EASYPANEL_WEBHOOK
 
       - name: Wait for expected API version and readiness
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_api }}
         timeout-minutes: 6
         env:
           API_HEALTH_BASE_URL: ${{ vars.API_HEALTH_BASE_URL || 'https://api.aidhabitat.fr' }}
@@ -166,10 +205,15 @@ jobs:
       # --------------------------------------------------------------
       - name: Summary
         run: |
-          echo "## API active version and readiness verified" >> $GITHUB_STEP_SUMMARY
+          echo "## API candidate" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Image: \`ghcr.io/${{ github.repository_owner }}/aidhabitat-api:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Tags: \`${{ steps.meta.outputs.tags }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Active SHA verified: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Readiness: HTTP 200 with matching SHA" >> $GITHUB_STEP_SUMMARY
+          echo "- Image publication requested: \`${{ inputs.publish_image }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- API deployment requested: \`${{ inputs.deploy_api }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.deploy_api }}" = "true" ]; then
+            echo "- Active SHA verified: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Readiness: HTTP 200 with matching SHA" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Active version: not changed or claimed by this run" >> $GITHUB_STEP_SUMMARY
+          fi
