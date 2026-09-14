@@ -56,6 +56,11 @@ import {
   validateSyncBatchPayload,
 } from './syncBatch.mjs';
 import { readAuthorizedDossierRecord } from './dossierReadQueries.mjs';
+import {
+  buildImplicitDossierFields,
+  canAccessDossierAssignment,
+  normalizeDossierAssignment,
+} from './dossierAssignments.mjs';
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
@@ -2244,14 +2249,12 @@ const createBlankDossierForBeneficiary = async ({ beneficiaryRecord, dossiers, l
     infoRecords: beneficiaryInfos,
   });
 
-  const created = await createRecord(TABLES.dossiers, {
-    uuid_source: crypto.randomUUID(),
-    patient_id: patientId,
-    beneficiaires_id: Number(beneficiaryRecord.id),
-    status: 'À visiter',
-    ergo_id: specialMemberProfile(DEFAULT_LEGACY_ERGO_EMAIL)?.displayName || 'Coralie',
-    created_at: new Date().toISOString(),
-  });
+  const created = await createRecord(TABLES.dossiers, buildImplicitDossierFields({
+    uuidSource: crypto.randomUUID(),
+    patientId,
+    beneficiaryRecordId: Number(beneficiaryRecord.id),
+    createdAt: new Date().toISOString(),
+  }));
 
   dossiers.push(created);
   return created;
@@ -2470,7 +2473,7 @@ const createVirtualDossier = (beneficiaryRecord, appBeneficiaryId, housingRecord
   id: `temp-${appBeneficiaryId}`,
   patient: mapPatient(beneficiaryRecord, appBeneficiaryId),
   status: 'À visiter',
-  ergoId: stringValue(field(dossierRecord, 'ergo_id')) || 'user',
+  ergoId: normalizeDossierAssignment(field(dossierRecord, 'ergo_id')),
   visitDate: field(dossierRecord, 'visit_date') || field(beneficiaryRecord, 'date_visite') || field(infoRecord, 'date_visite') || undefined,
   housing: mapHousing(housingRecord),
   medicalContext: mapMedicalContext(contextRecord),
@@ -2499,7 +2502,7 @@ const createDossier = (beneficiaryRecord, appBeneficiaryId, dossierRecord, housi
   id: field(dossierRecord, 'uuid_source'),
   patient: mapPatient(beneficiaryRecord, appBeneficiaryId),
   status: stringValue(field(dossierRecord, 'status')) || 'À visiter',
-  ergoId: stringValue(field(dossierRecord, 'ergo_id')) || 'E1',
+  ergoId: normalizeDossierAssignment(field(dossierRecord, 'ergo_id')),
   visitDate: field(dossierRecord, 'visit_date') || field(beneficiaryRecord, 'date_visite') || field(infoRecord, 'date_visite') || undefined,
   housing: mapHousing(housingRecord),
   medicalContext: mapMedicalContext(contextRecord),
@@ -3367,10 +3370,7 @@ const resolveRequestedErgoLabel = async (appUser, requestedErgoLabel) => {
 };
 
 const canAccessDossierRecord = (appUser, dossierRecord) => {
-  if (appUser?.role === 'ADMIN') return true;
-  const expectedErgo = stringValue(appUser?.ergoLabel).trim();
-  if (!expectedErgo) return false;
-  return stringValue(field(dossierRecord, 'ergo_id')).trim() === expectedErgo;
+  return canAccessDossierAssignment(appUser, field(dossierRecord, 'ergo_id'));
 };
 
 /**
@@ -3619,46 +3619,6 @@ const formatBeneficiaryDisplayName = (beneficiaryRecord) => {
   return [firstName, lastName].filter(Boolean).join(' ').trim();
 };
 
-const backfillLegacyDossierAssignments = async (dossiers) => {
-  const fallbackLabel = specialMemberProfile(DEFAULT_LEGACY_ERGO_EMAIL)?.displayName || 'Coralie';
-  const updates = dossiers
-    .filter((record) => {
-      const current = stringValue(field(record, 'ergo_id')).trim();
-      return current === '' || current === 'E1' || current === 'user';
-    })
-    .map((record) => ({ id: String(record.id), fields: { ergo_id: fallbackLabel } }));
-
-  if (updates.length === 0) return;
-
-  if (conditionalSyncEnabled) {
-    for (const update of updates) {
-      const target = dossiers.find(record => String(record.id) === update.id);
-      try {
-        await guardedMutation({ tableId: TABLES.dossiers, recordId: Number(update.id),
-          fields: update.fields, baseFields: { ergo_id: field(target, 'ergo_id') },
-          writeId: crypto.randomUUID() });
-        syncRecordFieldsLocally(target, update.fields);
-      } catch (error) {
-        if (error instanceof SyncMutationError && error.status === 409) continue;
-        throw error;
-      }
-    }
-    return;
-  }
-
-  for (let index = 0; index < updates.length; index += 10) {
-    await callNocoTool('updateRecords', {
-      tableId: TABLES.dossiers,
-      records: updates.slice(index, index + 10),
-    });
-  }
-
-  for (const update of updates) {
-    const target = dossiers.find((record) => String(record.id) === update.id);
-    syncRecordFieldsLocally(target, update.fields);
-  }
-};
-
 const getReferences = async (appUser) => {
   const [situations, dependances, porteGarage, portail, baremesAnah, ergos, etablissements, communes, epcis] = await Promise.all([
     queryAll(TABLES.situationProprietaire, { fields: FIELD_SETS.referencesLibelle }),
@@ -3721,7 +3681,6 @@ const getDossiersForApp = async (appUser) => {
   ]);
 
   await ensureDossiersForBeneficiaries({ beneficiaires, dossiers, logements, contextes, infosAdmin });
-  await backfillLegacyDossierAssignments(dossiers);
   await Promise.all([
     backfillChildDossierLinks({ tableId: TABLES.contexteDeVie, records: contextes, dossiers }),
     backfillChildDossierLinks({ tableId: TABLES.informationsAdministratives, records: infosAdmin, dossiers }),
@@ -3780,8 +3739,8 @@ const getDossiersForApp = async (appUser) => {
  * requête NocoDB → 5 fetches ciblés ramenant 1-3 rows chacun, ~1 s
  * total même cold.
  *
- * Skipper les backfills (`ensureDossiersForBeneficiaries`,
- * `backfillLegacyDossierAssignments`, `backfillChildDossierLinks`)
+ * Skipper les backfills (`ensureDossiersForBeneficiaries` et
+ * `backfillChildDossierLinks`)
  * est sûr ici car ils sont déjà exécutés par `getDossiersForApp` au
  * démarrage de l'app (premier `/api/dossiers`). Pour la génération
  * PDF, on suppose que la base est déjà cohérente.
@@ -3885,7 +3844,7 @@ const filterDossiersByScopes = (dossiers, appUser) => {
   const isWildcard = scopes.some(
     (s) => s.type === 'dossier_access' && s.value === '*',
   );
-  if (appUser.role === 'ADMIN' || isWildcard) return dossiers;
+  if (appUser.role === 'ADMIN') return dossiers;
 
   const norm = (s) => String(s || '').trim().toLowerCase();
   const dossierIds = new Set(
@@ -3898,7 +3857,11 @@ const filterDossiersByScopes = (dossiers, appUser) => {
 
   return dossiers.filter((dossier) => {
     const dossierId = norm(dossier.id);
-    const ergoId = norm(dossier.ergoId);
+    const ergoId = norm(normalizeDossierAssignment(dossier.ergoId));
+    // Legacy placeholders do not identify an owner. Keep them admin-only even
+    // when a non-admin account has a wildcard or an explicit dossier scope.
+    if (!ergoId) return false;
+    if (isWildcard) return true;
     if (dossierIds.has(dossierId) || dossierErgos.has(ergoId)) return true;
     if (dossierIds.size === 0 && dossierErgos.size === 0 && expectedErgo) {
       return ergoId === expectedErgo;
