@@ -23,6 +23,10 @@ import { getRetirementFundMeta, buildLogoDataUri } from './retirementFundsCatalo
 import { getPrincipalFundBranding } from './principalRetirementFundsCatalog.mjs';
 import { WIKI_FILTER_TAGS, WIKI_LIBRARY_SEED } from './wikiLibraryCatalog.mjs';
 import {
+  deleteWikiRecord,
+  persistWikiRecord,
+} from './wikiLibraryPersistence.mjs';
+import {
   buildPasswordCredential,
   parsePasswordCredential,
   verifyPasswordHash,
@@ -1972,6 +1976,67 @@ const ensureWikiTagsInNocodb = async (tagNames, existingTagRecords = null) => {
   }
 
   return { records, normalizedMap };
+};
+
+const WIKI_CLIENT_MUTATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
+
+const resolveWikiCreationId = (body) => {
+  const supplied = stringValue(body?.clientMutationId).trim();
+  if (!supplied) return crypto.randomUUID();
+  if (!WIKI_CLIENT_MUTATION_ID_PATTERN.test(supplied)) {
+    throw httpError(400, 'Identifiant de création bibliothèque invalide');
+  }
+  return supplied;
+};
+
+const wikiNocodbPayload = (item, primaryTagRecord) => {
+  const isDataUrl = String(item.imageUrl || '').startsWith('data:');
+  return {
+    uuid_source: item.id,
+    titre: item.title,
+    photos: isDataUrl ? '' : item.imageUrl,
+    photo_base64: isDataUrl ? item.imageUrl : '',
+    contenu: serializeWikiContent(item),
+    wiki_tags_id: primaryTagRecord ? Number(primaryTagRecord.id) : null,
+  };
+};
+
+const persistWikiItemInNocodb = async ({ operation, item }) => {
+  const [wikiRecords, initialTagRecords] = await Promise.all([
+    queryAll(TABLES.wiki, { fields: FIELD_SETS.wiki }),
+    queryAll(TABLES.wikiTags, { fields: FIELD_SETS.wikiTags }),
+  ]);
+  const { normalizedMap } = await ensureWikiTagsInNocodb(
+    WIKI_FILTER_TAGS,
+    initialTagRecords,
+  );
+  const primaryTag = stringValue(item.tags[0]).trim();
+  const primaryTagRecord = primaryTag
+    ? normalizedMap.get(primaryTag.toLowerCase())
+    : undefined;
+  const payload = wikiNocodbPayload(item, primaryTagRecord);
+  return persistWikiRecord({
+    operation,
+    itemId: item.id,
+    fields: payload,
+    initialRecords: wikiRecords,
+    readRecords: () => queryAll(TABLES.wiki, { fields: FIELD_SETS.wiki }),
+    createRecord: (fields) => createRecord(TABLES.wiki, fields),
+    updateRecord: (record, fields) => updateRecord(TABLES.wiki, record.id, fields),
+  });
+};
+
+const deleteWikiItemInNocodb = async (itemId) => {
+  const initialRecords = await queryAll(TABLES.wiki, { fields: FIELD_SETS.wiki });
+  return deleteWikiRecord({
+    itemId,
+    initialRecords,
+    readRecords: () => queryAll(TABLES.wiki, { fields: FIELD_SETS.wiki }),
+    deleteRecord: (record) => callNocoTool('deleteRecords', {
+      tableId: TABLES.wiki,
+      records: [{ id: String(record.id) }],
+    }),
+  });
 };
 
 const cleanupWikiTagsInNocodb = async (tagRecords, wikiRecords) => {
@@ -5125,7 +5190,9 @@ app.post('/api/wiki-library', requireAuth, async (req, res, next) => {
     }
 
     const item = normalizeWikiItemPayload({
-      id: crypto.randomUUID(),
+      // New clients persist this id in their local sync operation. Legacy
+      // clients may omit it and keep the historical server-generated UUID.
+      id: resolveWikiCreationId(req.body),
       title,
       description,
       imageUrl,
@@ -5135,38 +5202,17 @@ app.post('/api/wiki-library', requireAuth, async (req, res, next) => {
       updatedAt: now,
     });
 
-    store.items.unshift(item);
-    await writeWikiLibraryStore(store);
+    const persisted = await persistWikiItemInNocodb({
+      operation: 'create',
+      item,
+    });
+    const saved = mapWikiRecordToItem(persisted.record);
 
-    try {
-      const [wikiRecords, initialTagRecords] = await Promise.all([
-        queryAll(TABLES.wiki, { fields: FIELD_SETS.wiki }),
-        queryAll(TABLES.wikiTags, { fields: FIELD_SETS.wikiTags }),
-      ]);
-      const { normalizedMap } = await ensureWikiTagsInNocodb(WIKI_FILTER_TAGS, initialTagRecords);
-      const primaryTag = stringValue(item.tags[0]).trim();
-      const primaryTagRecord = primaryTag ? normalizedMap.get(primaryTag.toLowerCase()) : undefined;
-      const existing = wikiRecords.find((record) => stringValue(field(record, 'uuid_source')).trim() === item.id);
-      // Migration 2026-05-06 — l'image est en base64 dans
-      // `photo_base64`. La colonne `photos` legacy contenait une URL
-      // Blob — on la set à vide pour les nouvelles créations.
-      const isDataUrl = String(item.imageUrl || '').startsWith('data:');
-      const payload = {
-        uuid_source: item.id,
-        titre: item.title,
-        photos: isDataUrl ? '' : item.imageUrl,
-        photo_base64: isDataUrl ? item.imageUrl : '',
-        contenu: serializeWikiContent(item),
-        wiki_tags_id: primaryTagRecord ? Number(primaryTagRecord.id) : null,
-      };
-      if (existing) {
-        await updateRecord(TABLES.wiki, existing.id, payload);
-      } else {
-        await createRecord(TABLES.wiki, payload);
-      }
-    } catch (syncError) {
-      console.error('Wiki Noco sync failed on create', syncError);
-    }
+    // The filesystem is only a fallback cache. Mutate it after NocoDB has
+    // been confirmed so it can never manufacture a false success.
+    store.items = store.items.filter((entry) => String(entry.id) !== saved.id);
+    store.items.unshift(saved);
+    await writeWikiLibraryStore(store);
 
     // Invalide le cache module-scope (cf. loadWikiLibrary) — sinon les
     // lambdas chaudes continueraient à servir l'ancien set jusqu'à 60 s.
@@ -5176,7 +5222,7 @@ app.post('/api/wiki-library', requireAuth, async (req, res, next) => {
       success: true,
       error: null,
       data: {
-        item: mapWikiLibraryItem(item),
+        item: saved,
       },
     });
   } catch (error) {
@@ -5219,36 +5265,13 @@ app.put('/api/wiki-library/:itemId', requireAuth, async (req, res, next) => {
       updatedAt: new Date().toISOString(),
     });
 
-    store.items[index] = updated;
+    const persisted = await persistWikiItemInNocodb({
+      operation: 'update',
+      item: updated,
+    });
+    const saved = mapWikiRecordToItem(persisted.record);
+    store.items[index] = saved;
     await writeWikiLibraryStore(store);
-
-    try {
-      const [wikiRecords, initialTagRecords] = await Promise.all([
-        queryAll(TABLES.wiki, { fields: FIELD_SETS.wiki }),
-        queryAll(TABLES.wikiTags, { fields: FIELD_SETS.wikiTags }),
-      ]);
-      const { normalizedMap } = await ensureWikiTagsInNocodb(WIKI_FILTER_TAGS, initialTagRecords);
-      const primaryTag = stringValue(updated.tags[0]).trim();
-      const primaryTagRecord = primaryTag ? normalizedMap.get(primaryTag.toLowerCase()) : undefined;
-      const existing = wikiRecords.find((record) => stringValue(field(record, 'uuid_source')).trim() === updated.id);
-      // Migration 2026-05-06 — image en base64 dans `photo_base64`.
-      const isDataUrl = String(updated.imageUrl || '').startsWith('data:');
-      const payload = {
-        uuid_source: updated.id,
-        titre: updated.title,
-        photos: isDataUrl ? '' : updated.imageUrl,
-        photo_base64: isDataUrl ? updated.imageUrl : '',
-        contenu: serializeWikiContent(updated),
-        wiki_tags_id: primaryTagRecord ? Number(primaryTagRecord.id) : null,
-      };
-      if (existing) {
-        await updateRecord(TABLES.wiki, existing.id, payload);
-      } else {
-        await createRecord(TABLES.wiki, payload);
-      }
-    } catch (syncError) {
-      console.error('Wiki Noco sync failed on update', syncError);
-    }
 
     invalidateWikiLibraryCache();
 
@@ -5256,7 +5279,7 @@ app.put('/api/wiki-library/:itemId', requireAuth, async (req, res, next) => {
       success: true,
       error: null,
       data: {
-        item: mapWikiLibraryItem(updated),
+        item: saved,
       },
     });
   } catch (error) {
@@ -5267,26 +5290,11 @@ app.put('/api/wiki-library/:itemId', requireAuth, async (req, res, next) => {
 app.delete('/api/wiki-library/:itemId', requireAuth, async (req, res, next) => {
   try {
     const store = await readWikiLibraryStore();
-    const nextItems = store.items.filter((item) => String(item.id) !== String(req.params.itemId));
-    if (nextItems.length === store.items.length) {
-      res.status(404).json({ success: false, error: 'Element introuvable' });
-      return;
-    }
-    store.items = nextItems;
+    await deleteWikiItemInNocodb(String(req.params.itemId));
+    store.items = store.items.filter(
+      (item) => String(item.id) !== String(req.params.itemId),
+    );
     await writeWikiLibraryStore(store);
-
-    try {
-      const wikiRecords = await queryAll(TABLES.wiki, { fields: FIELD_SETS.wiki });
-      const existing = wikiRecords.find((record) => stringValue(field(record, 'uuid_source')).trim() === String(req.params.itemId));
-      if (existing) {
-        await callNocoTool('deleteRecords', {
-          tableId: TABLES.wiki,
-          records: [{ id: String(existing.id) }],
-        });
-      }
-    } catch (syncError) {
-      console.error('Wiki Noco sync failed on delete', syncError);
-    }
 
     invalidateWikiLibraryCache();
 

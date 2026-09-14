@@ -1846,6 +1846,7 @@ class NocodbApiClient {
   }
 
   Future<WikiItem> createWikiItem({
+    required String clientMutationId,
     required String title,
     required String description,
     required String category,
@@ -1858,6 +1859,7 @@ class NocodbApiClient {
     }
 
     final body = <String, dynamic>{
+      'clientMutationId': clientMutationId,
       'title': title,
       'description': description,
       'category': category,
@@ -1866,13 +1868,16 @@ class NocodbApiClient {
     if (imageUrl.isNotEmpty) body['imageUrl'] = imageUrl;
     if (imageDataUrl.isNotEmpty) body['imageDataUrl'] = imageDataUrl;
 
-    final response = await _client
-        .post(
-          Uri.parse('$_baseUrl/api/wiki-library'),
-          headers: _headers,
-          body: jsonEncode(body),
-        )
-        .timeout(_defaultTimeout);
+    final response = await _runWithTransientGuard(
+      'Remote wiki item create',
+      () => _client
+          .post(
+            Uri.parse('$_baseUrl/api/wiki-library'),
+            headers: _headers,
+            body: jsonEncode(body),
+          )
+          .timeout(_defaultTimeout),
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception(
@@ -2018,13 +2023,16 @@ class NocodbApiClient {
       body['imageDataUrl'] = imageDataUrl;
     }
 
-    final response = await _client
-        .put(
-          Uri.parse('$_baseUrl/api/wiki-library/$itemId'),
-          headers: _headers,
-          body: jsonEncode(body),
-        )
-        .timeout(_defaultTimeout);
+    final response = await _runWithTransientGuard(
+      'Remote wiki item update',
+      () => _client
+          .put(
+            Uri.parse('$_baseUrl/api/wiki-library/${_pathSegment(itemId)}'),
+            headers: _headers,
+            body: jsonEncode(body),
+          )
+          .timeout(_defaultTimeout),
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception(

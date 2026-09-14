@@ -1521,6 +1521,9 @@ class NocodbSyncService {
       if (title.isEmpty) throw Exception('Titre wiki obligatoire');
 
       final saved = await _apiClient.createWikiItem(
+        // The operation id is persisted before network I/O and remains
+        // unchanged across retries/restarts, including legacy queued drafts.
+        clientMutationId: operation.id,
         title: title,
         description: description,
         category: category,
