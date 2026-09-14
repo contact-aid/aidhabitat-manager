@@ -113,6 +113,7 @@ jobs:
           npm run release:web-check -- "${args[@]}"
 
       - name: Validate web publication decision
+        working-directory: .
         env:
           PUBLISH_IMAGE: ${{ inputs.publish_image }}
           DEPLOY_STAGING: ${{ inputs.deploy_staging }}
@@ -177,11 +178,13 @@ jobs:
 
       - name: Publication summary
         working-directory: .
+        env:
+          EXPECTED_BUILD_NUMBER: ${{ inputs.expected_build_number || 'not asserted' }}
         run: |
           echo "## Web candidate" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Expected build: \`${{ inputs.expected_build_number || 'not asserted' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Expected build: \`$EXPECTED_BUILD_NUMBER\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Image publication requested: \`${{ inputs.publish_image }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Staging deployment requested: \`${{ inputs.deploy_staging }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Production deployment: not performed by this workflow" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deployment target: verify the service behind the configured webhook; its name does not guarantee isolation from production" >> "$GITHUB_STEP_SUMMARY"

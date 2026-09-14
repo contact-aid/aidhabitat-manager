@@ -80,7 +80,7 @@ le push de l'image.
 
 ```bash
 gh workflow run "Build Flutter Web" \
-  --ref <sha-candidat> \
+  --ref <branche-ou-tag-pointe-sur-le-sha-candidat> \
   -f api_base_url=https://api.aidhabitat.fr \
   -f expected_build_number=<numero> \
   -f upload_artifact=true \
@@ -107,8 +107,10 @@ solution acceptable.
 
 Relancer le meme workflow avec `publish_image=true` et un tag immuable
 `release-<numero>`. Ne basculer EasyPanel qu'apres verification du digest de
-l'image et de l'ancienne reference de rollback. Le workflow ne deploie pas la
-production web, faute de destination de production verifiee.
+l'image et de l'ancienne reference de rollback. Le nom staging ne garantit pas
+un environnement isole : verifier le service et le domaine derriere le webhook
+avant tout declenchement. Garder `deploy_staging=false` tant que cette cible
+n'est pas confirmee.
 
 Apres bascule :
 
@@ -130,7 +132,7 @@ Sans secret verifie, executer uniquement une validation/construction :
 
 ```bash
 gh workflow run "Build & Deploy API" \
-  --ref <sha-candidat> \
+  --ref <branche-ou-tag-pointe-sur-le-sha-candidat> \
   -f publish_image=false \
   -f deploy_api=false \
   -f image_tag=candidate

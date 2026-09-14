@@ -22,6 +22,15 @@ test('API publication is explicit and missing webhook blocks before image push',
   assert.match(workflow, /cancel-in-progress: false/);
 });
 
+test('web tag validation runs from the repository root and summary treats inputs as data', async () => {
+  const workflow = await readFile('.github/workflows/flutter-web-build.yml', 'utf8');
+  assert.match(workflow, /- name: Validate web publication decision\s+working-directory: \./);
+  const summary = workflow.slice(workflow.indexOf('- name: Publication summary'));
+  const run = summary.slice(summary.indexOf('run: |'));
+  assert.doesNotMatch(run, /\$\{\{ inputs\.expected_build_number/);
+  assert.doesNotMatch(summary, /Production deployment: not performed/);
+});
+
 test('web publication records provenance and requires an expected build', async () => {
   const workflow = await readFile('.github/workflows/flutter-web-build.yml', 'utf8');
   const check = workflow.indexOf('- name: Check web bundle');
