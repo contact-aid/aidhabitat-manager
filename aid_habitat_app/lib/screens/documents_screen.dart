@@ -2910,7 +2910,7 @@ class _PreviewScreenState extends State<DocumentPreview> {
     }
     Uint8List imageSource = source;
     final annotator = _annotatorKey.currentState;
-    if (annotator != null) {
+    if (annotator != null && annotator.hasVisibleStrokes) {
       imageSource = await annotator.exportFlatPng() ?? source;
     }
     final bytes = await rotateImageToPng(imageSource, delta);
@@ -5098,6 +5098,8 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   }
 
   /// Export l'image + l'annotation aplatie en PNG (bytes).
+  bool get hasVisibleStrokes => _strokes.isNotEmpty;
+
   Future<Uint8List?> exportFlatPng() async {
     try {
       final boundary =
@@ -5106,9 +5108,50 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
       if (boundary == null) return null;
       // Pixel ratio plus élevé → meilleure qualité.
       final image = await boundary.toImage(pixelRatio: 2.5);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      image.dispose();
-      return byteData?.buffer.asUint8List();
+      try {
+        // Exclude BoxFit.contain margins from the saved image. Keeping them
+        // would shrink the visible document on each subsequent rotation.
+        final source =
+            widget.imageBytes ?? await File(widget.imagePath!).readAsBytes();
+        final codec = await ui.instantiateImageCodec(source);
+        late Size sourceSize;
+        try {
+          final frame = await codec.getNextFrame();
+          sourceSize = Size(
+            frame.image.width.toDouble(),
+            frame.image.height.toDouble(),
+          );
+          frame.image.dispose();
+        } finally {
+          codec.dispose();
+        }
+        final bounds = Size(image.width.toDouble(), image.height.toDouble());
+        final fitted = applyBoxFit(
+          BoxFit.contain,
+          sourceSize,
+          bounds,
+        ).destination;
+        final crop = Alignment.center.inscribe(fitted, Offset.zero & bounds);
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder);
+        canvas.drawImageRect(image, crop, Offset.zero & fitted, Paint());
+        final picture = recorder.endRecording();
+        final cropped = await picture.toImage(
+          fitted.width.round(),
+          fitted.height.round(),
+        );
+        picture.dispose();
+        try {
+          final byteData = await cropped.toByteData(
+            format: ui.ImageByteFormat.png,
+          );
+          return byteData?.buffer.asUint8List();
+        } finally {
+          cropped.dispose();
+        }
+      } finally {
+        image.dispose();
+      }
     } catch (_) {
       return null;
     }

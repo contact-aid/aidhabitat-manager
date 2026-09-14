@@ -125,6 +125,46 @@ void main() {
   });
 
   test(
+    'upload acknowledgement does not invalidate an open local revision',
+    () async {
+      final expected = (await repository.fetchDocument('doc'))!;
+      await db.update('documents', {
+        'remote_public_url': 'https://example.test/acknowledged.pdf',
+        'remote_file_path': 'acknowledged-upload',
+        'sync_state': 'synced',
+      });
+      await repository.enqueueReplacementBytes(
+        documentId: 'doc',
+        bytes: replacement,
+        fileName: 'devis.pdf',
+        mimeType: 'application/pdf',
+        expectedDocument: expected,
+      );
+      expect(
+        await File((await row())['local_file_path'] as String).readAsBytes(),
+        replacement,
+      );
+      expect(await db.query('sync_operations'), hasLength(1));
+    },
+  );
+
+  test(
+    'upload acknowledgement during preparation preserves the save',
+    () async {
+      final observed = makeRepository(
+        store: ObservedRevisionStore(root, (_) async {
+          await db.update('documents', {
+            'remote_public_url': 'https://example.test/acknowledged.pdf',
+            'remote_file_path': 'acknowledged-upload',
+          });
+        }),
+      );
+      await save(using: observed);
+      expect(await db.query('sync_operations'), hasLength(1));
+    },
+  );
+
+  test(
     'embedded PDF ink queues the PDF without duplicating legacy sidecars',
     () async {
       final sidecar = File('${original.path}.page1.png.annotation.json');

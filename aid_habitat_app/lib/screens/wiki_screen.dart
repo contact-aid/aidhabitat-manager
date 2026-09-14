@@ -16,9 +16,11 @@ import '../components/confirmation_dialog.dart';
 import '../components/soft_transitions.dart';
 import '../models/types.dart';
 import '../services/data_service.dart';
+import '../services/image_compressor.dart';
 import '../services/media_cache_service.dart';
 import '../services/sync_engine.dart';
 import '../services/url_resolver.dart';
+import '../services/web_file_picker.dart';
 import '../services/wiki_repository.dart';
 import '../services/wiki_share_image.dart';
 
@@ -1222,17 +1224,43 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
   Future<void> _pickImage() async {
     setState(() => _pickingImage = true);
     try {
-      final picked = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1200,
-        imageQuality: 85,
+      late Uint8List bytes;
+      late String fileName;
+      String? mimeType;
+      if (kIsWeb) {
+        // `image_picker_for_web` exposes the selection through a temporary
+        // Blob URL. Safari can revoke it before XFile.readAsBytes(), leaving
+        // the draft without an image. The shared web picker copies the File
+        // bytes eagerly through FileReader and does not retain a Blob URL.
+        final picked = await pickWebFile(accept: 'image/*');
+        if (picked == null) return;
+        bytes = Uint8List.fromList(picked.bytes);
+        fileName = picked.name;
+      } else {
+        final picked = await _imagePicker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 1200,
+          imageQuality: 85,
+        );
+        if (picked == null) return;
+        bytes = await picked.readAsBytes();
+        fileName = picked.name;
+        mimeType = picked.mimeType;
+      }
+      if (bytes.isEmpty) {
+        throw const FormatException('Le fichier image est vide');
+      }
+      final compressed = await compressImageForUpload(
+        bytes: bytes,
+        fileName: fileName.isEmpty ? 'image.jpg' : fileName,
+        sourceMimeType: mimeType,
+        maxWidthPx: 1200,
+        jpegQuality: 85,
       );
-      if (picked == null) return;
-      final bytes = await picked.readAsBytes();
-      final ext = picked.path.split('.').last.toLowerCase();
+      final ext = compressed.fileName.split('.').last.toLowerCase();
       if (!mounted) return;
       setState(() {
-        _pickedImageBytes = bytes;
+        _pickedImageBytes = compressed.bytes;
         _pickedImageExt = switch (ext) {
           'png' => 'png',
           'webp' => 'webp',

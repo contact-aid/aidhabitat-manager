@@ -17,6 +17,7 @@ import 'local_database.dart';
 import 'media_cache_service.dart';
 import 'native_file_protection.dart';
 import 'offline_vault.dart';
+import 'pdf_ink_geometry.dart';
 import 'sync_engine.dart';
 
 @visibleForTesting
@@ -904,12 +905,7 @@ class DocumentRepository {
     }
     final snapshot = rows.single;
     if (expectedDocument != null &&
-        (snapshot['local_file_path'] != expectedDocument.localPath ||
-            snapshot['remote_public_url'] != expectedDocument.url ||
-            await OfflineVault.instance.openNullableString(
-                  snapshot['local_file_data_url'] as String?,
-                ) !=
-                expectedDocument.dataUrl)) {
+        !samePdfEditingRevision(expectedDocument, await _mapRow(snapshot))) {
       throw StateError(
         'Le document a change pendant la preparation. Rouvrez-le.',
       );
@@ -973,8 +969,10 @@ class DocumentRepository {
       if (current['local_file_path'] != snapshot['local_file_path'] ||
           current['local_file_data_url'] != snapshot['local_file_data_url'] ||
           current['patient_local_id'] != snapshot['patient_local_id'] ||
-          current['remote_file_path'] != snapshot['remote_file_path'] ||
-          current['remote_public_url'] != snapshot['remote_public_url'] ||
+          ((snapshot['local_file_path'] as String? ?? '').isEmpty &&
+              (current['remote_file_path'] != snapshot['remote_file_path'] ||
+                  current['remote_public_url'] !=
+                      snapshot['remote_public_url'])) ||
           (!preservePdfSidecars &&
               current['annotations_json'] != snapshot['annotations_json'])) {
         throw StateError(
