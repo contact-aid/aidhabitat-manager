@@ -337,6 +337,27 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _syncEngine.requestFullSync();
   }
 
+  Future<void> _retrySyncOrReview() async {
+    try {
+      final failure = await _syncEngine.inspectTopFailure();
+      if (!mounted) return;
+      if (failure?['entityType'] == 'sync_ownership') {
+        await _showFailingOpDetails();
+      } else {
+        _handleSyncNow();
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Vérification indisponible. Vos sauvegardes locales sont conservées.',
+          ),
+        ),
+      );
+    }
+  }
+
   /// Ouvre un drawer (bottom sheet) listant TOUTES les opérations sync
   /// en échec, avec un couple de boutons « Réessayer / Abandonner » par
   /// op. Indispensable pour débloquer le bandeau rouge sans purger en
@@ -652,7 +673,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               child: const Text('Détails'),
             ),
             TextButton(
-              onPressed: _handleSyncNow,
+              onPressed: _retrySyncOrReview,
               style: TextButton.styleFrom(
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(

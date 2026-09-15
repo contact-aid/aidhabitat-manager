@@ -171,6 +171,7 @@ class SyncOperationOwnership {
         JOIN $tableName AS ownership
           ON ownership.operation_id = existing.id
         WHERE existing.id = NEW.id
+          AND existing.status != 'completed'
           AND (
             COALESCE(
               ownership.candidate_user_local_id,
@@ -192,6 +193,15 @@ class SyncOperationOwnership {
                 ownership.owner_user_local_id
               )
               AND history.payload_json = existing.payload_json
+          );
+
+        -- A confirmed intention must not lend its owner to the next edit.
+        -- Keep unknown orphan metadata: absence alone is not confirmation.
+        DELETE FROM $tableName
+        WHERE operation_id = NEW.id
+          AND EXISTS (
+            SELECT 1 FROM sync_operations
+            WHERE id = NEW.id AND status = 'completed'
           );
       END
     ''');
@@ -344,6 +354,22 @@ class SyncOperationOwnership {
     DateTime? reviewedAt,
   }) async {
     final timestamp = (reviewedAt ?? DateTime.now()).toUtc().toIso8601String();
+    // Repair absent metadata only within the explicit review transaction.
+    // The payload check prevents adopting an edit made after the review opened.
+    if (expectedPreviousOwnerUserLocalId == null) {
+      await txn.rawInsert(
+        '''INSERT OR IGNORE INTO $tableName (
+             operation_id, owner_user_local_id, candidate_user_local_id,
+             attribution_state, created_at, reviewed_at
+           )
+           SELECT id, NULL, NULL, '$historicalUnattributed', created_at, NULL
+           FROM sync_operations
+           WHERE id = ? AND payload_json = ?
+             AND status NOT IN ('completed', 'running')
+             AND EXISTS (SELECT 1 FROM app_session WHERE id = 1)''',
+        [operationId, expectedPayloadJson],
+      );
+    }
     final changed = await txn.rawUpdate(
       '''
       UPDATE $tableName

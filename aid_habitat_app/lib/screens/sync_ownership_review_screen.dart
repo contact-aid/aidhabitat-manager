@@ -300,7 +300,12 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
         icon: Icons.lock_outline,
         title: 'Accès administrateur requis',
         message:
-            'Seul un administrateur connecté peut attribuer une ancienne sauvegarde.',
+            'Vos sauvegardes restent conservées sur ce navigateur ou cet appareil. '
+            'Un administrateur doit vérifier leur attribution ici, avec vous. '
+            'Réessayer la synchronisation ne suffit pas dans ce cas. '
+            'Ne videz pas les données de l’application et ne supprimez pas les '
+            'sauvegardes en attente. Utilisez « Signaler » depuis la page précédente '
+            'pour demander une intervention, sans transmettre le contenu des sauvegardes.',
       );
     }
     if (_error != null) {

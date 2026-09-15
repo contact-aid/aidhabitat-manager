@@ -91,6 +91,11 @@ void main() {
       await user('ergo', role: 'ergo');
       await screen(tester);
       expect(find.text('Accès administrateur requis'), findsOneWidget);
+      expect(
+        find.textContaining('Réessayer la synchronisation ne suffit pas'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Ne videz pas les données'), findsOneWidget);
       expect(find.textContaining('Champs concernés'), findsNothing);
       expect(
         (await db.query(
@@ -113,6 +118,22 @@ void main() {
       expect(find.textContaining('NEVER-SHOW'), findsNothing);
     });
   });
+  testWidgets('admin can explicitly recover missing metadata', (tester) async {
+    await tester.runAsync(() async {
+      await operation('missing');
+      await db.delete(SyncOperationOwnership.tableName);
+      await user('admin');
+      await screen(tester);
+      expect(await db.query(SyncOperationOwnership.tableName), isEmpty);
+      await confirm(tester);
+      expect(await SyncOperationOwnership.mayClaim(db, 'missing'), isTrue);
+      expect(
+        (await db.query('sync_operations')).single['payload_json'],
+        contains('SECRET-VALUE'),
+      );
+    });
+  });
+
   testWidgets('confirmation attributes one operation only', (tester) async {
     await tester.runAsync(() async {
       var notifications = 0;
