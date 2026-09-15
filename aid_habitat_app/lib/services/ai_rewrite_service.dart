@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import 'app_config.dart';
+import 'ai_rewrite_web_stub.dart'
+    if (dart.library.js_interop) 'ai_rewrite_web.dart'
+    as web_ai;
 
 class AiRewriteService {
   AiRewriteService({http.Client? client, MethodChannel? nativeChannel})
@@ -24,12 +27,25 @@ class AiRewriteService {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
   Future<bool> isAvailable({bool refresh = false}) {
+    if (kIsWeb) {
+      return web_ai.localAiStatus().then((state) => state['supported'] == true);
+    }
     if (!_usesAppleModel) return Future<bool>.value(false);
     if (refresh || _availability == null) {
       _availability = _readNativeAvailability();
     }
     return _availability!;
   }
+
+  Future<bool> needsPreparation() async {
+    if (!kIsWeb) return false;
+    final status = await web_ai.localAiStatus();
+    return status['installed'] != true || status['offlineReady'] != true;
+  }
+
+  Future<void> prepareLocalModel() => web_ai.prepareLocalAi();
+  double get preparationProgress => web_ai.localAiProgress();
+  void cancelPreparation() => web_ai.cancelLocalAi();
 
   Future<bool> _readNativeAvailability() async {
     try {
@@ -60,7 +76,9 @@ class AiRewriteService {
       throw Exception('La note ne doit pas dépasser 8000 caractères.');
     }
 
-    if (apiBaseUrl != null || sessionToken != null) {
+    if (!kIsWeb &&
+        !_usesAppleModel &&
+        (apiBaseUrl != null || sessionToken != null)) {
       return _rewriteRemotely(
         text: sourceText,
         mode: mode,
@@ -71,11 +89,18 @@ class AiRewriteService {
 
     if (!await isAvailable(refresh: true)) {
       throw Exception(
-        "La reformulation Apple n'est pas disponible sur cet iPad.",
+        kIsWeb
+            ? "La reformulation locale n'est pas disponible dans ce navigateur."
+            : "La reformulation Apple n'est pas disponible sur cet iPad.",
       );
     }
 
     final protectedText = _protect(sourceText);
+    if (kIsWeb) {
+      return protectedText.restore(
+        await web_ai.rewriteLocalAi(protectedText.text, _normalizeMode(mode)),
+      );
+    }
     try {
       final response = await _nativeChannel
           .invokeMethod<String>('rewrite', {
@@ -237,13 +262,14 @@ class _ProtectedText {
   String restore(String rewrittenText) {
     var restored = rewrittenText;
     for (final fragment in fragments) {
-      if (!restored.contains(fragment.token)) {
+      final tokenPattern = RegExp('\\b${RegExp.escape(fragment.token)}\\b');
+      if (tokenPattern.allMatches(restored).length != 1) {
         throw Exception(
           "La proposition n'était pas assez fidèle à la note originale. "
           'La note a été conservée.',
         );
       }
-      restored = restored.replaceAll(fragment.token, fragment.value);
+      restored = restored.replaceAll(tokenPattern, fragment.value);
     }
     if (restored.contains('AIDHABITAT_DATA_')) {
       throw Exception(

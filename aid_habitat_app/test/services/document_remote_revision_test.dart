@@ -7,6 +7,7 @@ import 'package:aid_habitat_app/components/doc_thumbnails.dart';
 import 'package:aid_habitat_app/services/document_repository.dart';
 import 'package:aid_habitat_app/services/document_revision_store.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
+import 'package:aid_habitat_app/services/offline_vault.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -102,6 +103,105 @@ void main() {
   tearDown(() async {
     await db.close();
     await root.delete(recursive: true);
+  });
+
+  for (final state in ['synced', 'pendingSync', 'error']) {
+    test(
+      'delete remotely bound document in $state enqueues remote delete',
+      () async {
+        await db.update('documents', {'sync_state': state});
+        await repository.deleteDocument('doc');
+        expect((await row())['pending_delete'], 1);
+        final queued = await db.query('sync_operations');
+        expect(queued.single['operation_type'], 'delete_document');
+        await repository.mergeRemoteDocuments('patient', [
+          remote(revision: 'v1'),
+        ]);
+        expect((await row())['pending_delete'], 1);
+      },
+    );
+  }
+
+  test(
+    'running replacement remains tracked and delete uses stable client id',
+    () async {
+      await operation('running');
+      await repository.deleteDocument('doc');
+      final queued = await db.query('sync_operations');
+      expect(
+        queued.where((op) => op['operation_type'] == 'upload_file'),
+        hasLength(1),
+      );
+      final deletion = queued.singleWhere(
+        (op) => op['operation_type'] == 'delete_document',
+      );
+      final payload = jsonDecode(
+        await OfflineVault.instance.openString(
+          deletion['payload_json'] as String,
+        ),
+      );
+      expect(payload['remoteDocumentId'], 'doc');
+      expect((await row())['pending_delete'], 1);
+    },
+  );
+
+  test(
+    'first upload in flight also queues deletion instead of discarding tracking',
+    () async {
+      await db.update('documents', {
+        'remote_file_path': null,
+        'remote_public_url': null,
+        'sync_state': 'pendingSync',
+      });
+      await operation('running');
+      await repository.deleteDocument('doc');
+      expect((await row())['pending_delete'], 1);
+      expect((await db.query('sync_operations')).length, 2);
+    },
+  );
+
+  test(
+    'stale listing cannot resurrect deleted document after local purge',
+    () async {
+      await repository.deleteDocument('doc');
+      await db.delete('documents');
+      await db.delete('sync_operations');
+      repository = makeRepository();
+      await repository.mergeRemoteDocuments('patient', [
+        remote(revision: 'v1'),
+      ]);
+      expect(await db.query('documents'), isEmpty);
+      // A delayed replacement path with the same client identity is also stale.
+      await repository.mergeRemoteDocuments('patient', [
+        remote(revision: 'v2'),
+      ]);
+      expect(await db.query('documents'), isEmpty);
+    },
+  );
+
+  test('deletion does not hide a new document with the same title', () async {
+    await repository.deleteDocument('doc');
+    await db.delete('documents');
+    await db.delete('sync_operations');
+    await repository.mergeRemoteDocuments('patient', [
+      {...remote(revision: 'v3'), 'clientDocumentId': 'new-document'},
+    ]);
+    expect((await db.query('documents')).single['pending_delete'], 0);
+  });
+
+  test('deletion identities are scoped to their patient', () async {
+    await repository.deleteDocument('doc');
+    await repository.mergeRemoteDocuments('other-patient', [
+      remote(revision: 'v1'),
+    ]);
+    expect(
+      (await db.query(
+        'documents',
+        where: 'patient_local_id = ?',
+        whereArgs: ['other-patient'],
+      )),
+      hasLength(1),
+    );
   });
 
   test(

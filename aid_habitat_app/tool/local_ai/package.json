@@ -1,0 +1,8 @@
+{
+  "name": "appergo-local-rewrite",
+  "private": true,
+  "type": "module",
+  "scripts": {"build": "node build.mjs", "test": "node --test config.test.mjs offline-worker.test.mjs worker.test.mjs"},
+  "dependencies": {"@mlc-ai/web-llm": "0.2.85"},
+  "devDependencies": {"esbuild": "0.25.12"}
+}

@@ -1371,89 +1371,117 @@ class DocumentRepository {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
 
-    // Snapshot l'état actuel : si le doc avait déjà été poussé sur
-    // NocoDB (sync_state == synced) il faut envoyer un DELETE remote.
-    // Sinon on peut juste annuler la pending upload et purger.
-    final rows = await db.query(
-      'documents',
-      columns: const [
-        'patient_local_id',
-        'sync_state',
-        'remote_file_path',
-        'remote_public_url',
-      ],
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    final patientId = rows.first['patient_local_id'] as String? ?? '';
-
-    final wasSynced =
-        (rows.first['sync_state'] as String?) == SyncState.synced.name;
-    final remoteId = _extractRemoteIdFromRow(rows.first, documentId);
-
-    // Marque pending_delete pour cacher immédiatement le doc côté UI
-    // (filtrage SQL `pending_delete = 0` dans `fetchDocuments`).
-    await db.update(
-      'documents',
-      {
-        'pending_delete': 1,
-        'updated_at': now,
-        'sync_state': SyncState.pendingSync.name,
-      },
-      where: 'local_id = ?',
-      whereArgs: [documentId],
-    );
-
-    // Annule toute upload encore en attente/en cours/en échec pour ce doc :
-    // l'upload est moot (le doc est en train d'être supprimé).
-    await db.delete(
-      'sync_operations',
-      where:
-          'entity_local_id = ? AND operation_type = ? AND status IN (?, ?, ?)',
-      whereArgs: [
-        documentId,
-        'upload_file',
-        SyncOperationStatus.pending.name,
-        SyncOperationStatus.running.name,
-        SyncOperationStatus.failed.name,
-      ],
-    );
-
-    if (wasSynced && remoteId.isNotEmpty) {
-      // Enqueue un DELETE qui sera traité par `_processDocumentOperation`
-      // côté sync engine. Sans cette op, la suppression locale n'était
-      // JAMAIS propagée au serveur — au prochain pull NocoDB, le doc
-      // était ressuscité (cf. audit critique #4).
-      await db.insert(
-        'sync_operations',
-        {
-          'id': 'sync_delete_$documentId',
-          'entity_type': 'document',
-          'entity_local_id': documentId,
-          'operation_type': 'delete_document',
-          'payload_json': await OfflineVault.instance.sealString(
-            jsonEncode({'remoteDocumentId': remoteId}),
-          ),
-          'status': SyncOperationStatus.pending.name,
-          'attempt_count': 0,
-          'last_error': null,
-          'created_at': now,
-          'updated_at': now,
-        },
-        // Idempotent : si l'utilisateur clique deux fois, on remplace
-        // l'op précédente plutôt que de dupliquer.
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-    } else {
-      // Doc jamais poussé — on peut purger directement le local.
-      await db.delete(
+    final patientId = await db.transaction<String?>((txn) async {
+      // Read the binding in the same transaction as deletion so an upload
+      // acknowledgement cannot change the target between these operations.
+      final rows = await txn.query(
         'documents',
+        columns: const [
+          'patient_local_id',
+          'remote_file_path',
+          'remote_public_url',
+        ],
+        where: 'local_id = ?',
+        whereArgs: [documentId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      final patientId = rows.first['patient_local_id'] as String? ?? '';
+      final remoteId = _extractRemoteIdFromRow(rows.first, documentId);
+      final runningUploads = await txn.query(
+        'sync_operations',
+        columns: const ['id'],
+        where:
+            'entity_type = ? AND entity_local_id = ? '
+            'AND operation_type = ? AND status = ?',
+        whereArgs: [
+          'document',
+          documentId,
+          'upload_file',
+          SyncOperationStatus.running.name,
+        ],
+        limit: 1,
+      );
+      // A running replacement may change the remote UUID. Its stable client
+      // identity lets the later DELETE target the uploaded revision as well.
+      final deletionId = runningUploads.isNotEmpty ? documentId : remoteId;
+      // Keep deletion identities after the local row is purged: an older
+      // in-flight listing must not recreate a successfully deleted document.
+      for (final identity in <String>{
+        documentId,
+        remoteId,
+        rows.first['remote_file_path'] as String? ?? '',
+        rows.first['remote_public_url'] as String? ?? '',
+      }.where((value) => value.isNotEmpty)) {
+        await txn.insert('kv_store', {
+          'key': 'document_deleted:${jsonEncode([patientId, identity])}',
+          'value': now,
+          'updated_at': now,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      // Marque pending_delete pour cacher immédiatement le doc côté UI
+      // (filtrage SQL `pending_delete = 0` dans `fetchDocuments`).
+      await txn.update(
+        'documents',
+        {
+          'pending_delete': 1,
+          'updated_at': now,
+          'sync_state': SyncState.pendingSync.name,
+        },
         where: 'local_id = ?',
         whereArgs: [documentId],
       );
-    }
+
+      // Keep running uploads tracked until completion; deleting their queue
+      // row cannot cancel an HTTP request already being processed remotely.
+      await txn.delete(
+        'sync_operations',
+        where:
+            'entity_local_id = ? AND operation_type = ? AND status IN (?, ?)',
+        whereArgs: [
+          documentId,
+          'upload_file',
+          SyncOperationStatus.pending.name,
+          SyncOperationStatus.failed.name,
+        ],
+      );
+
+      if (deletionId.isNotEmpty) {
+        // Enqueue un DELETE qui sera traité par `_processDocumentOperation`
+        // côté sync engine. Sans cette op, la suppression locale n'était
+        // JAMAIS propagée au serveur — au prochain pull NocoDB, le doc
+        // était ressuscité (cf. audit critique #4).
+        await txn.insert(
+          'sync_operations',
+          {
+            'id': 'sync_delete_$documentId',
+            'entity_type': 'document',
+            'entity_local_id': documentId,
+            'operation_type': 'delete_document',
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode({'remoteDocumentId': deletionId}),
+            ),
+            'status': SyncOperationStatus.pending.name,
+            'attempt_count': 0,
+            'last_error': null,
+            'created_at': now,
+            'updated_at': now,
+          },
+          // Idempotent : si l'utilisateur clique deux fois, on remplace
+          // l'op précédente plutôt que de dupliquer.
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      } else {
+        // Doc jamais poussé — on peut purger directement le local.
+        await txn.delete(
+          'documents',
+          where: 'local_id = ?',
+          whereArgs: [documentId],
+        );
+      }
+      return patientId;
+    });
+    if (patientId == null) return;
 
     SyncEngine().notify();
     _notifyChanged(
@@ -1542,6 +1570,30 @@ class DocumentRepository {
 
     await db.transaction((txn) async {
       for (final remote in remoteDocuments) {
+        final deletionIdentities = <String>{
+          for (final key in const [
+            'id',
+            'sourceDocumentId',
+            'clientDocumentId',
+            'remotePath',
+            'publicUrl',
+          ])
+            if ((remote[key]?.toString() ?? '').isNotEmpty)
+              remote[key].toString(),
+          _remoteDocumentLocalId(patientId, remote),
+        };
+        final deleted = await txn.query(
+          'kv_store',
+          columns: const ['key'],
+          where:
+              'key IN (${List.filled(deletionIdentities.length, '?').join(',')})',
+          whereArgs: [
+            for (final identity in deletionIdentities)
+              'document_deleted:${jsonEncode([patientId, identity])}',
+          ],
+          limit: 1,
+        );
+        if (deleted.isNotEmpty) continue;
         final remotePath = remote['remotePath']?.toString();
         final publicUrl = remote['publicUrl']?.toString();
         // Server echoes the Flutter-assigned local id as `clientDocumentId`

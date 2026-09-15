@@ -27,6 +27,42 @@ void main() {
     AppConfig.clearAppSessionToken();
   });
 
+  group('document deletion acknowledgement', () {
+    for (final body in [
+      '{"success":false,"data":{"deleted":false}}',
+      '{"success":true,"data":{}}',
+      '{}',
+      '{"success":true,"data":{"deleted":false}}',
+    ]) {
+      test('rejects incomplete acknowledgement $body', () async {
+        final client = NocodbApiClient(
+          client: MockClient((_) async => http.Response(body, 200)),
+        );
+        await expectLater(
+          client.deleteDocument('remote-id'),
+          throwsA(isA<TransientRemoteException>()),
+        );
+      });
+    }
+    test('accepts confirmed deletion', () async {
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'DELETE');
+          return http.Response('{"success":true,"data":{"deleted":true}}', 200);
+        }),
+      );
+      expect(await client.deleteDocument('remote-id'), isTrue);
+    });
+    test('already absent is idempotent', () async {
+      final client = NocodbApiClient(
+        client: MockClient(
+          (_) async => http.Response('{"success":false}', 404),
+        ),
+      );
+      expect(await client.deleteDocument('remote-id'), isTrue);
+    });
+  });
+
   group('updateDossier — classification HTTP', () {
     test('200 OK avec `updatedAt` → renvoie la nouvelle valeur', () async {
       final client = NocodbApiClient(

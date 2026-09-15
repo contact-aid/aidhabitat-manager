@@ -382,7 +382,7 @@ class _RecommendationsTabState extends State<RecommendationsTab>
   ) async {
     final picked = await showSoftDialog<WikiItem>(
       context: context,
-      builder: (_) => _WikiPickerDialog(items: _wikiItems),
+      builder: (_) => WikiPickerDialog(items: _wikiItems),
     );
     if (picked == null) return null;
 
@@ -817,19 +817,23 @@ class _RecommendationCard extends StatelessWidget {
 // Wiki picker dialog
 // =============================================================================
 
-class _WikiPickerDialog extends StatefulWidget {
+class WikiPickerDialog extends StatefulWidget {
   final List<WikiItem> items;
-  const _WikiPickerDialog({required this.items});
+  const WikiPickerDialog({super.key, required this.items});
 
   @override
-  State<_WikiPickerDialog> createState() => _WikiPickerDialogState();
+  State<WikiPickerDialog> createState() => _WikiPickerDialogState();
 }
 
-class _WikiPickerDialogState extends State<_WikiPickerDialog> {
+class _WikiPickerDialogState extends State<WikiPickerDialog> {
   String _search = '';
+  String? _selectedTag;
 
   List<WikiItem> get _filtered {
     return widget.items
+        .where(
+          (item) => _selectedTag == null || item.tags.contains(_selectedTag),
+        )
         .where((item) => matchesWikiSearch(item, _search))
         .toList();
   }
@@ -837,6 +841,8 @@ class _WikiPickerDialogState extends State<_WikiPickerDialog> {
   @override
   Widget build(BuildContext context) {
     final filtered = _filtered;
+    final tags = {for (final item in widget.items) ...item.tags}.toList()
+      ..sort();
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
       backgroundColor: Colors.white,
@@ -917,6 +923,22 @@ class _WikiPickerDialogState extends State<_WikiPickerDialog> {
                       onChanged: (v) => setState(() => _search = v),
                     ),
                   ),
+                  SizedBox(
+                    height: 52,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                      child: Row(
+                        children: [
+                          _tagChip('Tous', null),
+                          for (final tag in tags) ...[
+                            const SizedBox(width: 8),
+                            _tagChip(tag, tag),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -945,6 +967,26 @@ class _WikiPickerDialogState extends State<_WikiPickerDialog> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _tagChip(String label, String? tag) {
+    final selected = _selectedTag == tag;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      showCheckmark: false,
+      selectedColor: kBrandPurple,
+      backgroundColor: const Color(0xFFFAF7FB),
+      side: BorderSide(
+        color: selected ? kBrandPurple : const Color(0xFFE4E7EB),
+      ),
+      shape: const StadiumBorder(),
+      labelStyle: GoogleFonts.nunito(
+        color: selected ? Colors.white : const Color(0xFF5C6670),
+        fontWeight: FontWeight.w600,
+      ),
+      onSelected: (_) => setState(() => _selectedTag = selected ? null : tag),
     );
   }
 

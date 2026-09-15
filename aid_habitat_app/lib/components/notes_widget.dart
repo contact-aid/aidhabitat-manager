@@ -4045,18 +4045,33 @@ class _AiRewriteButton extends StatefulWidget {
   State<_AiRewriteButton> createState() => _AiRewriteButtonState();
 }
 
-class _AiRewriteButtonState extends State<_AiRewriteButton> {
+class _AiRewriteButtonState extends State<_AiRewriteButton>
+    with WidgetsBindingObserver {
   bool _available = false;
   bool _loading = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadAvailability();
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadAvailability();
+  }
+
   Future<void> _loadAvailability() async {
-    final available = await AiRewriteService.instance.isAvailable();
+    final available = await AiRewriteService.instance.isAvailable(
+      refresh: true,
+    );
     if (mounted && available != _available) {
       setState(() => _available = available);
     }
@@ -4086,6 +4101,15 @@ class _AiRewriteButtonState extends State<_AiRewriteButton> {
     setState(() => _loading = true);
 
     try {
+      if (await AiRewriteService.instance.needsPreparation()) {
+        if (!mounted) return;
+        final prepared = await showSoftDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const _LocalAiSetupDialog(),
+        );
+        if (prepared != true || !mounted) return;
+      }
       final rewrittenText = await AiRewriteService.instance.rewrite(
         text: originalText,
       );
@@ -4151,6 +4175,103 @@ class _AiRewriteButtonState extends State<_AiRewriteButton> {
       ),
     );
   }
+}
+
+class _LocalAiSetupDialog extends StatefulWidget {
+  const _LocalAiSetupDialog();
+
+  @override
+  State<_LocalAiSetupDialog> createState() => _LocalAiSetupDialogState();
+}
+
+class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
+  bool _busy = false;
+  double _progress = 0;
+  String? _error;
+  Timer? _timer;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    if (_busy) AiRewriteService.instance.cancelPreparation();
+    super.dispose();
+  }
+
+  Future<void> _prepare() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (mounted) {
+        setState(
+          () => _progress = AiRewriteService.instance.preparationProgress,
+        );
+      }
+    });
+    try {
+      await AiRewriteService.instance.prepareLocalModel();
+      if (mounted) {
+        _busy = false;
+        Navigator.pop(context, true);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error =
+              'Préparation impossible. Vérifiez la connexion et le stockage libre, puis réessayez.';
+        });
+      }
+    } finally {
+      _timer?.cancel();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Reformulation locale'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Télécharger le modèle dans ce navigateur (environ 1 Go). '
+            'Prévoyez au moins 1,3 Go libre. Les notes ne sont pas envoyées à un serveur. '
+            'Le téléchargement provient de Hugging Face.',
+          ),
+          if (_busy) ...[
+            const SizedBox(height: 16),
+            LinearProgressIndicator(
+              value: _progress > 0 && _progress < 1 ? _progress : null,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _progress >= 1
+                  ? 'Préparation hors ligne…'
+                  : 'Préparation du modèle…',
+            ),
+          ],
+          if (_error != null) ...[const SizedBox(height: 12), Text(_error!)],
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () {
+          AiRewriteService.instance.cancelPreparation();
+          Navigator.pop(context, false);
+        },
+        child: const Text('Annuler'),
+      ),
+      FilledButton.icon(
+        onPressed: _busy ? null : _prepare,
+        icon: const Icon(LucideIcons.download, size: 16),
+        label: const Text('Télécharger'),
+      ),
+    ],
+  );
 }
 
 class _AiRewritePreviewDialog extends StatefulWidget {

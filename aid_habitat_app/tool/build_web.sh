@@ -6,6 +6,7 @@
 #
 # Requirements:
 #   - `flutter` on PATH (stable channel) — or pass FLUTTER_BIN=/path/to/flutter
+#   - Node.js 20.11+ and npm for the pinned local rewriting worker
 #   - `AIDHABITAT_API_BASE_URL` env var pointing to the backend (defaults to
 #     empty string → relative paths; fine when the API is same-origin)
 #
@@ -52,7 +53,11 @@ fi
 
 API_BASE_URL="${AIDHABITAT_API_BASE_URL:-}"
 
-"$FLUTTER" build web --release \
+npm --prefix tool/local_ai ci --ignore-scripts --no-audit --no-fund
+npm --prefix tool/local_ai test
+npm --prefix tool/local_ai run build
+
+"$FLUTTER" build web --release --no-web-resources-cdn \
   --pwa-strategy=none \
   --dart-define=AIDHABITAT_API_BASE_URL="$API_BASE_URL"
 
@@ -92,6 +97,8 @@ for dir in wiki-offline retirement-logos; do
     echo "[build_web] WARN: no source found for $dir — skipping" >&2
   fi
 done
+
+node tool/local_ai/build-offline.mjs
 
 echo "[build_web] build/web produced:"
 ls -lah build/web | head -20

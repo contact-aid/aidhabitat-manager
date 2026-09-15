@@ -163,4 +163,60 @@ void main() {
       ),
     );
   });
+
+  test('iOS never falls back to HTTP even with explicit credentials', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    var requests = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeChannel, (_) async => false);
+    final service = AiRewriteService(
+      nativeChannel: nativeChannel,
+      client: MockClient((_) async {
+        requests++;
+        return http.Response('{}', 200);
+      }),
+    );
+    await expectLater(
+      service.rewrite(
+        text: 'Une note privee.',
+        apiBaseUrl: 'https://example.org',
+        sessionToken: 'test',
+      ),
+      throwsException,
+    );
+    expect(requests, 0);
+  });
+
+  test('rejects duplicated protected facts', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeChannel, (call) async {
+          if (call.method == 'isAvailable') return true;
+          final text = (call.arguments as Map)['text'] as String;
+          return '$text $text';
+        });
+    await expectLater(
+      AiRewriteService(
+        nativeChannel: nativeChannel,
+      ).rewrite(text: 'Le seuil mesure 15 cm.'),
+      throwsException,
+    );
+  });
+  test('rejects a protected identifier with an appended digit', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeChannel, (call) async {
+          if (call.method == 'isAvailable') return true;
+          return ((call.arguments as Map)['text'] as String).replaceAll(
+            'AIDHABITAT_DATA_000',
+            'AIDHABITAT_DATA_0001',
+          );
+        });
+    await expectLater(
+      AiRewriteService(
+        nativeChannel: nativeChannel,
+      ).rewrite(text: 'Le seuil mesure 15 cm.'),
+      throwsException,
+    );
+  });
 }

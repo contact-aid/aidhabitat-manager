@@ -183,7 +183,10 @@
       const retireLegacyPwa = async () => {
         if ('serviceWorker' in navigator) {
           const registrations = await navigator.serviceWorker.getRegistrations();
-          await Promise.all(registrations.map((registration) => (
+          await Promise.all(registrations.filter((registration) =>
+            ![registration.active, registration.waiting, registration.installing]
+              .some(worker => worker?.scriptURL.endsWith('/ai_offline_worker.js'))
+          ).map((registration) => (
             registration.unregister()
           )));
         }
@@ -209,5 +212,6 @@
       retireLegacyPwa().catch(() => {}).finally(startFlutter);
     })();
   </script>
+  <script src="local-ai/bridge.js"></script>
 </body>
 </html>

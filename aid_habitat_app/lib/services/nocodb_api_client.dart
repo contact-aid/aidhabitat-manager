@@ -1300,6 +1300,13 @@ class NocodbApiClient {
         'deleteDocument failed (${response.statusCode}): ${response.body}',
       );
     }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map ||
+        decoded['success'] != true ||
+        decoded['data'] is! Map ||
+        decoded['data']['deleted'] != true) {
+      throw TransientRemoteException('Document delete not confirmed by server');
+    }
     return true;
   }
 

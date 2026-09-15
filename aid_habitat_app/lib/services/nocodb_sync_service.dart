@@ -1275,6 +1275,25 @@ class NocodbSyncService {
     // définitivement la ligne locale (sinon `mergeRemoteDocuments` la
     // laissait avec `pending_delete=1` indéfiniment).
     if (operation.operationType == 'delete_document') {
+      final db = await _database.database;
+      final uploads = await db.query(
+        'sync_operations',
+        columns: const ['id'],
+        where:
+            'entity_type = ? AND entity_local_id = ? '
+            'AND operation_type = ? AND status IN (?, ?)',
+        whereArgs: [
+          'document',
+          operation.entityLocalId,
+          'upload_file',
+          SyncOperationStatus.running.name,
+          SyncOperationStatus.pending.name,
+        ],
+        limit: 1,
+      );
+      if (uploads.isNotEmpty) {
+        throw TransientRemoteException('Document delete waiting for upload');
+      }
       final remoteId = payload['remoteDocumentId']?.toString() ?? '';
       if (remoteId.isEmpty) {
         // Pas de remote id → le doc n'a jamais été poussé, on purge
@@ -1318,6 +1337,16 @@ class NocodbSyncService {
         documentLocalId.isEmpty) {
       throw Exception('Payload document incomplet');
     }
+
+    final db = await _database.database;
+    final deletedRows = await db.query(
+      'documents',
+      columns: const ['local_id'],
+      where: 'local_id = ? AND pending_delete = 1',
+      whereArgs: [documentLocalId],
+      limit: 1,
+    );
+    if (deletedRows.isNotEmpty) return;
 
     File? file;
     List<int>? bytes;
