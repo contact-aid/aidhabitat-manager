@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:aid_habitat_app/screens/sync_ownership_review_screen.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/sync_operation_ownership.dart';
+import 'package:aid_habitat_app/services/sync_ownership_self_review.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -83,28 +84,39 @@ void main() {
     await settle(tester);
   }
 
-  testWidgets('non-admin cannot inspect or attribute the queue', (
-    tester,
-  ) async {
-    await tester.runAsync(() async {
-      await operation('old');
-      await user('ergo', role: 'ergo');
-      await screen(tester);
-      expect(find.text('Accès administrateur requis'), findsOneWidget);
-      expect(
-        find.textContaining('Réessayer la synchronisation ne suffit pas'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Ne videz pas les données'), findsOneWidget);
-      expect(find.textContaining('Champs concernés'), findsNothing);
-      expect(
-        (await db.query(
-          SyncOperationOwnership.tableName,
-        )).single['owner_user_local_id'],
-        isNull,
-      );
-    });
-  });
+  testWidgets(
+    'non-admin can confirm own historical work without seeing protected values',
+    (tester) async {
+      await tester.runAsync(() async {
+        await operation('old');
+        await user('ergo', role: 'ergo');
+        await screen(tester);
+        expect(find.byType(Checkbox), findsOneWidget);
+        expect(find.text('local-synthetic'), findsNothing);
+        expect(find.textContaining('SECRET-VALUE'), findsNothing);
+        expect(find.textContaining('Champs concernés'), findsNothing);
+        expect(
+          (await db.query(
+            SyncOperationOwnership.tableName,
+          )).single['owner_user_local_id'],
+          isNull,
+        );
+        await confirm(tester);
+        expect(await SyncOperationOwnership.mayClaim(db, 'old'), isTrue);
+        expect((await db.query('app_users')).single['role'], 'ergo');
+        expect(
+          (await db.query('sync_operations')).single['payload_json'],
+          contains('SECRET-VALUE'),
+        );
+        expect(
+          (await db.query(
+            SyncOperationOwnership.historyTableName,
+          )).single['reason'],
+          contains('explicit_self_confirmation'),
+        );
+      });
+    },
+  );
   testWidgets('review identifies the target without exposing payload secrets', (
     tester,
   ) async {
@@ -183,7 +195,7 @@ void main() {
       await screen(tester);
       await user('admin-b');
       await confirm(tester);
-      expect(find.text('Accès administrateur requis'), findsOneWidget);
+      expect(find.text('Session à vérifier'), findsOneWidget);
       expect(
         (await db.query(
           SyncOperationOwnership.tableName,
@@ -255,7 +267,7 @@ void main() {
       await user('admin-b');
       release.complete('{"updates":{"status":"SECRET-VALUE"}}');
       await settle(tester);
-      expect(find.text('Accès administrateur requis'), findsOneWidget);
+      expect(find.text('Session à vérifier'), findsOneWidget);
       expect(find.text('local-synthetic'), findsNothing);
     });
   });
@@ -269,6 +281,110 @@ void main() {
       await screen(tester);
       expect(find.text('Reconnexion de l’auteur nécessaire'), findsOneWidget);
       expect(find.byType(FilledButton), findsNothing);
+    });
+  });
+
+  for (final mutation in [
+    'payload',
+    'candidate',
+    'owner',
+    'running',
+    'session',
+    'inactive',
+  ]) {
+    test('self confirmation rejects a changed $mutation snapshot', () async {
+      await operation('historical');
+      await user('ergo', role: 'ergo');
+      final snapshot = (await SyncOperationOwnership.listReviewableOperations(
+        db,
+      )).single;
+      switch (mutation) {
+        case 'payload':
+          await db.update('sync_operations', {'payload_json': '{"new":true}'});
+        case 'candidate':
+          await db.update(SyncOperationOwnership.tableName, {
+            'candidate_user_local_id': 'other',
+          });
+        case 'owner':
+          await db.update(SyncOperationOwnership.tableName, {
+            'owner_user_local_id': 'other',
+          });
+        case 'running':
+          await db.update('sync_operations', {'status': 'running'});
+        case 'session':
+          await user('other', role: 'ergo');
+        case 'inactive':
+          await db.update('app_users', {'is_active': 0});
+      }
+      final before = await db.query('sync_operations');
+      final accepted = await db.transaction(
+        (txn) => SyncOwnershipSelfReview.confirm(
+          txn: txn,
+          expected: snapshot,
+          userId: 'ergo',
+        ),
+      );
+      expect(accepted, isFalse);
+      expect(await db.query('sync_operations'), before);
+      expect(
+        (await db.query(
+          SyncOperationOwnership.tableName,
+        )).single['attribution_state'],
+        isNot(SyncOperationOwnership.reviewed),
+      );
+    });
+  }
+
+  test(
+    'self confirmation history failure rolls back and retry is idempotent',
+    () async {
+      await operation('historical');
+      await db.delete(SyncOperationOwnership.tableName);
+      await user('ergo', role: 'ergo');
+      final snapshot = (await SyncOperationOwnership.listReviewableOperations(
+        db,
+      )).single;
+      await db.execute('''CREATE TRIGGER fail_history BEFORE INSERT ON
+      ${SyncOperationOwnership.historyTableName}
+      BEGIN SELECT RAISE(ABORT, 'synthetic'); END''');
+      Future<bool> accept() => db.transaction(
+        (txn) => SyncOwnershipSelfReview.confirm(
+          txn: txn,
+          expected: snapshot,
+          userId: 'ergo',
+        ),
+      );
+      await expectLater(accept(), throwsA(isA<DatabaseException>()));
+      expect(await db.query(SyncOperationOwnership.tableName), isEmpty);
+      expect(await db.query('sync_operations'), hasLength(1));
+      await db.execute('DROP TRIGGER fail_history');
+      expect(await accept(), isTrue);
+      expect(await accept(), isFalse);
+      expect(
+        await db.query(SyncOperationOwnership.historyTableName),
+        hasLength(1),
+      );
+      expect(await SyncOperationOwnership.mayClaim(db, 'historical'), isTrue);
+    },
+  );
+
+  testWidgets('self review skips another account but offers unknown work', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await user('other', role: 'ergo');
+      await operation('foreign');
+      await db.update(SyncOperationOwnership.tableName, {
+        'attribution_state': SyncOperationOwnership.reviewRequired,
+      });
+      await db.delete('app_session');
+      await operation('unknown');
+      await user('ergo', role: 'ergo');
+      await screen(tester);
+      await confirm(tester);
+      expect(await SyncOperationOwnership.mayClaim(db, 'unknown'), isTrue);
+      expect(await SyncOperationOwnership.mayClaim(db, 'foreign'), isFalse);
+      expect(find.text('Reconnexion de l’auteur nécessaire'), findsOneWidget);
     });
   });
 }

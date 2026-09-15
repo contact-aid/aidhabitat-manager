@@ -448,6 +448,7 @@ class SyncOperationOwnership {
     DatabaseExecutor db, {
     int limit = 1,
     int offset = 0,
+    String? selfReviewUserId,
   }) async {
     if (limit < 1 || limit > 20 || offset < 0) {
       throw ArgumentError(
@@ -471,6 +472,10 @@ class SyncOperationOwnership {
       LEFT JOIN $tableName AS ownership
         ON ownership.operation_id = operation.id
       WHERE operation.status != 'completed'
+        AND (? IS NULL OR (
+          (ownership.owner_user_local_id IS NULL OR ownership.owner_user_local_id = ?)
+          AND (ownership.candidate_user_local_id IS NULL OR ownership.candidate_user_local_id = ?)
+        ))
         AND (
           ownership.operation_id IS NULL
           OR ownership.attribution_state IN (?, ?)
@@ -478,7 +483,15 @@ class SyncOperationOwnership {
       ORDER BY operation.created_at ASC, operation.id ASC
       LIMIT ? OFFSET ?
     ''',
-      [historicalUnattributed, reviewRequired, limit, offset],
+      [
+        selfReviewUserId,
+        selfReviewUserId,
+        selfReviewUserId,
+        historicalUnattributed,
+        reviewRequired,
+        limit,
+        offset,
+      ],
     );
     return rows
         .map(
