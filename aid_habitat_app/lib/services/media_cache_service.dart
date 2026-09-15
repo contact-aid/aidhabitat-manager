@@ -142,7 +142,31 @@ class MediaCacheService {
     if (apiBase.isEmpty) return const {};
     final resolved = resolveMediaUrl(targetUrl);
     if (resolved.isEmpty) return const {};
-    if (!resolved.startsWith(apiBase)) return const {};
+    final base = Uri.tryParse(apiBase);
+    final target = Uri.tryParse(resolved);
+    if (base == null || target == null || target.userInfo.isNotEmpty) {
+      return const {};
+    }
+    bool sameOrigin(Uri a, Uri b) =>
+        a.scheme == b.scheme && a.host == b.host && a.port == b.port;
+    final basePath = base.path.replaceAll(RegExp(r'/+$'), '');
+    final onConfiguredApi =
+        sameOrigin(base, target) &&
+        (basePath.isEmpty || target.path.startsWith('$basePath/'));
+    // Historical document URLs remain valid, including their offline cache keys.
+    // Only this exact HTTPS alias may receive the production session token.
+    final onHistoricalMedia =
+        sameOrigin(base, Uri.parse('https://api.aidhabitat.fr')) &&
+        basePath.isEmpty &&
+        sameOrigin(
+          target,
+          Uri.parse(
+            'https://apps-aidhabitat-api-staging.z5avx1.easypanel.host',
+          ),
+        ) &&
+        (target.path.startsWith('/api/mobile-documents/') ||
+            target.path.startsWith('/uploads/'));
+    if (!onConfiguredApi && !onHistoricalMedia) return const {};
     return authHeaders();
   }
 
