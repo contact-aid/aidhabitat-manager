@@ -6,6 +6,7 @@ import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
 import '../../services/url_resolver.dart';
 import '../../services/wiki_repository.dart';
+import '../../services/wiki_search.dart';
 import '../../components/brand_colors.dart';
 import '../../components/cached_remote_image.dart';
 import '../../components/confirmation_dialog.dart';
@@ -828,13 +829,9 @@ class _WikiPickerDialogState extends State<_WikiPickerDialog> {
   String _search = '';
 
   List<WikiItem> get _filtered {
-    final q = _search.trim().toLowerCase();
-    if (q.isEmpty) return widget.items;
-    return widget.items.where((it) {
-      if (it.title.toLowerCase().contains(q)) return true;
-      if (it.description.toLowerCase().contains(q)) return true;
-      return false;
-    }).toList();
+    return widget.items
+        .where((item) => matchesWikiSearch(item, _search))
+        .toList();
   }
 
   @override

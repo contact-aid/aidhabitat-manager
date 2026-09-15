@@ -22,6 +22,7 @@ import '../services/sync_engine.dart';
 import '../services/url_resolver.dart';
 import '../services/web_file_picker.dart';
 import '../services/wiki_repository.dart';
+import '../services/wiki_search.dart';
 import '../services/wiki_share_image.dart';
 
 class WikiScreen extends StatefulWidget {
@@ -127,20 +128,14 @@ class _WikiScreenState extends State<WikiScreen> {
     return tags;
   }
 
-  /// Combined tag + search filter, matching the React `filteredItems` useMemo:
-  /// haystack = "title description tags.join(' ')" lowercased.
+  /// Keep the selected tag while matching all search terms independently.
   List<WikiItem> get _filteredItems {
-    final search = _searchTerm.trim().toLowerCase();
     return _items
         .where((item) {
           final matchesTag =
               _selectedTag == null || item.tags.contains(_selectedTag);
           if (!matchesTag) return false;
-          if (search.isEmpty) return true;
-          final haystack =
-              '${item.title} ${item.description} ${item.tags.join(' ')}'
-                  .toLowerCase();
-          return haystack.contains(search);
+          return matchesWikiSearch(item, _searchTerm);
         })
         .toList(growable: false)
       ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));

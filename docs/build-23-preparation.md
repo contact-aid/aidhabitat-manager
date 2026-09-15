@@ -19,6 +19,12 @@ Base : f813402 (inclut les changements precedents des builds web 21 et 22).
 - Chargement prioritaire des dossiers avant les catalogues ; distinction entre
   chargement, absence de donnees, indisponibilite hors ligne et erreur.
 - Retrait d'une valeur de finalite invalide du manifeste de confidentialite iOS.
+- Recherche par mots-cles independants dans la bibliotheque et les
+  preconisations ("barre angle" retrouve "Barre appui angle").
+
+La bibliotheque a egalement recu 175 nouvelles fiches dans NocoDB le
+15 septembre. Cet import de donnees est deja disponible apres synchronisation,
+independamment du build ; les originaux et les anciennes fiches sont preserves.
 
 ## Perimetre exclu
 
