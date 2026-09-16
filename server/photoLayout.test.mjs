@@ -72,6 +72,22 @@ test('real report renders all photos at the same height across pages', async () 
   }
   assert.equal(draws.length, documents.length);
   assert.ok(new Set(draws.map((d) => d.page)).size > 1);
+  const rows = [];
+  for (const draw of draws) {
+    let row = rows.find((r) => r[0].page === draw.page &&
+      Math.abs(r[0].options.y - draw.options.y) < 1e-7);
+    if (!row) rows.push(row = []);
+    row.push(draw);
+  }
+  assert.ok(new Set(rows.map((row) => row.length)).size > 1);
+  const leftEdge = Math.min(...draws.map((d) => d.options.x));
+  for (const row of rows) {
+    assert.ok(Math.abs(row[0].options.x - leftEdge) < 1e-7,
+      'Every row must start at the same left edge, regardless of photo orientation or row length');
+    for (let i = 1; i < row.length; i++) {
+      assert.ok(row[i].options.x > row[i - 1].options.x + row[i - 1].options.width);
+    }
+  }
   for (const { image, options, page } of draws) {
     assert.ok(Math.abs(options.height - draws[0].options.height) < 1e-7);
     assert.ok(Math.abs(options.width / options.height - image.width / image.height) < 1e-7);

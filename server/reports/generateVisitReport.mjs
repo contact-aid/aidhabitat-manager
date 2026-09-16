@@ -2080,7 +2080,7 @@ function drawEmbeddedPhotoAtRect(pdfDoc, page, rect, photo, pdfImage, stats) {
     drawH = rect.height;
     drawW = drawH * imgRatio;
   }
-  const drawX = rect.x + (rect.width - drawW) / 2;
+  const drawX = rect.x;
   const drawY = rect.y + (rect.height - drawH) / 2;
 
   page.pushOperators(pushGraphicsState());
@@ -2460,12 +2460,7 @@ async function drawVisitPhotosWithFlow({
       cursorY -= TITLE_HEIGHT;
     }
 
-    let rowWidth = 0;
-    row.items.forEach((item, index) => {
-      rowWidth += item.units === 2 ? unitW * 2 + flowGap : unitW;
-      if (index > 0) rowWidth += flowGap;
-    });
-    let x = flowXStart + Math.max(0, (flowWidth - rowWidth) / 2);
+    let x = flowXStart;
     for (const item of row.items) {
       const width = item.units === 2 ? unitW * 2 + flowGap : unitW;
       const rect = {
