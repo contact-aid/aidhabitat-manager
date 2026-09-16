@@ -453,26 +453,29 @@ class _RecommendationsTabState extends State<RecommendationsTab>
       children: [
         // Zone scrollable : liste des préconisations + bouton d'ajout.
         Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 22),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_saving)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: SaveStatusIndicator(saving: true),
+          // Keep drag previews inside this tab, including while it is offstage.
+          child: Overlay.wrap(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_saving)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: SaveStatusIndicator(saving: true),
+                      ),
                     ),
-                  ),
-                // Grille 3 colonnes : chaque préconisation est ajoutée
-                // sur la même ligne jusqu'à 3, puis on saute à une
-                // nouvelle ligne (demande utilisateur 2026-04-28).
-                // La card "Ajouter" reste toujours visible en fin de
-                // grille, même après l'ajout d'une préconisation.
-                _buildRecommendationsGrid(),
-              ],
+                  // Grille 3 colonnes : chaque préconisation est ajoutée
+                  // sur la même ligne jusqu'à 3, puis on saute à une
+                  // nouvelle ligne (demande utilisateur 2026-04-28).
+                  // La card "Ajouter" reste toujours visible en fin de
+                  // grille, même après l'ajout d'une préconisation.
+                  _buildRecommendationsGrid(),
+                ],
+              ),
             ),
           ),
         ),
@@ -480,22 +483,7 @@ class _RecommendationsTabState extends State<RecommendationsTab>
     );
   }
 
-  /// Grille 3 colonnes pour les cartes de préconisations, avec
-  /// drag-to-reorder fonctionnel sur **toute la carte** via
-  /// `LongPressDraggable` + `DragTarget`.
-  ///
-  /// Comportement :
-  ///   - Long press sur n'importe quelle zone d'une carte → début du drag
-  ///   - Pendant le drag : la carte source devient semi-transparente,
-  ///     un fantôme suit le doigt (Material elevation 12 + radius 16)
-  ///   - Pendant le hover sur une autre carte : bordure violette + repère
-  ///     latéral indiquant si l'insertion se fera avant ou après la cible
-  ///   - Drop : `_reorderItem` est appelé pour réorganiser la liste
-  ///     (la carte se retrouve insérée avant/après selon la moitié ciblée)
-  ///
-  /// Le drag handle dédié (icône en haut de la carte) est masqué — la
-  /// carte entière est draggable, plus besoin d'un espace dédié
-  /// (demande utilisateur 2026-04-28).
+  /// Reorder by holding the image; text fields keep their editing gestures.
   Widget _buildRecommendationsGrid() {
     const int columns = 3;
     const double gap = 12.0;
@@ -530,13 +518,21 @@ class _RecommendationsTabState extends State<RecommendationsTab>
                     onDragStarted: _startReorderPreview,
                     onPreviewReorder: _previewReorderItem,
                     onCommitReorder: _commitReorderPreview,
-                    child: _RecommendationCard(
+                    feedback: _RecommendationCard(
                       key: ValueKey(_items[i].id),
                       item: _items[i],
                       index: i,
-                      // Drag handle dédié masqué : la carte entière est
-                      // déjà draggable via LongPressDraggable du parent.
                       reorderable: false,
+                      onChange: (updated) => _updateItem(i, updated),
+                      onRemove: () => unawaited(_confirmRemoveItem(i)),
+                      onPickWiki: () => _openPicker(i),
+                    ),
+                    builder: (dragImage) => _RecommendationCard(
+                      key: ValueKey(_items[i].id),
+                      item: _items[i],
+                      index: i,
+                      reorderable: false,
+                      imageDragBuilder: dragImage,
                       onChange: (updated) => _updateItem(i, updated),
                       onRemove: () => unawaited(_confirmRemoveItem(i)),
                       onPickWiki: () => _openPicker(i),
@@ -625,6 +621,7 @@ class _RecommendationsTabState extends State<RecommendationsTab>
 // =============================================================================
 
 class _RecommendationCard extends StatelessWidget {
+  final Widget Function(Widget)? imageDragBuilder;
   final VisitRecommendationItem item;
   final int index;
   final bool reorderable;
@@ -634,6 +631,7 @@ class _RecommendationCard extends StatelessWidget {
 
   const _RecommendationCard({
     super.key,
+    this.imageDragBuilder,
     required this.item,
     required this.index,
     required this.reorderable,
@@ -679,39 +677,41 @@ class _RecommendationCard extends StatelessWidget {
           // ----------------------------------------------------------
           Stack(
             children: [
-              GestureDetector(
-                onTap: onPickWiki,
-                child: AspectRatio(
-                  aspectRatio: 1.5,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    // Avant 2026-05-04 : Image.network direct → ne gérait
-                    // pas correctement le cache local des médias ni les
-                    // URLs `data:`. Symptôme rapporté : « les images
-                    // s'affichent dans la bibliothèque mais pas dans la
-                    // VAD partie préconisations ». CachedRemoteImage est
-                    // le même composant que la bibliothèque (cf.
-                    // _WikiItemDialogState image side), garantit la parité
-                    // de rendu entre les deux écrans + survit au mode
-                    // offline grâce au cache MediaCacheService.
-                    child: hasWiki && item.wikiImageUrl.isNotEmpty
-                        ? CachedRemoteImage(
-                            url: resolveMediaUrl(item.wikiImageUrl),
-                            fit: BoxFit.cover,
-                            errorWidget: const Center(
+              (imageDragBuilder ?? (Widget child) => child)(
+                GestureDetector(
+                  onTap: onPickWiki,
+                  child: AspectRatio(
+                    aspectRatio: 1.5,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      // Avant 2026-05-04 : Image.network direct → ne gérait
+                      // pas correctement le cache local des médias ni les
+                      // URLs `data:`. Symptôme rapporté : « les images
+                      // s'affichent dans la bibliothèque mais pas dans la
+                      // VAD partie préconisations ». CachedRemoteImage est
+                      // le même composant que la bibliothèque (cf.
+                      // _WikiItemDialogState image side), garantit la parité
+                      // de rendu entre les deux écrans + survit au mode
+                      // offline grâce au cache MediaCacheService.
+                      child: hasWiki && item.wikiImageUrl.isNotEmpty
+                          ? CachedRemoteImage(
+                              url: resolveMediaUrl(item.wikiImageUrl),
+                              fit: BoxFit.cover,
+                              errorWidget: const Center(
+                                child: Icon(
+                                  Icons.image_outlined,
+                                  color: Color(0xFF8A939D),
+                                ),
+                              ),
+                            )
+                          : const Center(
                               child: Icon(
-                                Icons.image_outlined,
-                                color: Color(0xFF8A939D),
+                                Icons.add_photo_alternate_outlined,
+                                color: kBrandPurple,
+                                size: 40,
                               ),
                             ),
-                          )
-                        : const Center(
-                            child: Icon(
-                              Icons.add_photo_alternate_outlined,
-                              color: kBrandPurple,
-                              size: 40,
-                            ),
-                          ),
+                    ),
                   ),
                 ),
               ),
@@ -793,16 +793,11 @@ class _RecommendationCard extends StatelessWidget {
             onChanged: (v) => onChange(item.copyWith(customTitle: v)),
           ),
           const SizedBox(height: 4),
-          // Description multi-ligne : auto-grow (refonte 2026-05-13).
-          // `maxLines: null` = pas de limite haute → toutes les lignes
-          // saisies restent visibles. `minLines: 2` = démarre sur
-          // 2 lignes pour donner un look « text area ». Radius léger
-          // (12px) appliqué automatiquement par FormTextField en mode
-          // multi-ligne (vs pill 999 pour single-line).
+          // Deux lignes visibles ; le texte restant defile dans le champ.
           FormTextField(
             label: '',
             value: descriptionValue,
-            maxLines: null,
+            maxLines: 2,
             minLines: 2,
             valueSize: 14,
             onChanged: (v) => onChange(item.copyWith(note: v)),
@@ -1148,18 +1143,7 @@ class _InlineTitleFieldState extends State<_InlineTitleField> {
 // Draggable wrapper around a recommendation card (grid 3 cols)
 // =============================================================================
 
-/// Slot draggable + drop target pour une carte de préconisation dans la
-/// grille 3 colonnes. Le drag est déclenché par un long press n'importe
-/// où sur la carte (pas de handle dédié — demande utilisateur 2026-04-28).
-///
-/// Visuels pendant le drag :
-///   - Carte source : opacité 0.3 (signale qu'elle "voyage")
-///   - Fantôme sous le doigt : Material elevation 12 + radius 16
-///   - Carte cible (hover) : bordure violette 2 px + radius 16
-///
-/// Au drop : `onReorder(fromIndex, insertionIndex)` est appelé. La carte
-/// déplacée est insérée avant la cible si le drop est sur la moitié gauche,
-/// après la cible si le drop est sur la moitié droite.
+/// The whole card accepts drops; only the image starts a long-press drag.
 class _DraggableRecoSlot extends StatefulWidget {
   const _DraggableRecoSlot({
     super.key,
@@ -1168,7 +1152,8 @@ class _DraggableRecoSlot extends StatefulWidget {
     required this.onDragStarted,
     required this.onPreviewReorder,
     required this.onCommitReorder,
-    required this.child,
+    required this.feedback,
+    required this.builder,
   });
 
   final String itemId;
@@ -1177,7 +1162,8 @@ class _DraggableRecoSlot extends StatefulWidget {
   final void Function(String draggedId, String targetId, bool insertAfter)
   onPreviewReorder;
   final VoidCallback onCommitReorder;
-  final Widget child;
+  final Widget feedback;
+  final Widget Function(Widget Function(Widget)) builder;
 
   @override
   State<_DraggableRecoSlot> createState() => _DraggableRecoSlotState();
@@ -1242,48 +1228,46 @@ class _DraggableRecoSlotState extends State<_DraggableRecoSlot> {
         }
       },
       builder: (context, candidates, rejected) {
-        final highlight = Stack(
-          clipBehavior: Clip.none,
-          children: [widget.child],
-        );
-        return MouseRegion(
-          cursor: SystemMouseCursors.grab,
-          child: Draggable<String>(
-            data: widget.itemId,
-            feedbackOffset: Offset.zero,
-            hitTestBehavior: HitTestBehavior.opaque,
-            maxSimultaneousDrags: 1,
-            onDragStarted: () => widget.onDragStarted(widget.itemId),
-            onDragEnd: (_) => widget.onCommitReorder(),
-            // Le fantôme garde exactement le même fond violet clair que
-            // la carte réelle. Pas d'opacité ni de voile sombre pendant
-            // le déplacement.
-            feedback: Material(
-              color: Colors.transparent,
-              elevation: 0,
-              shadowColor: Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
-              clipBehavior: Clip.antiAlias,
-              child: Container(
-                width: widget.cardWidth,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.22),
-                      blurRadius: 28,
-                      offset: const Offset(0, 14),
-                    ),
-                  ],
+        return widget.builder(
+          (image) => MouseRegion(
+            cursor: SystemMouseCursors.grab,
+            child: LongPressDraggable<String>(
+              data: widget.itemId,
+              feedbackOffset: Offset.zero,
+              hitTestBehavior: HitTestBehavior.opaque,
+              maxSimultaneousDrags: 1,
+              onDragStarted: () => widget.onDragStarted(widget.itemId),
+              onDragEnd: (_) => widget.onCommitReorder(),
+              // Le fantôme garde exactement le même fond violet clair que
+              // la carte réelle. Pas d'opacité ni de voile sombre pendant
+              // le déplacement.
+              feedback: Material(
+                color: Colors.transparent,
+                elevation: 0,
+                shadowColor: Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+                clipBehavior: Clip.antiAlias,
+                child: Container(
+                  width: widget.cardWidth,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.22),
+                        blurRadius: 28,
+                        offset: const Offset(0, 14),
+                      ),
+                    ],
+                  ),
+                  child: widget.feedback,
                 ),
-                child: widget.child,
               ),
+              // La carte d'origine reste pleine couleur : l'utilisateur
+              // voit uniquement les autres éléments coulisser, sans trou
+              // sombre ni placeholder transparent.
+              childWhenDragging: image,
+              child: image,
             ),
-            // La carte d'origine reste pleine couleur : l'utilisateur
-            // voit uniquement les autres éléments coulisser, sans trou
-            // sombre ni placeholder transparent.
-            childWhenDragging: widget.child,
-            child: highlight,
           ),
         );
       },

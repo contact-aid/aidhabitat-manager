@@ -15,6 +15,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { uniformPhotoHeight } from './photoLayout.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   PDFDocument,
@@ -2322,7 +2323,7 @@ async function drawVisitPhotosWithFlow({
   const flowWidth = flowXEnd - flowXStart;
   const flowGap = Math.max(8, Math.min(accHGap, saniHGap, logHGap, 18));
   const unitW = (flowWidth - flowGap * 3) / 4;
-  const rowH = Math.max(logH, accH, saniH);
+  let rowH = Math.max(logH, accH, saniH);
 
   const buildRowsForCategory = async (
     baseTag, type, label,
@@ -2421,6 +2422,13 @@ async function drawVisitPhotosWithFlow({
     ...sanitairesRows,
   ];
   if (allRows.length === 0) return;
+
+  // One height for the entire photo section, including continuation pages.
+  // Column widths stay unchanged; the widest aspect ratio sets the safe limit.
+  rowH = uniformPhotoHeight(allRows.flatMap((row) => row.items.map((item) => ({
+    width: item.units === 2 ? unitW * 2 + flowGap : unitW,
+    image: item.pdfImage,
+  }))), rowH);
 
   let currentPage = page8;
   let cursorY = firstLogTopY;

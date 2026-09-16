@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from 'node:util';
 import express from 'express';
 import aiRouter from './routes/ai.mjs';
 import feedbackRouter from './routes/feedback.mjs';
+import dataRetentionRouter from './routes/dataRetention.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import dotenv from 'dotenv';
 import multer from 'multer';
@@ -8946,6 +8947,7 @@ app.put('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
 
 app.use(aiRouter);
 app.use(feedbackRouter);
+app.use(dataRetentionRouter);
 
 app.all(['/', '/openapi.json'], (req, res, next) => {
   if (!isApiOnlyPublicSurface(req)) {

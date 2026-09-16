@@ -34,6 +34,10 @@ test('the actual API app refuses GET/HEAD public roots without breaking liveness
       const live = await fetch(base + '/api/health/live', { signal: AbortSignal.timeout(5000) });
       assert.equal(live.status, 200);
       assert.equal((await live.json()).status, 'live');
+      for (const method of ['GET', 'POST']) {
+        const response = await fetch(base + '/api/admin/data-retention', { method, signal: AbortSignal.timeout(5000) });
+        assert.equal(response.status, 401, method + ' retention requires a session');
+      }
       console.log('PUBLIC_SURFACE_PASS');
     } finally { await new Promise(resolve => server.close(resolve)); }
   `;

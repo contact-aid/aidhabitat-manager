@@ -11,6 +11,7 @@ import 'app_config.dart';
 import 'connectivity_service.dart';
 import 'document_file_naming.dart';
 import 'document_repository.dart';
+import 'document_upload_identity.dart';
 import 'dossier_repository.dart';
 import 'local_database.dart';
 import 'document_storage_path.dart';
@@ -1367,9 +1368,35 @@ class NocodbSyncService {
       throw Exception('Payload document: ni localPath ni dataUrl fourni');
     }
 
+    final identityDb = await _database.database;
+    var uploadIdentity = await readDocumentUploadIdentity(
+      identityDb,
+      patientId,
+      documentLocalId,
+    );
+    if (uploadIdentity == null && documentLocalId.startsWith('remote_doc_')) {
+      final rows = await identityDb.query(
+        'documents',
+        columns: ['remote_file_path', 'remote_public_url'],
+        where: 'local_id = ? AND patient_local_id = ?',
+        whereArgs: [documentLocalId, patientId],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('Document local introuvable');
+      uploadIdentity = resolveImportedDocumentUploadIdentity(
+        await _apiClient.fetchDocuments(patientId),
+        rows.single.values.map((value) => value?.toString() ?? ''),
+      );
+      await storeDocumentUploadIdentity(
+        identityDb,
+        patientId,
+        documentLocalId,
+        uploadIdentity,
+      );
+    }
     final uploaded = await _apiClient.uploadDocument(
       patientId: patientId,
-      documentLocalId: documentLocalId,
+      documentLocalId: uploadIdentity ?? documentLocalId,
       title: title,
       fileName: fileName,
       mimeType: mimeType,

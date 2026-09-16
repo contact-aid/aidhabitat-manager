@@ -10,9 +10,10 @@ Etat valide le 2026-06-08.
 
 | Sujet | Etat | Commentaire |
 | --- | --- | --- |
-| Build iOS release | Pret cote code | `flutter build ios --release --no-codesign` passe. La signature de distribution reste a faire avec le compte Apple Developer. |
+| Build iOS release | A regenerer | Le projet est maintenant declare iPad uniquement. La signature de distribution reste a faire avec le compte Apple Developer. |
 | Build macOS release | Pret cote code | `flutter build macos --release` passe. Le bundle local est encore signe ad hoc, donc non distribuable tel quel. |
 | Bundle identifier | Pret | iOS/macOS utilisent `com.aidhabitat.manager`. A conserver si on veut une app multi-plateforme unique dans App Store Connect. |
+| Famille d'appareils iOS | Corrige dans le projet | Le projet iOS est declare iPad uniquement (`TARGETED_DEVICE_FAMILY = 2`). Le build 25 App Store Connect reste l'ancien binaire iPhone+iPad ; un nouveau build est necessaire. |
 | Permissions iOS | Pret | Camera, phototheque, documents, telephone, SMS, mail et URLs declares dans `Info.plist`. |
 | Permissions macOS | Pret | Camera, phototheque, fichiers selectionnes par l'utilisateur et reseau declares via entitlements. |
 | Privacy manifest iOS | Pret | `PrivacyInfo.xcprivacy` present et valide. |

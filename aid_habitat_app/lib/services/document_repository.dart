@@ -13,6 +13,7 @@ import '../models/types.dart';
 import 'document_content_url.dart';
 import 'document_file_naming.dart';
 import 'document_revision_store.dart';
+import 'document_upload_identity.dart';
 import 'local_database.dart';
 import 'media_cache_service.dart';
 import 'native_file_protection.dart';
@@ -1602,15 +1603,41 @@ class DocumentRepository {
         // the remote_file_path/remote_public_url columns.
         final clientDocumentId = remote['clientDocumentId']?.toString() ?? '';
 
+        final aliases = clientDocumentId.isEmpty
+            ? <Map<String, Object?>>[]
+            : await txn.query(
+                'kv_store',
+                columns: ['key'],
+                where: 'value = ? AND key LIKE ?',
+                whereArgs: [clientDocumentId, 'document_upload_identity:%'],
+              );
+        final aliasIds = <String>[];
+        for (final alias in aliases) {
+          final identity =
+              jsonDecode(
+                    (alias['key'] as String).substring(
+                      'document_upload_identity:'.length,
+                    ),
+                  )
+                  as List;
+          if (identity[0] == patientId) aliasIds.add(identity[1] as String);
+        }
+
         final existingRows = await txn.query(
           'documents',
           where: clientDocumentId.isNotEmpty
               ? 'patient_local_id = ? AND '
-                    '(local_id = ? OR remote_file_path = ? OR remote_public_url = ?)'
+                    '(local_id = ? OR remote_file_path = ? OR remote_public_url = ? ${aliasIds.isEmpty ? '' : 'OR local_id IN (${List.filled(aliasIds.length, '?').join(',')})'})'
               : 'patient_local_id = ? AND '
                     '(remote_file_path = ? OR remote_public_url = ?)',
           whereArgs: clientDocumentId.isNotEmpty
-              ? [patientId, clientDocumentId, remotePath, publicUrl]
+              ? [
+                  patientId,
+                  clientDocumentId,
+                  remotePath,
+                  publicUrl,
+                  ...aliasIds,
+                ]
               : [patientId, remotePath, publicUrl],
           limit: 1,
         );
@@ -1710,6 +1737,12 @@ class DocumentRepository {
         final localId =
             existing?['local_id'] as String? ??
             _remoteDocumentLocalId(patientId, remote);
+        await storeDocumentUploadIdentity(
+          txn,
+          patientId,
+          localId,
+          clientDocumentId,
+        );
         remoteLocalIds.add(localId);
         // The backend allocates a new content UUID/path on replacement.
         // Timestamps alone also change on rename, so keep those local bytes.

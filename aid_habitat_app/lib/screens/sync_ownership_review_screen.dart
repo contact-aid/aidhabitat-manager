@@ -7,6 +7,7 @@ import '../services/local_database.dart';
 import '../services/app_config.dart';
 import '../services/offline_vault.dart';
 import '../services/sync_operation_ownership.dart';
+import '../services/sync_ownership_self_review.dart';
 
 typedef SyncPayloadOpener = Future<String> Function(String sealedPayload);
 
@@ -39,6 +40,7 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
   bool _submitting = false;
   bool _confirmed = false;
   bool _forbidden = false;
+  bool _selfReview = false;
   String? _error;
 
   @override
@@ -62,26 +64,42 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
       final loaded = await db.transaction((txn) async {
         final counts = await SyncOperationOwnership.blockedCounts(txn);
         final adminId = await _activeAdminId(txn);
-        if (adminId == null &&
-            counts.historicalUnattributed +
-                    counts.reviewRequired +
-                    counts.missingOwnership >
-                0) {
-          throw const _AdminRequired();
-        }
-        final rows = await SyncOperationOwnership.listReviewableOperations(txn);
+        final userId = await SyncOwnershipSelfReview.activeUserId(txn);
+        if (userId == null) throw const _AdminRequired();
+        final rows = await SyncOperationOwnership.listReviewableOperations(
+          txn,
+          selfReviewUserId: adminId == null ? userId : null,
+        );
         final operation = rows.isEmpty ? null : rows.single;
         final target = operation == null
             ? ''
+            : adminId == null
+            ? 'Sauvegarde conservée sur cet appareil'
             : await _targetLabel(txn, operation);
-        return (operation, adminId, counts.ownerMismatch > 0, target);
+        return (
+          operation,
+          userId,
+          counts.blocksDispatch,
+          target,
+          adminId == null,
+        );
       });
       final operation = loaded.$1;
       final summary = operation == null
           ? ('', false)
+          : loaded.$5
+          ? (
+              'Confirmez uniquement si vous avez effectué cette modification. '
+                  'Son contenu sera conservé et les droits habituels du serveur resteront appliqués.',
+              true,
+            )
           : await _buildSafeSummary(operation);
       if (epoch != AppConfig.sessionEpoch ||
-          (operation != null && await _activeAdminId(db) != loaded.$2)) {
+          (operation != null &&
+              (loaded.$5
+                      ? await SyncOwnershipSelfReview.activeUserId(db)
+                      : await _activeAdminId(db)) !=
+                  loaded.$2)) {
         throw const _AdminRequired();
       }
       if (!mounted) return;
@@ -92,6 +110,7 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
         _target = loaded.$4;
         _reviewerId = loaded.$2;
         _reviewEpoch = epoch;
+        _selfReview = loaded.$5;
         _waitingForOwner = loaded.$3;
         _loading = false;
         _forbidden = false;
@@ -183,15 +202,24 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
       final accepted = await db.transaction((txn) async {
         if (_reviewEpoch != AppConfig.sessionEpoch ||
             _reviewerId == null ||
-            await _activeAdminId(txn) != _reviewerId) {
+            (_selfReview
+                    ? await SyncOwnershipSelfReview.activeUserId(txn)
+                    : await _activeAdminId(txn)) !=
+                _reviewerId) {
           throw const _AdminRequired();
         }
-        final accepted = await SyncOperationOwnership.reviewAttribution(
-          txn: txn,
-          operationId: operation.operationId,
-          expectedPayloadJson: operation.sealedPayloadJson,
-          expectedPreviousOwnerUserLocalId: operation.ownerUserLocalId,
-        );
+        final accepted = _selfReview
+            ? await SyncOwnershipSelfReview.confirm(
+                txn: txn,
+                expected: operation,
+                userId: _reviewerId!,
+              )
+            : await SyncOperationOwnership.reviewAttribution(
+                txn: txn,
+                operationId: operation.operationId,
+                expectedPayloadJson: operation.sealedPayloadJson,
+                expectedPreviousOwnerUserLocalId: operation.ownerUserLocalId,
+              );
         if (_reviewEpoch != AppConfig.sessionEpoch) {
           throw const _AdminRequired();
         }
@@ -298,9 +326,13 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
     if (_forbidden) {
       return const _ReviewMessage(
         icon: Icons.lock_outline,
-        title: 'Accès administrateur requis',
+        title: 'Session à vérifier',
         message:
-            'Seul un administrateur connecté peut attribuer une ancienne sauvegarde.',
+            'Vos sauvegardes restent conservées sur ce navigateur ou cet appareil. '
+            'Le compte actif a changé ou ne permet plus cette confirmation. '
+            'Ne videz pas les données de l’application et ne supprimez pas les '
+            'sauvegardes en attente. Utilisez « Signaler » depuis la page précédente '
+            'pour demander une intervention, sans transmettre le contenu des sauvegardes.',
       );
     }
     if (_error != null) {
@@ -378,8 +410,10 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
           onChanged: isRunning || _submitting || !_readable
               ? null
               : (value) => setState(() => _confirmed = value ?? false),
-          title: const Text(
-            'J’ai vérifié cette opération et je prends en charge son envoi avec mon compte.',
+          title: Text(
+            _selfReview
+                ? 'Je confirme avoir effectué cette modification avec mon compte.'
+                : 'J’ai vérifié cette opération et je prends en charge son envoi avec mon compte.',
           ),
           controlAffinity: ListTileControlAffinity.leading,
         ),

@@ -19,6 +19,7 @@ bash "$script_dir/test_safely.sh" \
   test/services/sync_push_outcome_test.dart \
   test/services/sync_session_scope_test.dart \
   test/services/agent3_sync_operation_ownership_test.dart \
+  test/services/sync_ownership_diagnostic_test.dart \
   test/services/agent4_ownership_migration_test.dart \
   test/services/web_vault_migration_test.dart \
   test/services/agent4_offline_identity_test.dart \
@@ -37,11 +38,13 @@ bash "$script_dir/test_safely.sh" \
   test/services/local_database_open_failure_test.dart \
   test/services/document_revision_save_test.dart \
   test/services/document_remote_revision_test.dart \
+  test/services/document_imported_upload_test.dart \
   test/services/document_page_save_test.dart \
   test/services/image_rotation_worker_test.dart \
   test/services/visit_date_time_test.dart \
   test/screens/database_unavailable_screen_test.dart \
   test/screens/agent3_sync_ownership_review_screen_test.dart \
+  test/screens/visit_report/recommendations_gestures_test.dart \
   test/screens/document_preview_ink_test.dart \
   test/screens/document_preview_revision_test.dart \
   test/screens/secondary_conflict_review_test.dart \

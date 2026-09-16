@@ -1188,11 +1188,23 @@ class SyncRepository {
   }) async {
     final db = await _database.database;
     final cutoff = DateTime.now().subtract(maxAge).toIso8601String();
-    return db.delete(
-      'sync_operations',
-      where: 'status = ? AND updated_at < ?',
-      whereArgs: [SyncOperationStatus.completed.name, cutoff],
-    );
+    return db.transaction((txn) async {
+      if (_enforceOwnership) {
+        await txn.rawDelete(
+          '''DELETE FROM ${SyncOperationOwnership.tableName}
+             WHERE operation_id IN (
+               SELECT id FROM sync_operations
+               WHERE status = ? AND updated_at < ?
+             )''',
+          [SyncOperationStatus.completed.name, cutoff],
+        );
+      }
+      return txn.delete(
+        'sync_operations',
+        where: 'status = ? AND updated_at < ?',
+        whereArgs: [SyncOperationStatus.completed.name, cutoff],
+      );
+    });
   }
 
   /// Répare la file au démarrage sans jamais supprimer une donnée utilisateur.

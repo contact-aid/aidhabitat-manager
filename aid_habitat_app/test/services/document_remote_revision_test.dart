@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:aid_habitat_app/components/doc_thumbnails.dart';
 import 'package:aid_habitat_app/services/document_repository.dart';
 import 'package:aid_habitat_app/services/document_revision_store.dart';
+import 'package:aid_habitat_app/services/document_upload_identity.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/offline_vault.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
@@ -683,6 +684,131 @@ void main() {
       final before = await row();
       await repository.mergeRemoteDocuments('another-patient', [remote()]);
       expect(await row(), before);
+    },
+  );
+
+  test(
+    'imported report retains its server identity across replacement and restart',
+    () async {
+      await db.delete('documents');
+      final imported = {
+        ...remote(revision: 'report-before'),
+        'id': 'report-before',
+        'clientDocumentId': 'report-origin-client',
+      };
+      await repository.mergeRemoteDocuments('patient', [imported]);
+      final opened = (await repository.fetchDocuments('patient')).single;
+      expect(opened.id, isNot('report-origin-client'));
+      expect(
+        await readDocumentUploadIdentity(db, 'patient', opened.id),
+        'report-origin-client',
+      );
+      expect(
+        resolveImportedDocumentUploadIdentity([imported], [opened.url!]),
+        'report-origin-client',
+      );
+      repository = makeRepository();
+      await repository.mergeRemoteDocuments('patient', [
+        {
+          ...imported,
+          'id': 'report-after',
+          'remotePath': url('report-after'),
+          'publicUrl': url('report-after'),
+          'updatedAt': third,
+        },
+      ]);
+      final reopened = (await repository.fetchDocuments('patient')).single;
+      expect(reopened.id, opened.id);
+      expect(reopened.url, url('report-after'));
+      expect(
+        await readDocumentUploadIdentity(db, 'another-patient', opened.id),
+        isNull,
+      );
+    },
+  );
+
+  test('imported replacement refuses missing or ambiguous identity', () {
+    final document = {...remote(), 'clientDocumentId': 'origin'};
+    expect(
+      () => resolveImportedDocumentUploadIdentity(
+        [{'clientDocumentId': 'unrelated'}],
+        ['https://example.invalid'],
+      ),
+      throwsStateError,
+    );
+    expect(
+      () => resolveImportedDocumentUploadIdentity([], [url('v2')]),
+      throwsStateError,
+    );
+    expect(
+      () => resolveImportedDocumentUploadIdentity(
+        [document, document],
+        [url('v2')],
+      ),
+      throwsStateError,
+    );
+    expect(
+      () => resolveImportedDocumentUploadIdentity(
+        [
+          {...document, 'clientDocumentId': ''},
+        ],
+        [url('v2')],
+      ),
+      throwsStateError,
+    );
+  });
+
+  test(
+    'stale imported report cannot reappear after replacement acknowledgement',
+    () async {
+      await db.delete('documents');
+      final imported = {
+        ...remote(revision: 'before'),
+        'id': 'before',
+        'clientDocumentId': 'original-client',
+      };
+      await repository.mergeRemoteDocuments('patient', [imported]);
+      final opened = (await repository.fetchDocuments('patient')).single;
+      final saved = await repository.enqueueReplacementBytes(
+        documentId: opened.id,
+        bytes: Uint8List.fromList('rotated report'.codeUnits),
+        fileName: 'report.pdf',
+        mimeType: 'application/pdf',
+      );
+      final operation = (await db.query('sync_operations')).single;
+      await db.update(
+        'sync_operations',
+        {'status': 'running'},
+        where: 'id = ?',
+        whereArgs: [operation['id']],
+      );
+      await SyncRepository.forTesting(
+        database: LocalDatabase.forTesting(db),
+      ).storeDocumentRemoteData(
+        operationId: operation['id'] as String,
+        documentLocalId: opened.id,
+        remotePath: url('after'),
+        publicUrl: url('after'),
+      );
+      await db.update(
+        'sync_operations',
+        {'status': 'completed'},
+        where: 'id = ?',
+        whereArgs: [operation['id']],
+      );
+      await db.update(
+        'documents',
+        {'sync_state': 'synced'},
+        where: 'local_id = ?',
+        whereArgs: [opened.id],
+      );
+      repository = makeRepository();
+      await repository.mergeRemoteDocuments('patient', [imported]);
+      final reopened = (await repository.fetchDocuments('patient')).single;
+      expect(reopened.id, opened.id);
+      expect(reopened.url, url('after'));
+      expect(reopened.localPath, saved.localPath);
+      expect(await File(reopened.localPath!).readAsString(), 'rotated report');
     },
   );
 }
