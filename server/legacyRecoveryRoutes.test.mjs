@@ -28,7 +28,9 @@ if (!process.argv.includes('--runner')) {
 } else {
   const { createRestMock, tables, timestamp, patientId, dossierId, ownerEmail, password } =
     await import('./test-fixtures/conditionalRoutes.rest.mjs');
-  const mock = createRestMock();
+  const mock = createRestMock({ referenceRows: Object.fromEntries(
+    ['situations', 'statuts', 'caisses', 'caissesComp'].map((entity) =>
+      [entity, [{ Id: 501, nom: 'Selection test', libelle: 'Selection test' }]])) });
   const nativeFetch = globalThis.fetch;
   let origin;
   let writes = 0;
@@ -121,6 +123,27 @@ if (!process.argv.includes('--runner')) {
       assert.equal((await patch()).status, 409, 'corrupt JSON must never be treated as an empty household');
       assert.equal(writes, 1);
       assert.deepEqual(mock.violations, []);
+    }
+    for (const [appKey, dbKey, reference] of [
+      ['familySituation', 'situation_proprietaire_id1', 'situations'],
+      ['occupationStatus', 'statut_occupation_id1', 'statuts'],
+      ['caisseRetraitePrincipale', 'caisses_de_retraite_id', 'caisses'],
+      ['caissesRetraiteComplementaires', 'caisses_de_retraite_complementaires_id', 'caissesComp'],
+    ]) {
+      mock.reset(); active = 'beneficiaire'; writes = 0;
+      const body = { [appKey]: 'Selection test', expectedUpdatedAt: timestamp,
+        concurrency: { version: 1, writeId: '11111111-1111-4111-8111-111111111111', baseValues: { [appKey]: '' } } };
+      const patch = () => nativeFetch(origin + `/api/beneficiaires/${patientId}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json', 'x-app-session': token }, body: JSON.stringify(body),
+      });
+      const saved = await patch();
+      assert.equal(saved.status, 200, `${appKey}: ${await saved.text()}`);
+      assert.equal(mock.row(active)[dbKey], 501, `${appKey}: selection must actually persist`);
+      assert.equal((await patch()).status, 200);
+      assert.equal(writes, 1);
+      mock.row(active)[dbKey] = 502;
+      assert.equal((await patch()).status, 409);
+      assert.equal(writes, 1);
     }
     console.log('RECOVERY_PASS');
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }

@@ -1,7 +1,26 @@
 import { isDeepStrictEqual } from 'node:util';
 
+// These housing checkboxes are read as false when the legacy database is empty.
+// Nullable choices (notably acces_facile_rue) deliberately stay out of this set.
+export const defaultFalseHousingColumns = new Set([
+  'sous_sol', 'rdc', 'etage', 'second_etage', 'third_etage', 'garage',
+  'veranda', 'balcon', 'terrasse', 'jardin', 'chauffage',
+  'radiateurs_electrique', 'chaudiere_gaz', 'chaudiere_fioul',
+  'pompe_a_chaleur', 'chaudiere_collective', 'cheminee_pole_bois',
+  'poele_granules', 'autre_chauffage', 'volets_roulants_manuels_entier',
+  'volets_roulants_electriques_entier', 'volets_persiennes_entier',
+  'cheminement_escalier_exterieur', 'cheminement_escalier_interieur',
+  'cheminement_pente_douce', 'cheminement_plat', 'cheminement_quelques_marches',
+  'cheminement_par_arriere', 'cheminement_seuil_porte',
+  'difficultes_circulation_interieure',
+]);
+
 export function mappedDatabaseValueEquals(key, observed, mapped) {
   if (isDeepStrictEqual(observed, mapped)) return true;
+  if (defaultFalseHousingColumns.has(key) && ['true', 'false'].includes(mapped)) {
+    if (observed == null || observed === '' || observed === false || observed === 0) return mapped === 'false';
+    if (observed === true || observed === 1) return mapped === 'true';
+  }
   if ((observed == null && mapped === '') || (mapped == null && observed === '')) return true;
   if (typeof mapped === 'boolean') {
     if (observed === 'true' || observed === 1) return mapped;

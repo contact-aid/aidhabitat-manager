@@ -30,7 +30,7 @@ const columns = (types) => [
   ...Object.entries(types).map(([title, uidt]) => ({ title, uidt, pk: false })),
 ];
 
-export function createRestMock() {
+export function createRestMock({ referenceRows = {} } = {}) {
   const credential = buildPasswordCredential(password).serialized;
   const members = [
     [1, 'contact@aidhabitat.fr', 'Renan'],
@@ -41,6 +41,7 @@ export function createRestMock() {
     uuid_source: `synthetic-member-${Id}`, etablissements_id: 2, mot_de_passe: credential }));
   const initial = Object.fromEntries(Object.values(tables).map((id) => [id, []]));
   initial[tables.ergos] = members;
+  for (const [entity, records] of Object.entries(referenceRows)) initial[tables[entity]] = structuredClone(records);
   initial[tables.dossier] = [{ Id: 101, uuid_source: dossierId, patient_id: patientId,
     beneficiaires_id: 201, ergo_id: 'Test Owner', status: 'A visiter',
     compte_anah: 'initial', nature_accompagnement: 'initial', beneficiaire_prepare: false,

@@ -419,6 +419,8 @@ const FIELD_SETS = {
     'dependance_particuliere', 'dependance_particuliere_txt', 'personne_confiance',
     'telephone_personne_confiance', 'mail_personne_confiance', 'numero_securite_sociale_monsieur',
     'numero_securite_sociale_madame', 'caisse_retraite_principale', 'caisse_retraite_secondaire',
+    'situation_proprietaire_id1', 'statut_occupation_id1', 'dependances_particulieres_id',
+    'categorie_revenu_id1', 'caisses_de_retraite_id', 'caisses_de_retraite_complementaires_id',
     'CreatedAt', 'UpdatedAt',
   ],
   dossiers: [
@@ -445,6 +447,7 @@ const FIELD_SETS = {
     // n'existe pas encore en base, NocoDB renvoie `null` → comportement
     // identique à avant (pas de pièces affichées).
     'rooms_breakdown_json',
+    'type_de_logement_id', 'porte_de_garage_id', 'portail_id1',
     'UpdatedAt',
   ],
   contexteDeVie: [
@@ -7552,7 +7555,7 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
       cheminement_par_arriere: boolText(updates.cheminementParArriere),
       cheminement_seuil_porte: boolText(updates.cheminementSeuilPorte),
       difficultes_circulation_interieure: boolText(updates.difficultesCirculationInterieure),
-      acces_facile_rue: boolText(updates.easyAccess),
+      acces_facile_rue: boolTextOrNull(updates.easyAccess),
       commentaire: nullableString(updates.comments),
       observation_accessibilite: nullableString(updates.accessObservation),
       // Pièces par niveau — fix 2026-05-07 : avant ce mapping, les
