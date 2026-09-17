@@ -159,6 +159,72 @@ void main() {
     AppConfig.clearAppSessionToken();
   });
 
+  for (final editDuringRequest in [false, true]) {
+    test(
+      'birth date then invalidity sync without self conflict (overlap=$editDuringRequest)',
+      () async {
+        final device = await _openDevice();
+        addTearDown(device.db.close);
+        await device.dossiers.mergeRemoteDossierPayloads([_remoteDossier()]);
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        var version = _baseVersion;
+        var requests = 0;
+        final service = NocodbSyncService(
+          database: device.local,
+          syncRepository: device.queue,
+          apiClient: NocodbApiClient(
+            client: MockClient((request) async {
+              final body = jsonDecode(request.body) as Map<String, dynamic>;
+              requests++;
+              if (body['expectedUpdatedAt'] != version) {
+                return http.Response(
+                  jsonEncode({'conflict': true, 'remoteUpdatedAt': version}),
+                  409,
+                );
+              }
+              if (requests == 1) {
+                entered.complete();
+                await release.future;
+              } else {
+                expect(body['invalidity'], true);
+              }
+            version = '2026-09-02T10:0$requests:00.000Z';
+              return http.Response(
+                jsonEncode({
+                  'data': {'updatedAt': version},
+                }),
+                200,
+              );
+            }),
+          ),
+        );
+        await device.dossiers.updatePatient('patient-1', {
+          'birth_date': '1957-09-11',
+        });
+        final first = service.pushPendingChanges();
+        await entered.future;
+        if (editDuringRequest) {
+          await device.dossiers.updatePatient('patient-1', {'invalidity': 1});
+        }
+        release.complete();
+        await first;
+        if (!editDuringRequest) {
+          await device.dossiers.updatePatient('patient-1', {'invalidity': 1});
+        }
+        final result = await service.pushPendingChanges();
+        expect(result.conflictCount, 0);
+        expect(result.failedOperations, 0);
+        expect(result.pushedOperations, 1);
+        expect(requests, 2);
+        final patient = (await device.db.query('patients')).single;
+        expect(patient['birth_date'], '1957-09-11');
+        expect(patient['invalidity'], 1);
+        expect(patient['sync_state'], 'synced');
+      },
+    );
+  }
+
   test(
     'a newer edit cannot be acknowledged by an older in-flight reply',
     () async {
@@ -207,10 +273,33 @@ void main() {
       expect(result.pushedOperations, 0);
       expect(result.deferredOperations, 1);
       expect(dossier['compte_anah'], 'Second local value');
-      expect(dossier['remote_updated_at'], _baseVersion);
+      expect(dossier['remote_updated_at'], '2026-09-02T10:00:00.000Z');
       expect(dossier['sync_state'], 'pendingSync');
       expect(operation['status'], 'pending');
       expect(queuedPayload['updates'], {'compteAnah': 'Second local value'});
+      expect(
+        queuedPayload['concurrency']['expectedUpdatedAt'],
+        '2026-09-02T10:00:00.000Z',
+      );
+      expect(queuedPayload['concurrency']['baseValues'], {
+        'compteAnah': 'First local value',
+      });
+      final secondPush = await NocodbSyncService(
+        syncRepository: device.queue,
+        apiClient: NocodbApiClient(
+          client: MockClient((request) async {
+            final body = jsonDecode(request.body) as Map<String, dynamic>;
+            expect(body['expectedUpdatedAt'], '2026-09-02T10:00:00.000Z');
+            expect(body['compteAnah'], 'Second local value');
+            return http.Response(
+              '{"data":{"updatedAt":"2026-09-02T10:01:00.000Z"}}',
+              200,
+            );
+          }),
+        ),
+      ).pushPendingChanges();
+      expect(secondPush.conflictCount, 0);
+      expect(secondPush.pushedOperations, 1);
     },
   );
 

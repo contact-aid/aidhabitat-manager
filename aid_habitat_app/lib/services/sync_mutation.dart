@@ -49,6 +49,11 @@ Map<String, dynamic> buildSyncMutation({
           'concurrency': {
             'version': 1,
             'writeId': newSyncWriteId(),
+            if (previousGuard?['writeId'] is String)
+              'predecessorWriteIds': [
+                previousGuard!['writeId'],
+                ...?previousGuard['predecessorWriteIds'] as List?,
+              ].take(256).toList(),
             'baseValues': combinedBase,
             'expectedUpdatedAt': previous == null
                 ? expectedUpdatedAt
@@ -57,6 +62,37 @@ Map<String, dynamic> buildSyncMutation({
         }),
       )
       as Map<String, dynamic>;
+}
+
+String describeSyncConflict(Map<String, dynamic> payload) {
+  final conflict = payload['conflict'];
+  final guard = payload['concurrency'];
+  if (conflict is Map && conflict['code'] == 'LOCAL_EDIT_BASE_CHANGED') {
+    return 'La fiche locale a changé pendant que ce formulaire était ouvert. '
+        'Vos saisies sont conservées ; comparez les valeurs avant de choisir.';
+  }
+  final remote = conflict is Map ? conflict['remote'] : null;
+  final code = remote is Map ? remote['error'] : null;
+  if (code == 'SYNC_FIELD_CONFLICT' ||
+      code == 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW') {
+    return 'Les valeurs saisies et les valeurs du serveur ne peuvent pas être '
+        'fusionnées automatiquement sans risquer un écrasement.';
+  }
+  final expected = guard is Map ? guard['expectedUpdatedAt'] : null;
+  final actual = remote is Map ? remote['remoteUpdatedAt'] : null;
+  final before = expected is String ? DateTime.tryParse(expected) : null;
+  final after = actual is String ? DateTime.tryParse(actual) : null;
+  if (before != null && after != null && after.isAfter(before)) {
+    return 'La fiche serveur a changé depuis la version de référence de cette '
+        'saisie. Cela ne permet pas de savoir quel appareil est à l’origine '
+        'du changement.\nRéférence : $expected\nServeur : $actual';
+  }
+  if (before == null || code == 'SYNC_BASELINE_REQUIRED') {
+    return 'La version de référence de cette saisie est absente ou inutilisable. '
+        'Vos modifications restent sur cet appareil ; une comparaison est nécessaire.';
+  }
+  return 'La synchronisation a été bloquée par un contrôle de cohérence. '
+      'La cause précise n’est pas disponible dans cette réponse ; vos saisies sont conservées.';
 }
 
 bool _equalJson(Object? a, Object? b) {
@@ -72,6 +108,54 @@ bool _equalJson(Object? a, Object? b) {
     return true;
   }
   return a == b;
+}
+
+/// Advance only a proven successor of our own successful write. Never rebase
+/// on a newly fetched remote version or merge occupant arrays by position.
+Map<String, dynamic>? rebaseAcknowledgedMutation({
+  required Map<String, dynamic> sent,
+  required Map<String, dynamic> pending,
+  required String version,
+}) {
+  final oldGuard = sent['concurrency'];
+  final guard = pending['concurrency'];
+  final oldUpdates = sent['updates'];
+  final updates = pending['updates'];
+  if (DateTime.tryParse(version) == null ||
+      pending.containsKey('conflict') ||
+      oldGuard is! Map ||
+      guard is! Map ||
+      oldGuard['version'] != 1 ||
+      guard['version'] != 1 ||
+      oldUpdates is! Map ||
+      updates is! Map ||
+      guard['predecessorWriteIds'] is! List ||
+      !(guard['predecessorWriteIds'] as List).contains(oldGuard['writeId']) ||
+      guard['expectedUpdatedAt'] != oldGuard['expectedUpdatedAt'] ||
+      guard['baseValues'] is! Map ||
+      oldGuard['baseValues'] is! Map) {
+    return null;
+  }
+  final base = Map<String, dynamic>.from(guard['baseValues'] as Map);
+  final oldBase = oldGuard['baseValues'] as Map;
+  for (final key in oldUpdates.keys) {
+    if (!updates.containsKey(key) ||
+        !base.containsKey(key) ||
+        !oldBase.containsKey(key) ||
+        !_equalJson(base[key], oldBase[key])) {
+      return null;
+    }
+  }
+  base.addAll(Map<String, dynamic>.from(oldUpdates));
+  return {
+    ...pending,
+    'concurrency': {
+      ...Map<String, dynamic>.from(guard),
+      'baseValues': base,
+      'expectedUpdatedAt': version,
+      'predecessorWriteIds': <String>[],
+    },
+  };
 }
 
 class SyncMergePlan {

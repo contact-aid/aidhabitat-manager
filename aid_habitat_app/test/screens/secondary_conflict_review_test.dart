@@ -211,7 +211,7 @@ void main() {
         for (final label in entry.value) {
           expect(find.text(label), findsOneWidget);
         }
-        expect(find.text('Cet iPad'), findsWidgets);
+        expect(find.text('Cet appareil'), findsWidgets);
         expect(find.text('Serveur'), findsWidgets);
         await tester.scrollUntilVisible(
           find.text('Prendre ces valeurs du serveur'),

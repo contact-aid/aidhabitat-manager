@@ -7,6 +7,7 @@ import '../models/types.dart';
 import 'local_database.dart';
 import 'offline_vault.dart';
 import 'sync_operation_ownership.dart';
+import 'sync_mutation.dart';
 
 const Set<String> _kReportPrerequisiteEntityTypes = {
   'dossier',
@@ -364,30 +365,77 @@ class SyncRepository {
         expectedPayloadJson: operation.payloadJson,
       );
 
+  Future<bool> acknowledgeVersionedMutation(
+    SyncOperation operation,
+    String? version,
+  ) => _markCompleted(
+    operationId: operation.id,
+    entityType: operation.entityType,
+    entityLocalId: operation.entityLocalId,
+    expectedPayloadJson: operation.payloadJson,
+    acknowledgedVersion: version,
+  );
+
   Future<bool> _markCompleted({
     required String operationId,
     required String entityType,
     required String entityLocalId,
     String? expectedPayloadJson,
+    String? acknowledgedVersion,
   }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
       if (expectedPayloadJson != null) {
         final rows = await txn.query(
           'sync_operations',
-          columns: const ['payload_json'],
-          where:
-              'id = ? AND entity_type = ? AND entity_local_id = ? AND status = ?',
-          whereArgs: [operationId, entityType, entityLocalId, 'running'],
+          columns: const ['payload_json', 'status'],
+          where: 'id = ? AND entity_type = ? AND entity_local_id = ?',
+          whereArgs: [operationId, entityType, entityLocalId],
           limit: 1,
         );
-        if (rows.isEmpty ||
-            await OfflineVault.instance.openString(
-                  rows.single['payload_json'] as String,
-                ) !=
-                expectedPayloadJson) {
+        if (rows.isEmpty) return false;
+        final currentPayload = await OfflineVault.instance.openString(
+          rows.single['payload_json'] as String,
+        );
+        if (rows.single['status'] != 'running' ||
+            currentPayload != expectedPayloadJson) {
+          if (rows.single['status'] == 'pending' &&
+              acknowledgedVersion != null) {
+            final rebased = rebaseAcknowledgedMutation(
+              sent: jsonDecode(expectedPayloadJson) as Map<String, dynamic>,
+              pending: jsonDecode(currentPayload) as Map<String, dynamic>,
+              version: acknowledgedVersion,
+            );
+            if (rebased != null) {
+              await txn.update(
+                'sync_operations',
+                {
+                  'payload_json': await OfflineVault.instance.sealString(
+                    jsonEncode(rebased),
+                  ),
+                  'updated_at': DateTime.now().toIso8601String(),
+                },
+                where: 'id = ?',
+                whereArgs: [operationId],
+              );
+              await _storeEntityVersion(
+                txn,
+                entityType,
+                entityLocalId,
+                acknowledgedVersion,
+              );
+            }
+          }
           return false;
         }
+      }
+      if (acknowledgedVersion != null) {
+        await _storeEntityVersion(
+          txn,
+          entityType,
+          entityLocalId,
+          acknowledgedVersion,
+        );
       }
       final updated = await txn.update(
         'sync_operations',
@@ -437,6 +485,28 @@ class SyncRepository {
       );
       return true;
     });
+  }
+
+  Future<void> _storeEntityVersion(
+    DatabaseExecutor db,
+    String type,
+    String id,
+    String version,
+  ) async {
+    final table = switch (type) {
+      'patient' => 'patients',
+      'housing' => 'housings',
+      'dossier' => 'dossiers',
+      _ => throw StateError('Unsupported versioned entity: $type'),
+    };
+    await db.update(
+      table,
+      {'remote_updated_at': version},
+      where: type == 'housing'
+          ? 'local_id IN (SELECT housing_local_id FROM dossiers WHERE local_id = ?)'
+          : 'local_id = ?',
+      whereArgs: [id],
+    );
   }
 
   /// Persist a server version only while this exact payload owns the reply.

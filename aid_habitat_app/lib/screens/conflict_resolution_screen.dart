@@ -6,6 +6,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/dossier_repository.dart';
+import '../services/sync_mutation.dart';
 
 class ConflictResolutionScreen extends StatefulWidget {
   const ConflictResolutionScreen({
@@ -159,6 +160,12 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(
+            describeSyncConflict(
+              jsonDecode(review.payloadJson) as Map<String, dynamic>,
+            ),
+          ),
           const SizedBox(height: 12),
           for (final key in review.localValues.keys)
             Padding(
@@ -173,7 +180,10 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                   const SizedBox(height: 6),
                   LayoutBuilder(
                     builder: (context, constraints) {
-                      final local = _value('Cet iPad', review.localValues[key]);
+                      final local = _value(
+                        'Cet appareil',
+                        review.localValues[key],
+                      );
                       final remote = _value(
                         'Serveur',
                         review.remoteValues[key],
@@ -256,6 +266,8 @@ const _fieldLabels = {
   'occupant1BirthDate': 'Date de naissance',
   'trustedPerson': 'Personne de confiance',
   'occupants': 'Occupants',
+  'invalidity': 'Invalidité',
+  'invalidityTxt': 'Précisions sur l’invalidité',
   'incomeCategory': 'Categorie de revenus',
   'fiscalRevenue': 'Revenu fiscal',
   'numberPeople': 'Nombre de personnes',

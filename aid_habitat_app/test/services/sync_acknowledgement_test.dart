@@ -548,6 +548,51 @@ void main() {
     );
   }
 
+  for (final failCompletion in [false, true]) {
+    test(
+      'version and acknowledgement commit atomically (failure=$failCompletion)',
+      () async {
+        await db.insert('patients', {
+          'local_id': 'patient-1',
+          'sync_state': 'pendingSync',
+          'remote_updated_at': 'old',
+        });
+        await insertOperation(
+          'ack-patient',
+          entityType: 'patient',
+          entityId: 'patient-1',
+          operationType: 'update',
+          payload: '{"updates":{"invalidity":true}}',
+        );
+        final op = (await repository.fetchRunnableOperations()).single;
+        await repository.tryMarkRunning(op);
+        if (failCompletion) {
+          await db.execute(
+            "CREATE TRIGGER block_ack BEFORE UPDATE ON sync_operations "
+            "WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'test'); END",
+          );
+          await expectLater(
+            repository.acknowledgeVersionedMutation(op, 'new'),
+            throwsA(isA<DatabaseException>()),
+          );
+        } else {
+          expect(
+            await repository.acknowledgeVersionedMutation(op, 'new'),
+            isTrue,
+          );
+        }
+        expect(
+          (await db.query('patients')).single['remote_updated_at'],
+          failCompletion ? 'old' : 'new',
+        );
+        expect(
+          await operationStatus('ack-patient'),
+          failCompletion ? 'running' : 'completed',
+        );
+      },
+    );
+  }
+
   for (final kind in ['failed', 'transient', 'conflict']) {
     Future<void> reject(String id, {String entityId = 'doc-1'}) async {
       if (kind == 'conflict') {

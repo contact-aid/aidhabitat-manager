@@ -4,6 +4,108 @@ import 'package:aid_habitat_app/services/sync_mutation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'conflict explanation distinguishes local and remote version changes',
+    () {
+      expect(
+        describeSyncConflict({
+          'conflict': {'code': 'LOCAL_EDIT_BASE_CHANGED'},
+        }),
+        contains('fiche locale'),
+      );
+      expect(describeSyncConflict({}), contains('absente'));
+      expect(
+        describeSyncConflict({
+          'concurrency': {'expectedUpdatedAt': '2026-09-01T10:00:00Z'},
+          'conflict': {
+            'remote': {'remoteUpdatedAt': '2026-09-01T10:01:00Z'},
+          },
+        }),
+        contains('Référence : 2026-09-01T10:00:00Z'),
+      );
+      expect(
+        describeSyncConflict({
+          'conflict': {
+            'remote': {'error': 'SYNC_FIELD_CONFLICT'},
+          },
+        }),
+        contains('fusionnées'),
+      );
+    },
+  );
+  group('acknowledged successors', () {
+    Map<String, dynamic> make(Map<String, dynamic>? previous) =>
+        buildSyncMutation(
+          idKey: 'patientLocalId',
+          entityId: 'p1',
+          updates: {
+            'occupants': [
+              {'invalidity': previous != null},
+            ],
+          },
+          baseValues: {
+            'occupants': [
+              {'invalidity': false},
+            ],
+          },
+          expectedUpdatedAt: '2026-09-01T10:00:00Z',
+          previous: previous,
+        );
+    test(
+      'rebase keeps latest occupant array, advances only acknowledged base',
+      () {
+        final sent = make(null);
+        final pending = make(make(sent));
+        final next = rebaseAcknowledgedMutation(
+          sent: sent,
+          pending: pending,
+          version: '2026-09-01T10:01:00Z',
+        )!;
+        expect(next['updates'], pending['updates']);
+        expect(next['concurrency']['baseValues'], sent['updates']);
+        expect(
+          next['concurrency']['expectedUpdatedAt'],
+          '2026-09-01T10:01:00Z',
+        );
+        expect(
+          rebaseAcknowledgedMutation(
+            sent: sent,
+            pending: next,
+            version: '2026-09-01T10:01:00Z',
+          ),
+          isNull,
+        );
+      },
+    );
+    for (final reason in [
+      'unrelated',
+      'conflict',
+      'changed-base',
+      'changed-version',
+      'unknown-base',
+    ]) {
+      test('reject $reason', () {
+        final sent = make(null);
+        final pending = reason == 'unrelated' ? make(null) : make(sent);
+        if (reason == 'conflict') pending['conflict'] = {};
+        if (reason == 'changed-base') {
+          pending['concurrency']['baseValues'] = {'occupants': []};
+        }
+        if (reason == 'unknown-base') pending['concurrency']['baseValues'] = {};
+        if (reason == 'changed-version') {
+          pending['concurrency']['expectedUpdatedAt'] = '2026-09-02T10:00:00Z';
+        }
+        expect(
+          rebaseAcknowledgedMutation(
+            sent: sent,
+            pending: pending,
+            version: '2026-09-01T10:01:00Z',
+          ),
+          isNull,
+        );
+      });
+    }
+  });
   Map<String, dynamic> mutation({
     Map<String, dynamic>? previous,
     Map<String, dynamic> updates = const {'name': 'Local'},

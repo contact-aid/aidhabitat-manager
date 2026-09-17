@@ -404,6 +404,24 @@ class NocodbSyncService {
             operation,
             jsonDecode(operation.payloadJson) as Map<String, dynamic>,
           );
+        } else if (operation.operationType == 'update' &&
+            const {
+              'patient',
+              'housing',
+              'dossier',
+            }.contains(operation.entityType)) {
+          final payload =
+              jsonDecode(operation.payloadJson) as Map<String, dynamic>;
+          final version = await switch (operation.entityType) {
+            'patient' => _processPatientOperation(operation, payload),
+            'housing' => _processHousingOperation(operation, payload),
+            _ => _processDossierOperation(operation, payload),
+          };
+          SyncSessionScope.current?.check();
+          acknowledged = await _syncRepository.acknowledgeVersionedMutation(
+            operation,
+            version,
+          );
         } else {
           await _processOperation(operation);
           SyncSessionScope.current?.check();
@@ -977,7 +995,7 @@ class NocodbSyncService {
   /// itself since the server accepts either a synthetic id like
   /// `nocodb-beneficiaire-123` or a free-form appBeneficiaryId resolved
   /// via linked records.
-  Future<void> _processPatientOperation(
+  Future<String?> _processPatientOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -1016,12 +1034,12 @@ class NocodbSyncService {
       patientId: remoteId,
       updates: updatesWithGuard,
     );
-    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
+    return newUpdatedAt;
   }
 
   /// Pushes a housing update to NocoDB. The housing row is resolved to a
   /// beneficiary remote ID by joining `dossiers` and `patients`.
-  Future<void> _processHousingOperation(
+  Future<String?> _processHousingOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -1077,7 +1095,7 @@ class NocodbSyncService {
       beneficiaryId: remoteId,
       updates: updatesWithGuard,
     );
-    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
+    return newUpdatedAt;
   }
 
   Future<String?> _resolveRemotePatientId(String localId) async {
@@ -1115,7 +1133,7 @@ class NocodbSyncService {
     return remote;
   }
 
-  Future<void> _processDossierOperation(
+  Future<String?> _processDossierOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -1150,7 +1168,7 @@ class NocodbSyncService {
             '[sync] dossier:create skip — déjà créé côté serveur '
             '(patientLocalId=$patientLocalId remoteId=$existingRemoteId)',
           );
-          return;
+          return null;
         }
       }
 
@@ -1212,7 +1230,7 @@ class NocodbSyncService {
         dossierLocalId: dossierLocalId,
         remoteDossierId: remoteDossierId,
       );
-      return;
+      return null;
     }
 
     if (operation.operationType == 'update') {
@@ -1253,12 +1271,11 @@ class NocodbSyncService {
             'concurrency': payload['concurrency'],
         },
       );
-      await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
-      return;
+      return newUpdatedAt;
     }
 
     if (operation.operationType == 'seed_sync') {
-      return;
+      return null;
     }
 
     throw Exception(
