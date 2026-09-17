@@ -94,6 +94,34 @@ void main() {
           )
           as Map<String, dynamic>;
 
+  test('blank remote birth date can be reviewed and local date retained', () async {
+    final raw = remote();
+    final occupants = [
+      {'firstName': 'Original', 'lastName': 'Synthetic', 'birthDate': ''},
+    ];
+    raw['patient'] = <String, dynamic>{
+      ...raw['patient'] as Map,
+      'birthDate': null,
+      'occupant1BirthDate': null,
+      'occupants': occupants,
+    };
+    await dossiers.mergeRemoteDossierPayloads([raw]);
+    await dossiers.updatePatient('patient-1', {
+      'birth_date': '1966-08-04',
+      'occupants_json': jsonEncode([
+        {...occupants.single, 'birthDate': '1966-08-04'},
+      ]),
+    });
+    await conflict('patient');
+    final review = (await dossiers.reviewConflicts('dossier-1', raw)).single;
+    expect(review.localValues['occupant1BirthDate'], '1966-08-04');
+    expect(review.remoteValues['occupant1BirthDate'], '');
+    await dossiers.resolveReviewedConflict(review, keepLocal: true);
+    expect((await payload())['updates']['occupant1BirthDate'], '1966-08-04');
+    expect((await payload())['concurrency']['expectedUpdatedAt'], _old);
+    expect((await db.query('patients')).single['birth_date'], '1966-08-04');
+  });
+
   test('409 preserves both versions, blocks boot and protects pull', () async {
     await dossiers.updatePatient('patient-1', {'first_name': 'Local'});
     await conflict('patient');

@@ -2520,11 +2520,11 @@ const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
   zipCode: stringValue(field(beneficiaryRecord, 'code_postal_libre')) || stringValue(field(beneficiaryRecord, 'code_postal')),
   phone: stringValue(field(beneficiaryRecord, 'telephone')),
   email: stringValue(field(beneficiaryRecord, 'mail')),
-  birthDate: field(beneficiaryRecord, 'date_naissance_monsieur') || field(beneficiaryRecord, 'date_naissance_madame') || undefined,
-  birthDateMr: field(beneficiaryRecord, 'date_naissance_monsieur') || undefined,
-  birthDateMme: field(beneficiaryRecord, 'date_naissance_madame') || undefined,
-  occupant1BirthDate: field(beneficiaryRecord, 'date_naissance_monsieur') || undefined,
-  occupant2BirthDate: field(beneficiaryRecord, 'date_naissance_madame') || undefined,
+  birthDate: field(beneficiaryRecord, 'date_naissance_monsieur') || field(beneficiaryRecord, 'date_naissance_madame') || null,
+  birthDateMr: field(beneficiaryRecord, 'date_naissance_monsieur') || null,
+  birthDateMme: field(beneficiaryRecord, 'date_naissance_madame') || null,
+  occupant1BirthDate: field(beneficiaryRecord, 'date_naissance_monsieur') || null,
+  occupant2BirthDate: field(beneficiaryRecord, 'date_naissance_madame') || null,
   familySituation: refLabel(field(beneficiaryRecord, 'situation_proprietaire')),
   occupationStatus: normalizeOccupation(refLabel(field(beneficiaryRecord, 'statut_occupation'))),
   numberPeople: toNumber(field(beneficiaryRecord, 'nombre_personnes')),
@@ -7294,7 +7294,21 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
 
     const fields = mapBeneficiaryUpdatesToFields(updates, references);
     if (!conditionalSyncEnabled) {
-      if (recoverLegacySync(req, res, beneficiaryRecord, fields,
+      // GET derives occupants from scalar columns until the first JSON write.
+      // Compare that same representation, not a null storage implementation detail.
+      const rawOccupants = field(beneficiaryRecord, 'occupants_json');
+      const usesScalarOccupants = rawOccupants == null || rawOccupants === ''
+        || (typeof rawOccupants === 'string' && /^\[\s*\]$/.test(rawOccupants.trim()));
+      const comparisonRecord = usesScalarOccupants ? {
+        ...beneficiaryRecord,
+        fields: {
+          ...unwrapRecordFields(beneficiaryRecord),
+          occupants_json: mapBeneficiaryUpdatesToFields({
+            occupants: mapPatient(beneficiaryRecord, patientId).occupants,
+          }, references).occupants_json,
+        },
+      } : beneficiaryRecord;
+      if (recoverLegacySync(req, res, comparisonRecord, fields,
         mapBeneficiaryUpdatesToFields(updates.concurrency?.baseValues || {}, references))) return;
       if (sendConflictIfStale(req, res, beneficiaryRecord)) return;
     }

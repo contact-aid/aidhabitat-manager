@@ -86,6 +86,42 @@ if (!process.argv.includes('--runner')) {
         assert.deepEqual(mock.violations, []);
       }
     }
+    for (const storedOccupants of [null, '', '[]']) {
+      mock.reset(); active = 'beneficiaire'; writes = 0; hideVersion = false;
+      mock.row(active).occupants_json = storedOccupants;
+      const read = async () => (await (await nativeFetch(origin + '/api/dossiers', {
+        headers: { 'x-app-session': token },
+      })).json()).find((row) => row.id === dossierId).patient;
+      const patient = await read();
+      assert.equal(patient.birthDate, null, 'blank dates must remain available for conflict review');
+      assert.equal(patient.occupant1BirthDate, null);
+      const body = {
+        occupant1BirthDate: '1966-08-04',
+        occupants: patient.occupants.map((occupant) => ({ ...occupant, birthDate: '1966-08-04' })),
+        expectedUpdatedAt: patient.updatedAt,
+        concurrency: { version: 1, writeId: '11111111-1111-4111-8111-111111111111',
+          baseValues: { occupant1BirthDate: null, occupants: patient.occupants } },
+      };
+      const patch = () => nativeFetch(origin + `/api/beneficiaires/${patientId}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json', 'x-app-session': token },
+        body: JSON.stringify(body),
+      });
+      const saved = await patch();
+      assert.equal(saved.status, 200, `first birth date: ${await saved.text()}`);
+      assert.equal((await read()).occupant1BirthDate, '1966-08-04');
+      assert.equal((await patch()).status, 200, 'replay must be acknowledged');
+      assert.equal(writes, 1);
+      mock.row(active).occupants_json = storedOccupants;
+      mock.row(active).date_naissance_monsieur = '1965-02-03';
+      assert.equal((await patch()).status, 409, 'a different remote date remains protected');
+      body.expectedUpdatedAt = mock.row(active).UpdatedAt;
+      assert.equal((await patch()).status, 409, 'a current timestamp must not hide different values');
+      mock.row(active).date_naissance_monsieur = null;
+      mock.row(active).occupants_json = '{invalid JSON';
+      assert.equal((await patch()).status, 409, 'corrupt JSON must never be treated as an empty household');
+      assert.equal(writes, 1);
+      assert.deepEqual(mock.violations, []);
+    }
     console.log('RECOVERY_PASS');
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 }
