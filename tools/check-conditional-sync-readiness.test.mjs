@@ -18,9 +18,9 @@ function requestWith(rows, { missing = false, duplicate = false } = {}) {
     };
     assert.ok(!missing, 'No data should be fetched if the schema is not ready');
     const params = new URL(path, 'https://synthetic.test').searchParams;
-    assert.equal(params.get('fields'), 'Id,app_sync_revision');
+    assert(['Id,app_sync_revision', 'Id,app_sync_revision,dossier_id'].includes(params.get('fields')));
     const offset = duplicate ? 0 : Number(params.get('offset'));
-    return { list: rows.slice(offset, offset + 100) };
+    return { list: rows.slice(offset, offset + 100).map(row => ({ dossier_id: `dossier-${row.Id}`, ...row })) };
   };
 }
 test('missing schema is not readiness and never fetches business rows', async () => {
@@ -45,4 +45,15 @@ test('schema readiness alone never authorizes activation', async () => {
 test('repeated pagination fails closed', async () => {
   const rows = Array.from({ length: 100 }, (_, i) => ({ Id: i + 1, app_sync_revision: randomUUID() }));
   await assert.rejects(checkConditionalSyncReadiness({ baseId: SYNC_BASE, check: true, request: requestWith(rows, { duplicate: true }) }), /pagination/);
+});
+
+test('all seven tables and duplicate child owners are checked without exposing identities', async () => {
+  const report = await checkConditionalSyncReadiness({ baseId: SYNC_BASE, check: true, request: requestWith([
+    { Id: 1, app_sync_revision: randomUUID(), dossier_id: 'private-dossier' },
+    { Id: 2, app_sync_revision: randomUUID(), dossier_id: 'private-dossier' },
+  ]) });
+  assert.equal(report.tables.length, 7);
+  assert.equal(report.schemaAndRevisionsReady, false);
+  assert.equal(report.tables.find(t => t.child).duplicateDossiers, 1);
+  assert(!JSON.stringify(report).includes('private-dossier'));
 });

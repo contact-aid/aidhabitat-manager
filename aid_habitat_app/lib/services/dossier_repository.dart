@@ -9,6 +9,7 @@ import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
+import 'context_sync_protocol.dart';
 
 class SyncConflictReview {
   SyncConflictReview._({
@@ -22,6 +23,7 @@ class SyncConflictReview {
     required this.remoteColumns,
     required this.localRowId,
     required this.table,
+    this.contextReferenceJson,
   });
 
   final String operationId;
@@ -34,6 +36,7 @@ class SyncConflictReview {
   final Map<String, dynamic> remoteColumns;
   final String localRowId;
   final String table;
+  final String? contextReferenceJson;
 }
 
 class DossierRepository {
@@ -204,6 +207,10 @@ class DossierRepository {
   }
 
   static const _secondaryFields = <String, Map<String, String>>{
+    'contexte_de_vie': {
+      'medicalContext': 'medical_context_json',
+      'autonomy': 'autonomy_json',
+    },
     'mesures_anthropometriques': {
       'deboutHauteurCoude': 'debout_hauteur_coude',
       'assisHauteurAssise': 'assis_hauteur_assise',
@@ -249,11 +256,22 @@ class DossierRepository {
         );
         if (operations.isEmpty) continue;
         final raw = remoteByType[type];
-        final version = raw == null ? null : _extractRemoteUpdatedAt(raw);
+        final context = type == 'contexte_de_vie';
+        final reference = context && raw?['serverReference'] != null
+            ? ContextServerReference.fromJson(
+                (raw!['serverReference'] as Map).cast<String, dynamic>(),
+              )
+            : null;
+        final version = context
+            ? (reference?.updatedAt ?? '')
+            : raw == null
+            ? null
+            : _extractRemoteUpdatedAt(raw);
         if (raw == null ||
             raw['dossierId'] != remoteId ||
-            version == null ||
-            DateTime.tryParse(version) == null) {
+            (context
+                ? !raw.containsKey('serverReference')
+                : version == null || DateTime.tryParse(version) == null)) {
           throw StateError('Version distante de la fiche indisponible.');
         }
         final rows = await txn.query(
@@ -290,7 +308,12 @@ class DossierRepository {
               throw StateError('Valeur distante absente pour $key.');
             }
             final value = raw[key];
-            if (type == 'diagnostic_sanitaires') {
+            if (context) {
+              if (value is! Map) {
+                throw StateError('Contexte distant incomplet.');
+              }
+              columns[fields[key]!] = jsonEncode(value);
+            } else if (type == 'diagnostic_sanitaires') {
               if (value is! List || value.any((entry) => entry is! Map)) {
                 throw StateError('Diagnostic distant incomplet.');
               }
@@ -315,7 +338,10 @@ class DossierRepository {
               entityType: type,
               entityLocalId: dossierId,
               payloadJson: payloadJson,
-              remoteUpdatedAt: version,
+              remoteUpdatedAt: version!,
+              contextReferenceJson: context
+                  ? jsonEncode(reference?.toJson())
+                  : null,
               localValues: Map.unmodifiable(updates),
               remoteValues: Map.unmodifiable(values),
               remoteColumns: Map.unmodifiable(columns),
@@ -398,6 +424,8 @@ class DossierRepository {
         'writeId': newSyncWriteId(),
         'expectedUpdatedAt': review.remoteUpdatedAt,
         'baseValues': review.remoteValues,
+        if (review.contextReferenceJson != null)
+          'reference': jsonDecode(review.contextReferenceJson!),
       };
       await txn.update(
         'sync_operations',
@@ -417,7 +445,14 @@ class DossierRepository {
         review.table,
         {
           if (!keepLocal) ...review.remoteColumns,
-          'remote_updated_at': review.remoteUpdatedAt,
+          if (review.contextReferenceJson == null)
+            'remote_updated_at': review.remoteUpdatedAt,
+          if (review.contextReferenceJson != null) ...{
+            'remote_reference_json': review.contextReferenceJson == 'null'
+                ? null
+                : review.contextReferenceJson,
+            'remote_reference_known': 1,
+          },
           'updated_at': now,
           'sync_state': keepLocal ? 'pendingSync' : 'synced',
         },
@@ -1408,6 +1443,17 @@ class DossierRepository {
     final data = <String, dynamic>{
       'dossier_local_id': dossierId,
       'patient_local_id': patientLocalId,
+      if (raw.containsKey('contextServerReference')) ...{
+        'remote_reference_known': 1,
+        'remote_reference_json': raw['contextServerReference'] == null
+            ? null
+            : jsonEncode(
+                ContextServerReference.fromJson(
+                  (raw['contextServerReference'] as Map)
+                      .cast<String, dynamic>(),
+                ).toJson(),
+              ),
+      },
       'updated_at': now,
       'sync_state': SyncState.synced.name,
     };
@@ -2145,6 +2191,33 @@ class DossierRepository {
     );
     if (previous?['concurrency'] == null && !canCaptureVersion) {
       payload['localReference'] = payload.remove('concurrency');
+    }
+    if (entityType != 'contexte_de_vie' &&
+        _secondaryFields.containsKey(entityType) &&
+        previous == null &&
+        existingRow == null) {
+      payload['concurrency'] = {
+        ...(payload.remove('localReference') as Map),
+        'createIfAbsent': true,
+      };
+    }
+    if (entityType == 'contexte_de_vie') {
+      final previousGuard = previous?['concurrency'];
+      final known =
+          existingRow?['remote_reference_known'] == 1 || existingRow == null;
+      if (previousGuard is Map && previousGuard.containsKey('reference')) {
+        payload['concurrency'] = {
+          ...((payload['concurrency'] ?? payload.remove('localReference'))
+              as Map),
+          'reference': previousGuard['reference'],
+        };
+      } else if (previous == null && known) {
+        final reference = existingRow?['remote_reference_json'] as String?;
+        payload['concurrency'] = {
+          ...(payload.remove('localReference') as Map),
+          'reference': reference == null ? null : jsonDecode(reference),
+        };
+      }
     }
     if (existingRow?['sync_state'] == SyncState.conflict.name) {
       payload.putIfAbsent('conflict', () => <String, dynamic>{});

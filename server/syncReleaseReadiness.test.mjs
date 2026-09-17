@@ -117,14 +117,14 @@ test('flag on: baseline without durable writeId receives 428', async () => {
   assert.deepEqual(f.writes, []);
 });
 
-test('flag on: context-only legacy PATCH bypasses the conditional writer', async () => {
+test('flag on: context-only legacy PATCH cannot bypass the conditional writer', async () => {
   const f = fixture();
-  // Two context versions are both accepted with the same dossier timestamp.
+  // Neither stale context edit may use the unrelated dossier timestamp.
   for (const pathology of ['first', 'stale-second']) {
     const { res } = await f.request({ medicalContext: { pathology }, expectedUpdatedAt: timestamp });
-    assert.equal(res.statusCode, 200);
+    assert.equal(res.statusCode, 428);
   }
-  assert.deepEqual(f.writes.map((entry) => entry.kind), ['context', 'context']);
+  assert.deepEqual(f.writes, []);
   assert.equal(f.record.fields.updated_at, timestamp);
 });
 
@@ -135,14 +135,14 @@ test('flag on: legacy mixed dossier/context PATCH stops at the missing baseline'
   assert.deepEqual(f.writes, []);
 });
 
-test('guarded context is unsupported but preserves HTTP 400 after parent fix', async () => {
+test('guarded context requires the dedicated endpoint without a partial write', async () => {
   const f = fixture();
   const { res, error } = await f.request({ medicalContext: { pathology: 'new' },
     concurrency: { version: 1, writeId, baseValues: {} } });
-  assert.equal(error.code, 'SYNC_MULTITABLE_MUTATION_UNSUPPORTED');
-  assert.equal(error.status, 400);
-  assert.equal(res.statusCode, 400);
-  assert.equal(res.body.error, 'SYNC_MULTITABLE_MUTATION_UNSUPPORTED');
+  assert.equal(error.code, 'CONTEXT_DEDICATED_ROUTE_REQUIRED');
+  assert.equal(error.status, 428);
+  assert.equal(res.statusCode, 428);
+  assert.equal(res.body.error, 'CONTEXT_DEDICATED_ROUTE_REQUIRED');
   assert.deepEqual(f.writes, []);
 });
 

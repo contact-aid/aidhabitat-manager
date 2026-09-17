@@ -8,6 +8,10 @@ const tables = [
   { name: 'beneficiaires', id: 'muvp56d5i9z2qbe' },
   { name: 'logements', id: 'mgdpvdrnzyy6n4k' },
   { name: 'dossiers', id: 'mez74y7ndoej30p' },
+  { name: 'contexte_de_vie', id: 'mjyj2lz4wfs5pd5', child: true },
+  { name: 'mesures_anthropometriques', id: 'mbaj91z97utreco', child: true },
+  { name: 'observations_synthese', id: 'mbkuomk0aazes1c', child: true },
+  { name: 'diagnostic_sanitaires', id: 'mdukulxcd18ae3o', child: true },
 ];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -28,10 +32,13 @@ export async function checkConditionalSyncReadiness({ baseId, check = false, req
     }
     let checkedRows = 0;
     let invalidRevisions = 0;
+    let duplicateDossiers = 0;
+    let missingDossiers = 0;
+    const dossierIds = new Set();
     const seen = new Set();
     for (let offset = 0; ; offset += 100) {
       assert.ok(offset < 100000, 'Readiness scan exceeded its safety limit');
-      const query = new URLSearchParams({ fields: 'Id,app_sync_revision', limit: '100', offset: String(offset), sort: 'Id' });
+      const query = new URLSearchParams({ fields: `Id,app_sync_revision${table.child ? ',dossier_id' : ''}`, limit: '100', offset: String(offset), sort: 'Id' });
       const result = await request({ method: 'GET', path: `/api/v2/tables/${table.id}/records?${query}` });
       assert.ok(Array.isArray(result.list) && result.list.length <= 100);
       for (const row of result.list) {
@@ -39,15 +46,22 @@ export async function checkConditionalSyncReadiness({ baseId, check = false, req
         seen.add(Number(row.Id));
         checkedRows++;
         if (typeof row.app_sync_revision !== 'string' || !uuid.test(row.app_sync_revision)) invalidRevisions++;
+        if (table.child) {
+          const id = String(row.dossier_id ?? '').trim();
+          if (!id) missingDossiers++;
+          else if (dossierIds.has(id)) duplicateDossiers++;
+          else dossierIds.add(id);
+        }
       }
       if (result.list.length < 100) break;
     }
-    results.push({ ...table, ready: invalidRevisions === 0, checkedRows, invalidRevisions });
+    results.push({ ...table, ready: invalidRevisions === 0 && duplicateDossiers === 0 && missingDossiers === 0,
+      checkedRows, invalidRevisions, ...(table.child ? { duplicateDossiers, missingDossiers } : {}) });
   }
   return { mode: 'checked', baseId, writes: 0, tables: results,
     schemaAndRevisionsReady: results.every(r => r.ready),
     activationApproved: false,
-    remainingChecks: ['all-writers-covered', 'old-client-cutover', 'conflict-resolution-all-entities', 'device-offline-recipe'],
+    remainingChecks: ['database-unique-child-dossier-indexes', 'all-writers-covered', 'old-client-cutover', 'conflict-resolution-all-entities', 'device-offline-recipe'],
   };
 }
 

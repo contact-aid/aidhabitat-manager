@@ -149,6 +149,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
     final title = switch (review.entityType) {
       'patient' => 'Beneficiaire',
       'housing' => 'Logement',
+      'contexte_de_vie' => 'Contexte de vie et autonomie',
       'mesures_anthropometriques' => 'Mesures',
       'observations_synthese' => 'Observations de synthese',
       'diagnostic_sanitaires' => 'Diagnostic sanitaires',

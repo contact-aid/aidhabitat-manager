@@ -1201,6 +1201,11 @@ class DataService {
       );
     }
     final secondary = <String, Map<String, dynamic>?>{};
+    if (scope.entityTypes.contains('contexte_de_vie')) {
+      secondary['contexte_de_vie'] = await _nocodbApiClient.fetchContext(
+        scope.remoteDossierId,
+      );
+    }
     if (scope.entityTypes.contains('mesures_anthropometriques')) {
       secondary['mesures_anthropometriques'] = await _nocodbApiClient
           .fetchMesuresPayload(scope.remoteDossierId);

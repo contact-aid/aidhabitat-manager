@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'context_sync_protocol.dart';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -675,6 +676,65 @@ class NocodbApiClient {
     throw TransientRemoteException(
       'Housing write unconfirmed: missing valid updatedAt',
     );
+  }
+
+  Future<String> updateContext({
+    required String dossierId,
+    required Map<String, dynamic> payload,
+  }) async {
+    final response = await _runWithTransientGuard(
+      'Context update',
+      () => _sendJsonMutation(
+        method: 'PUT',
+        path: '/api/contextes/${_pathSegment(dossierId)}',
+        body: {
+          'updates': payload['updates'],
+          'concurrency': payload['concurrency'],
+        },
+      ).timeout(_jsonBatchTimeout),
+    );
+    if (response.statusCode == 409 || response.statusCode == 428) {
+      Map<String, dynamic>? remoteData;
+      try {
+        remoteData = (jsonDecode(response.body) as Map).cast<String, dynamic>();
+      } catch (_) {}
+      throw ConflictException(
+        'Le contexte de vie doit etre compare.',
+        remoteData: remoteData,
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Context update failed (${response.statusCode})');
+    }
+    try {
+      final reference =
+          jsonDecode(response.body)['data']['serverReference'] as Map;
+      return jsonEncode(
+        ContextServerReference.fromJson(
+          reference.cast<String, dynamic>(),
+        ).toJson(),
+      );
+    } catch (_) {
+      throw TransientRemoteException(
+        'Context write unconfirmed: missing server reference',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>?> fetchContext(String dossierId) async {
+    final response = await _runWithTransientGuard(
+      'Context read',
+      () => _client
+          .get(
+            Uri.parse('$_baseUrl/api/contextes/${_pathSegment(dossierId)}'),
+            headers: _headers,
+          )
+          .timeout(_jsonBatchTimeout),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Context read failed (${response.statusCode})');
+    }
+    return (jsonDecode(response.body) as Map).cast<String, dynamic>();
   }
 
   /// PUT /api/mesures/:dossierId — upsert mesures anthropométriques.

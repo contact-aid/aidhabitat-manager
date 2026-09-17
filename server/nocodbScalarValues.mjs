@@ -19,6 +19,14 @@ function checkbox(value) {
   return value;
 }
 
+const structuredColumns = new Set(['sdb_instances_json', 'wc_instances_json', 'occupants_json']);
+function numeric(value) {
+  if (typeof value === 'number') return Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER ? value : null;
+  if (typeof value !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())) return null;
+  const result = Number(value);
+  return Number.isFinite(result) && Math.abs(result) <= Number.MAX_SAFE_INTEGER ? result : null;
+}
+
 export function createDatabaseValueComparator(columns = []) {
   const types = new Map(columns.map((column) => [column.title, column.uidt]));
   return (key, a, b) => {
@@ -28,6 +36,17 @@ export function createDatabaseValueComparator(columns = []) {
       return left !== null && left === instantMicros(b);
     }
     if (types.get(key) === 'Checkbox') return isDeepStrictEqual(checkbox(a), checkbox(b));
+    if (types.get(key) === 'Number') {
+      const left = numeric(a);
+      return left !== null && left === numeric(b);
+    }
+    if (structuredColumns.has(key) && typeof a === 'string' && typeof b === 'string') {
+      try {
+        const left = JSON.parse(a);
+        const right = JSON.parse(b);
+        return Array.isArray(left) && Array.isArray(right) && isDeepStrictEqual(left, right);
+      } catch { return false; }
+    }
     return false;
   };
 }

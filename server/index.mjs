@@ -17,6 +17,8 @@ import { createConditionalRecordWriter, ConditionalWriteUncertainError, validate
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
 import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
 import { inspectLegacyRecovery } from './legacySyncRecovery.mjs';
+import { registerContextRoutes } from './contextRoutes.mjs';
+import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore } from './mobileSyncStore.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
@@ -488,10 +490,13 @@ const FIELD_SETS = {
 // Keep production behavior unchanged until every writer/client and the table
 // revisions have been prepared and verified during the controlled rollout.
 const conditionalSyncEnabled = process.env.AIDHABITAT_CONDITIONAL_SYNC === '1';
-const conditionalTables = [TABLES.beneficiaires, TABLES.logements, TABLES.dossiers];
+const conditionalCreatesReady = process.env.AIDHABITAT_UNIQUE_CHILDREN_READY === '1';
+const conditionalTables = [TABLES.beneficiaires, TABLES.logements, TABLES.dossiers,
+  TABLES.contexteDeVie, TABLES.mesuresAnthropometriques, TABLES.observations, TABLES.diagnosticSanitaires];
 if (conditionalSyncEnabled) {
   configureConditionalSyncTables(conditionalTables);
-  for (const name of ['beneficiaires', 'logements', 'dossiers']) {
+  for (const name of ['beneficiaires', 'logements', 'dossiers', 'contexteDeVie',
+    'mesuresAnthropometriques', 'observations', 'diagnosticSanitaires']) {
     FIELD_SETS[name].push(SYNC_REVISION_FIELD);
   }
 }
@@ -2567,6 +2572,8 @@ const createVirtualDossier = (beneficiaryRecord, appBeneficiaryId, housingRecord
   housing: mapHousing(housingRecord),
   medicalContext: mapMedicalContext(contextRecord),
   autonomy: parseChecklistDone(contextRecord),
+  ...(conditionalSyncEnabled ? { ...contextRecordToSections(contextRecord),
+    contextServerReference: contextRecord ? contextServerReference(contextRecord) : null } : {}),
   compteAnah: stringValue(field(dossierRecord, 'compte_anah')),
   natureAccompagnement: stringValue(field(dossierRecord, 'nature_accompagnement')),
   envoiRapport: stringValue(field(dossierRecord, 'envoi_rapport')),
@@ -2596,6 +2603,8 @@ const createDossier = (beneficiaryRecord, appBeneficiaryId, dossierRecord, housi
   housing: mapHousing(housingRecord),
   medicalContext: mapMedicalContext(contextRecord),
   autonomy: parseChecklistDone(contextRecord),
+  ...(conditionalSyncEnabled ? { ...contextRecordToSections(contextRecord),
+    contextServerReference: contextRecord ? contextServerReference(contextRecord) : null } : {}),
   compteAnah: stringValue(field(dossierRecord, 'compte_anah')),
   natureAccompagnement: stringValue(field(dossierRecord, 'nature_accompagnement')),
   envoiRapport: stringValue(field(dossierRecord, 'envoi_rapport')),
@@ -2685,7 +2694,11 @@ const createRecord = async (tableId, fields) => {
         !schema.columns?.some(column => column.title === SYNC_REVISION_FIELD && column.uidt === 'SingleLineText')) {
       throw new SyncMutationError(503, 'SYNC_REVISION_NOT_PREPARED');
     }
-    fields = { ...fields, [SYNC_REVISION_FIELD]: crypto.randomUUID() };
+    const suppliedRevision = fields[SYNC_REVISION_FIELD];
+    if (suppliedRevision !== undefined && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(suppliedRevision)) {
+      throw new SyncMutationError(400, 'SYNC_MUTATION_ID_REQUIRED');
+    }
+    fields = { ...fields, [SYNC_REVISION_FIELD]: suppliedRevision ?? crypto.randomUUID() };
   }
   const payload = await callNocoTool('createRecords', {
     tableId,
@@ -7363,9 +7376,17 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
   }
 });
 
+registerContextRoutes(app, { requireAuth, enabled: conditionalSyncEnabled,
+  creationReady: conditionalCreatesReady,
+  tableId: TABLES.contexteDeVie, writer: conditionalWriter, createRecord, queryAll,
+  ensureDossierRecord, canAccessDossierRecord, field });
+
 app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
   try {
     const updates = req.body || {};
+    if (conditionalSyncEnabled && (updates.medicalContext || updates.autonomy)) {
+      throw new SyncMutationError(428, 'CONTEXT_DEDICATED_ROUTE_REQUIRED');
+    }
     const dossierRecord = await ensureDossierRecord(req.params.dossierId);
     if (!canAccessDossierRecord(req.appUser, dossierRecord)) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
@@ -7373,9 +7394,6 @@ app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
     }
     if ((updates.medicalContext || updates.autonomy)
         && sendConflictIfStale(req, res, dossierRecord)) return;
-    if (conditionalSyncEnabled && req.body?.concurrency && (updates.medicalContext || updates.autonomy)) {
-      throw new SyncMutationError(400, 'SYNC_MULTITABLE_MUTATION_UNSUPPORTED');
-    }
 
     const dossierUuid = field(dossierRecord, 'uuid_source');
     const beneficiaryUuid = field(dossierRecord, 'patient_id');
@@ -8574,6 +8592,42 @@ const saveSecondaryRecord = async (tableId, projection, existing, fields) => {
   return secondaryIdentity(rows[0]);
 };
 
+async function saveConditionalSecondary(req, res, tableId, projection, existing, fields, mapBaseline) {
+  if (!conditionalSyncEnabled) return false;
+  if (!existing) {
+    if (!conditionalCreatesReady) throw new SyncMutationError(503, 'SYNC_SECONDARY_CREATION_NOT_PREPARED');
+    const guard = req.body?.concurrency;
+    if (guard?.version !== 1 || guard.createIfAbsent !== true
+        || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(guard.writeId ?? '')) {
+      throw new SyncMutationError(428, 'SYNC_CREATION_BASELINE_REQUIRED');
+    }
+    // dossier_id uniqueness is a rollout prerequisite checked outside traffic.
+    // A concurrent creation or lost response is retried with this same writeId.
+    try {
+      await createRecord(tableId, { ...fields, uuid_source: guard.writeId, [SYNC_REVISION_FIELD]: guard.writeId });
+    } catch (_) { throw new SyncMutationError(503, 'SYNC_CREATE_UNCONFIRMED'); }
+    const rows = await queryAll(tableId, { fields: projection,
+      where: `(uuid_source,eq,${guard.writeId})` });
+    if (rows.length !== 1 || !secondaryUpdatedAt(rows[0])
+        || field(rows[0], SYNC_REVISION_FIELD) !== guard.writeId
+        || !Object.entries(fields).every(([key, value]) => value === undefined
+          || ['updated_at', 'created_at'].includes(key)
+          || secondaryValueMatches(key, value, field(rows[0], key)))) {
+      throw new SyncMutationError(503, 'SYNC_CREATE_UNCONFIRMED');
+    }
+    res.json({ success: true, error: null, data: secondaryIdentity(rows[0]) });
+    return true;
+  }
+  const domainFields = (values) => Object.fromEntries(Object.entries(values)
+    .filter(([key, value]) => value !== undefined && !['dossier_id', 'dossiers_id', 'updated_at', 'created_at'].includes(key)));
+  if (await applyConditionalSync(req, res, { tableId, record: existing,
+    fields: domainFields(fields), mapBaseline: (base) => domainFields(mapBaseline(base)) })) return true;
+  const rows = await queryAll(tableId, { fields: projection, where: `(Id,eq,${Number(existing.id)})` });
+  if (rows.length !== 1 || !secondaryUpdatedAt(rows[0])) throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
+  res.json({ success: true, error: null, data: secondaryIdentity(rows[0]) });
+  return true;
+}
+
 app.get('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, next) => {
   try {
     const { accessAllowed, record, dossierRecord } = await readAuthorizedDossierRecord({
@@ -8687,62 +8741,68 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const sdbInstances = Array.isArray(payload.sdbInstances) ? payload.sdbInstances : [];
-    const wcInstances = Array.isArray(payload.wcInstances) ? payload.wcInstances : [];
-    const hasBathroom = sdbInstances.length > 0;
-    const hasWc = wcInstances.length > 0;
-    const primaryBathroom = sdbInstances[0] || {};
-    const primaryWc = wcInstances[0] || {};
-    const fields = {
-      dossier_id: field(dossierRecord, 'uuid_source'),
-      dossiers_id: Number(dossierRecord.id),
-      sdb_instances_json: nullableString(sdbInstances.length > 0 ? JSON.stringify(sdbInstances) : null),
-      wc_instances_json: nullableString(wcInstances.length > 0 ? JSON.stringify(wcInstances) : null),
-      sdb_niveau_pieces_vie: boolText(hasBathroom && primaryBathroom.levelField === 'rdc'),
-      wc_niveau: boolText(hasWc && primaryWc.levelField === 'rdc'),
-      wc_etage: boolText(hasWc && primaryWc.levelField !== 'rdc'),
-      sdb_baignoire: boolText(hasBathroom && primaryBathroom.sdbBaignoire),
-      sdb_baignoire_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBaignoireHauteur : null),
-      sdb_bac_douche: boolText(hasBathroom && primaryBathroom.sdbBacDouche),
-      sdb_bac_douche_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBacDoucheHauteur : null),
-      sdb_vasque_suspendue: boolText(hasBathroom && primaryBathroom.sdbVasqueSuspendue),
-      sdb_vasque_suspendue_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbVasqueSuspendueHauteur : null),
-      sdb_vasque_colonne: boolText(hasBathroom && primaryBathroom.sdbVasqueColonne),
-      sdb_vasque_colonne_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbVasqueColonneHauteur : null),
-      sdb_meuble_vasque: boolText(hasBathroom && primaryBathroom.sdbMeubleVasque),
-      sdb_meuble_vasque_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbMeubleVasqueHauteur : null),
-      sdb_bidet: boolText(hasBathroom && primaryBathroom.sdbBidet),
-      sdb_bidet_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBidetHauteur : null),
-      sdb_paroi_douche: boolText(hasBathroom && primaryBathroom.sdbParoiDouche),
-      sdb_paroi_douche_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbParoiDoucheHauteur : null),
-      sdb_sol_glissant: boolText(hasBathroom && primaryBathroom.sdbSolGlissant),
-      sdb_machine_a_laver: boolText(hasBathroom && primaryBathroom.sdbMachineALaver),
-      sdb_machine_a_laver_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbMachineALaverHauteur : null),
-      wc_cuvette_bonne_hauteur: boolText(hasWc && primaryWc.wcCuvetteBonneHauteur),
-      wc_cuvette_trop_basse: boolText(hasWc && primaryWc.wcCuvetteTropBasse),
-      wc_cuvette_trop_haute: boolText(hasWc && primaryWc.wcCuvetteTropHaute),
-      wc_cuvette_hauteur: nullableString(hasWc ? primaryWc.wcCuvetteHauteur : null),
-      wc_barre_relevement: boolText(hasWc && primaryWc.wcBarreRelevement),
-      porte_sdb_largeur_suffisante: boolTextOrNull(hasBathroom ? primaryBathroom.porteSdbLargeurSuffisante : null),
-      porte_sdb_dimension: nullableString(hasBathroom ? primaryBathroom.porteSdbDimension : null),
-      porte_sdb_sens_adapte: boolTextOrNull(hasBathroom ? primaryBathroom.porteSdbSensAdapte : null),
-      porte_wc_largeur_suffisante: boolTextOrNull(hasWc ? primaryWc.porteWcLargeurSuffisante : null),
-      porte_wc_dimension: nullableString(hasWc ? primaryWc.porteWcDimension : null),
-      porte_wc_sens_adapte: boolTextOrNull(hasWc ? primaryWc.porteWcSensAdapte : null),
-      observation_equipements_utilisation: nullableString(hasWc ? primaryWc.observationEquipementsUtilisation : null),
-      updated_at: new Date().toISOString(),
-    };
+    const mapFields = (payload) => {
+      const sdbInstances = Array.isArray(payload.sdbInstances) ? payload.sdbInstances : [];
+      const wcInstances = Array.isArray(payload.wcInstances) ? payload.wcInstances : [];
+      const hasBathroom = sdbInstances.length > 0;
+      const hasWc = wcInstances.length > 0;
+      const primaryBathroom = sdbInstances[0] || {};
+      const primaryWc = wcInstances[0] || {};
+      const fields = {
+        dossier_id: field(dossierRecord, 'uuid_source'),
+        dossiers_id: Number(dossierRecord.id),
+        sdb_instances_json: nullableString(sdbInstances.length > 0 ? JSON.stringify(sdbInstances) : null),
+        wc_instances_json: nullableString(wcInstances.length > 0 ? JSON.stringify(wcInstances) : null),
+        sdb_niveau_pieces_vie: boolText(hasBathroom && primaryBathroom.levelField === 'rdc'),
+        wc_niveau: boolText(hasWc && primaryWc.levelField === 'rdc'),
+        wc_etage: boolText(hasWc && primaryWc.levelField !== 'rdc'),
+        sdb_baignoire: boolText(hasBathroom && primaryBathroom.sdbBaignoire),
+        sdb_baignoire_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBaignoireHauteur : null),
+        sdb_bac_douche: boolText(hasBathroom && primaryBathroom.sdbBacDouche),
+        sdb_bac_douche_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBacDoucheHauteur : null),
+        sdb_vasque_suspendue: boolText(hasBathroom && primaryBathroom.sdbVasqueSuspendue),
+        sdb_vasque_suspendue_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbVasqueSuspendueHauteur : null),
+        sdb_vasque_colonne: boolText(hasBathroom && primaryBathroom.sdbVasqueColonne),
+        sdb_vasque_colonne_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbVasqueColonneHauteur : null),
+        sdb_meuble_vasque: boolText(hasBathroom && primaryBathroom.sdbMeubleVasque),
+        sdb_meuble_vasque_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbMeubleVasqueHauteur : null),
+        sdb_bidet: boolText(hasBathroom && primaryBathroom.sdbBidet),
+        sdb_bidet_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBidetHauteur : null),
+        sdb_paroi_douche: boolText(hasBathroom && primaryBathroom.sdbParoiDouche),
+        sdb_paroi_douche_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbParoiDoucheHauteur : null),
+        sdb_sol_glissant: boolText(hasBathroom && primaryBathroom.sdbSolGlissant),
+        sdb_machine_a_laver: boolText(hasBathroom && primaryBathroom.sdbMachineALaver),
+        sdb_machine_a_laver_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbMachineALaverHauteur : null),
+        wc_cuvette_bonne_hauteur: boolText(hasWc && primaryWc.wcCuvetteBonneHauteur),
+        wc_cuvette_trop_basse: boolText(hasWc && primaryWc.wcCuvetteTropBasse),
+        wc_cuvette_trop_haute: boolText(hasWc && primaryWc.wcCuvetteTropHaute),
+        wc_cuvette_hauteur: nullableString(hasWc ? primaryWc.wcCuvetteHauteur : null),
+        wc_barre_relevement: boolText(hasWc && primaryWc.wcBarreRelevement),
+        porte_sdb_largeur_suffisante: boolTextOrNull(hasBathroom ? primaryBathroom.porteSdbLargeurSuffisante : null),
+        porte_sdb_dimension: nullableString(hasBathroom ? primaryBathroom.porteSdbDimension : null),
+        porte_sdb_sens_adapte: boolTextOrNull(hasBathroom ? primaryBathroom.porteSdbSensAdapte : null),
+        porte_wc_largeur_suffisante: boolTextOrNull(hasWc ? primaryWc.porteWcLargeurSuffisante : null),
+        porte_wc_dimension: nullableString(hasWc ? primaryWc.porteWcDimension : null),
+        porte_wc_sens_adapte: boolTextOrNull(hasWc ? primaryWc.porteWcSensAdapte : null),
+        observation_equipements_utilisation: nullableString(hasWc ? primaryWc.observationEquipementsUtilisation : null),
+        updated_at: new Date().toISOString(),
+      };
 
-    // Each supplied list replaces that room family, never the absent family.
-    if (existing) {
-      for (const key of Object.keys(fields)) {
-        const bathroomField = key.startsWith('sdb_') || key.startsWith('porte_sdb_');
-        const wcField = key.startsWith('wc_') || key.startsWith('porte_wc_')
-          || key === 'observation_equipements_utilisation';
-        if ((bathroomField && !Object.hasOwn(payload, 'sdbInstances'))
-            || (wcField && !Object.hasOwn(payload, 'wcInstances'))) delete fields[key];
+      // Each supplied list replaces that room family, never the absent family.
+      if (existing) {
+        for (const key of Object.keys(fields)) {
+          const bathroomField = key.startsWith('sdb_') || key.startsWith('porte_sdb_');
+          const wcField = key.startsWith('wc_') || key.startsWith('porte_wc_')
+            || key === 'observation_equipements_utilisation';
+          if ((bathroomField && !Object.hasOwn(payload, 'sdbInstances'))
+              || (wcField && !Object.hasOwn(payload, 'wcInstances'))) delete fields[key];
+        }
       }
-    }
+      return fields;
+    };
+    const fields = mapFields(payload);
+    if (await saveConditionalSecondary(req, res, TABLES.diagnosticSanitaires,
+      FIELD_SETS.diagnosticSanitaires, existing, fields, mapFields)) return;
     if (recoverSecondarySync(req, res, existing, fields,
       { sdbInstances: 'sdb_instances_json', wcInstances: 'wc_instances_json' })) return;
     if (secondaryWriteConflict(req, res, existing)) return;
@@ -8800,7 +8860,7 @@ app.put('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const fields = {
+    const mapFields = (payload) => ({
       dossier_id: field(dossierRecord, 'uuid_source'),
       dossiers_id: Number(dossierRecord.id),
       debout_hauteur_coude: nullableString(payload.deboutHauteurCoude),
@@ -8809,7 +8869,10 @@ app.put('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
       assis_hauteur_coudes: nullableString(payload.assisHauteurCoudes),
       observations: nullableString(payload.observations),
       updated_at: new Date().toISOString(),
-    };
+    });
+    const fields = mapFields(payload);
+    if (await saveConditionalSecondary(req, res, TABLES.mesuresAnthropometriques,
+      FIELD_SETS.mesuresAnthropometriques, existing, fields, mapFields)) return;
 
     if (recoverSecondarySync(req, res, existing, fields, {
       deboutHauteurCoude: 'debout_hauteur_coude', assisHauteurAssise: 'assis_hauteur_assise',
@@ -8869,13 +8932,16 @@ app.put('/api/observations/:dossierId', requireAuth, async (req, res, next) => {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    const fields = {
+    const mapFields = (payload) => ({
       dossier_id: field(dossierRecord, 'uuid_source'),
       dossiers_id: Number(dossierRecord.id),
       observation_equipements: nullableString(payload.observationEquipements),
       projet_souhait_usage: nullableString(payload.projetSouhaitUsage),
       resume_preconisations: nullableString(payload.resumePreconisations),
-    };
+    });
+    const fields = mapFields(payload);
+    if (await saveConditionalSecondary(req, res, TABLES.observations,
+      FIELD_SETS.observations, existing, fields, mapFields)) return;
 
     if (recoverSecondarySync(req, res, existing, fields, {
       observationEquipements: 'observation_equipements', projetSouhaitUsage: 'projet_souhait_usage',
