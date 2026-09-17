@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/aggir_eligibility.dart';
 import '../../services/data_service.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/nocodb_api_client.dart';
@@ -923,7 +924,20 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     final anah = _parseAnahData(_compteAnah);
     return _buildOccupantSwipeContainer(
-      perOccupantContent: _buildBirthDateRow(idx),
+      perOccupantContent: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildBirthDateRow(idx),
+          if (idx == 0 && requiresAggir(_occupants.first.birthDate))
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                'Un GIR sera requis. Une grille AGGIR est disponible dans l’espace Documents.',
+                style: TextStyle(fontSize: 13, color: Color(0xFF554265)),
+              ),
+            ),
+        ],
+      ),
       sharedContent: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

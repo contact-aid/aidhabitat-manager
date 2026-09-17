@@ -34,6 +34,7 @@ import '../services/document_image_export.dart';
 import '../services/web_file_picker.dart';
 import '../services/web_file_saver.dart';
 import '../services/app_config.dart';
+import '../services/aggir_document_service.dart';
 import '../services/data_service.dart';
 import '../services/document_file_naming.dart';
 import '../services/document_page_save.dart';
@@ -69,6 +70,7 @@ const List<String> _kAvailableTags = [
   'Photo',
   'Plan',
   'Autre',
+  'AGGIR',
 ];
 
 /// Nombre maximum de fetches binaires en parallèle dans
@@ -217,6 +219,29 @@ class _DocumentsScreenState extends State<DocumentsScreen>
 
   // ----- Data loading -----
 
+  Future<List<DocItem>> _fetchDocumentsWithAggir({
+    bool createIfMissing = false,
+  }) async {
+    final dossier = await _dataService.fetchDossierById(widget.dossier.id);
+    if (dossier == null) return _dataService.fetchDocuments(_patientId);
+    try {
+      return await AggirDocumentService(
+        repository: _documentRepository,
+      ).documentsFor(dossier, createIfMissing: createIfMissing);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'La grille AGGIR n’a pas pu être préparée. Réouvrez Documents pour réessayer.',
+            ),
+          ),
+        );
+      }
+      return _dataService.fetchDocuments(_patientId);
+    }
+  }
+
   Future<void> _loadDocuments({
     bool silent = false,
     bool refreshRemote = true,
@@ -229,7 +254,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     final remoteRefresh = refreshRemote
         ? _dataService.refreshDocumentsFromRemote(_patientId)
         : Future<bool>.value(false);
-    final docs = await _dataService.fetchDocuments(_patientId);
+    final docs = await _fetchDocumentsWithAggir();
     if (!mounted) return;
     setState(() {
       _documents = docs;
@@ -246,24 +271,20 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     Future<bool> remoteRefresh,
     int generation,
   ) async {
-    final refreshed = await remoteRefresh;
+    await remoteRefresh;
     if (!mounted) return;
     if (generation != _loadGeneration) return;
-    if (refreshed) {
-      final remoteDocs = await _dataService.fetchDocuments(_patientId);
-      if (!mounted) return;
-      if (generation != _loadGeneration) return;
-      setState(() {
-        _documents = remoteDocs;
-      });
-      _warmDocumentBinaryCache(remoteDocs);
-    }
-    // Remote KO (offline ou erreur) → la grille reste sur le snapshot
-    // SQLite affiché juste avant. Le polling timer (2 s) retentera.
+    // Pull existing forms before creating one (e.g. on a second iPad).
+    // Offline, the bundled template is still available.
+    final remoteDocs = await _fetchDocumentsWithAggir(createIfMissing: true);
+    if (!mounted) return;
+    if (generation != _loadGeneration) return;
+    _applyDocumentsSnapshot(remoteDocs);
+    _warmDocumentBinaryCache(remoteDocs);
   }
 
   Future<void> _reloadLocalDocuments({bool warmBinaryCache = false}) async {
-    final docs = await _dataService.fetchDocuments(_patientId);
+    final docs = await _fetchDocumentsWithAggir();
     if (!mounted) return;
     _applyDocumentsSnapshot(docs);
     if (warmBinaryCache) _warmDocumentBinaryCache(docs);
@@ -273,7 +294,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     String documentId, {
     bool warmBinaryCache = false,
   }) async {
-    final docs = await _dataService.fetchDocuments(_patientId);
+    final docs = await _fetchDocumentsWithAggir();
     if (!mounted) return;
 
     DocItem? updated;

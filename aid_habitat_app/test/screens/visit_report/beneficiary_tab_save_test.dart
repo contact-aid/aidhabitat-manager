@@ -155,6 +155,30 @@ Future<void> _exhaustRetries(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('AGGIR notice follows the primary beneficiary age', (
+    tester,
+  ) async {
+    final base = _dossier();
+    final year = DateTime.now().year;
+    const message =
+        'Un GIR sera requis. Une grille AGGIR est disponible dans l’espace Documents.';
+    for (final birthday in ['', '${year - 65}-01-01', '${year - 75}-01-01']) {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await _mount(
+        tester,
+        _Repository(),
+        dossier: base.copyWith(
+          patient: base.patient.copyWith(birthDate: birthday),
+        ),
+      );
+      expect(
+        find.text(message),
+        birthday == '${year - 65}-01-01' ? findsOneWidget : findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets(
     'only edited columns are sent despite independent storage changes',
     (tester) async {

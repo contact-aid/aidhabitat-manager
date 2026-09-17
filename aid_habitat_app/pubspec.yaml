@@ -130,6 +130,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/documents/
     - assets/measurements/
     - assets/logos/
     - web-assets/wiki-offline/preco-illustrations/ascenseur/
