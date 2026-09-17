@@ -53,15 +53,23 @@ void main() {
     });
   }
 
-  Future<void> settle(WidgetTester tester) async {
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-    await tester.pump();
+  Future<void> settle(WidgetTester tester, {bool waitForLoad = true}) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    do {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await tester.pump();
+      if (!waitForLoad || find.byType(CircularProgressIndicator).evaluate().isEmpty) {
+        return;
+      }
+    } while (DateTime.now().isBefore(deadline));
+    fail('Ownership review did not finish loading');
   }
 
   Future<void> screen(
     WidgetTester tester, {
     SyncPayloadOpener? opener,
     VoidCallback? onReviewed,
+    bool waitForLoad = true,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -72,7 +80,7 @@ void main() {
         ),
       ),
     );
-    await settle(tester);
+    await settle(tester, waitForLoad: waitForLoad);
   }
 
   Future<void> confirm(WidgetTester tester) async {
@@ -258,6 +266,7 @@ void main() {
       final release = Completer<String>();
       await screen(
         tester,
+        waitForLoad: false,
         opener: (_) {
           started.complete();
           return release.future;
