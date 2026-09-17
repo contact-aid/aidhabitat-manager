@@ -156,7 +156,7 @@ class AuthService {
     _SeedUser(
       id: 'user_admin',
       email: 'contact@aidhabitat.fr',
-      displayName: 'Renan',
+      displayName: "Aid'habitat",
       role: LocalUserRole.admin,
     ),
     _SeedUser(

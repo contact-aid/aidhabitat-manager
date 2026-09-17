@@ -892,7 +892,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           isSyncing: _isSyncing,
           onSyncNow: _handleSyncNow,
           onSelectDossier: _handleSelectDossier,
-          userName: widget.currentUser.displayName,
+          userName: widget.currentUser.shortDisplayName,
           // Le bouton « Voir tout » du dashboard renvoie TOUJOURS vers
           // la liste plate « Mes dossiers » — on ne restaure pas le
           // dernier dossier visité (comportement par défaut de

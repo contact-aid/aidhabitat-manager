@@ -150,25 +150,34 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 8),
-                        DropdownButtonFormField<String>(
-                          isExpanded: true,
-                          initialValue: _selectedEmail,
-                          items: _users
-                              .map(
-                                (user) => DropdownMenuItem(
-                                  value: user.email,
-                                  child: Text(
-                                    "${user.displayName} • ${user.role.label}",
+                        Theme(
+                          data: Theme.of(context).copyWith(
+                            focusColor: const Color(0xFFEDE4F3),
+                            hoverColor: const Color(0xFFF0E8F6),
+                          ),
+                          child: DropdownButtonFormField<String>(
+                            borderRadius: BorderRadius.circular(16),
+                            dropdownColor: const Color(0xFFF4EFF8),
+                            focusColor: const Color(0xFFEDE4F3),
+                            isExpanded: true,
+                            initialValue: _selectedEmail,
+                            items: _users
+                                .map(
+                                  (user) => DropdownMenuItem(
+                                    value: user.email,
+                                    child: Text(
+                                      "${user.shortDisplayName} • ${user.role.label}",
+                                    ),
                                   ),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: _isSubmitting
-                              ? null
-                              : (value) {
-                                  _handleAccountSelection(value);
-                                },
-                          decoration: _inputDecoration(),
+                                )
+                                .toList(),
+                            onChanged: _isSubmitting
+                                ? null
+                                : (value) {
+                                    _handleAccountSelection(value);
+                                  },
+                            decoration: _inputDecoration(),
+                          ),
                         ),
                         const SizedBox(height: 20),
                         const Text(

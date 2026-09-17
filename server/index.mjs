@@ -133,7 +133,7 @@ let anahStatusCache = null;
 let bundledWikiItemsCache = null;
 
 const MEMBER_PROFILES = {
-  'contact@aidhabitat.fr': { displayName: 'Renan', role: 'ADMIN', selectable: false, establishmentId: null, establishmentLabel: '' },
+  'contact@aidhabitat.fr': { displayName: "Aid'habitat", role: 'ADMIN', selectable: false, establishmentId: null, establishmentLabel: '' },
   'c.demenais@aidhabitat.fr': { displayName: 'Coralie', role: 'ERGO', selectable: true, establishmentId: 2, establishmentLabel: "Aid'habitat" },
   'c.jeuland@aidhabitat.fr': { displayName: 'Christelle', role: 'ERGO', selectable: true, establishmentId: 2, establishmentLabel: "Aid'habitat" },
 };

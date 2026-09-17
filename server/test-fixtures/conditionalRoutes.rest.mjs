@@ -149,7 +149,7 @@ export function createRestMock() {
             for (const patch of call.body) {
               assert([1, 2, 3].includes(patch.Id), 'Only preset-member startup synchronization is allowed');
               const member = rows[tableId].find((row) => row.Id === patch.Id);
-              assert.deepEqual(patch, { Id: member.Id, prenom: member.prenom, nom: member.nom,
+              assert.deepEqual(patch, { Id: member.Id, prenom: member.Id === 1 ? "Aid'habitat" : member.prenom, nom: member.nom,
                 email: member.email, ...(member.Id === 1 ? {} : { etablissements_id: 2 }) });
               Object.assign(member, patch);
             }

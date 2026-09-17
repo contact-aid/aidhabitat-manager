@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -7,6 +8,8 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/types.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
+import '../services/web_file_picker.dart';
+import '../services/profile_photo_image.dart';
 import 'brand_colors.dart';
 import 'cached_remote_image.dart';
 import 'confirmation_dialog.dart';
@@ -123,50 +126,32 @@ class _AccountDialogState extends State<AccountDialog> {
     });
 
     try {
-      // Compression aggressive — la photo profil est affichée 48×48
-      // dans la sidebar et 96×96 dans le dialog. 400×400 suffit
-      // largement et garantit un base64 < 70 KB (sous la limite
-      // NocoDB LongText à 100 000 chars). Avant 2026-05-07 :
-      // 800×800 q85 → ~130 KB → rejet NocoDB 422 → 503 côté client.
-      //
-      // Fix 2026-05-15 (audit P0 #11) : `maxHeight: 400` ajouté en
-      // plus de `maxWidth`. Sans ça une photo portrait (1080×1920)
-      // tombait sur `400×711` avec hauteur non contrainte → ~110 KB
-      // en base64 → 413 côté serveur. Bug reproduit sur la photo de
-      // profil contact@aidhabitat.fr ce matin.
-      final picked = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 400,
-        maxHeight: 400,
-        imageQuality: 70,
-      );
-      if (picked == null) {
-        setState(() => _isUploadingPhoto = false);
+      Uint8List? sourceBytes;
+      if (kIsWeb) {
+        // Copy the File directly; temporary image_picker Blob URLs can expire.
+        final picked = await pickWebFile(accept: 'image/*');
+        if (picked != null) sourceBytes = Uint8List.fromList(picked.bytes);
+      } else {
+        final picked = await _imagePicker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 400,
+          maxHeight: 400,
+          imageQuality: 70,
+        );
+        if (picked != null) sourceBytes = await picked.readAsBytes();
+      }
+      if (sourceBytes == null) {
+        if (mounted) setState(() => _isUploadingPhoto = false);
         return;
       }
-
-      // Lecture des bytes via XFile.readAsBytes — fonctionne uniformément
-      // sur web (où `picked.path` est un blob URL non utilisable par
-      // `dart:io.File`), iOS/Android et desktop. Avant ce fix, le
-      // `File(picked.path).readAsBytes()` échouait silencieusement sur
-      // web → l'utilisateur voyait juste un spinner indéfini ou une
-      // erreur cryptique.
-      final bytes = await picked.readAsBytes();
-      final extension = picked.name.split('.').last.toLowerCase();
-      final mimeType = switch (extension) {
-        'jpg' || 'jpeg' => 'image/jpeg',
-        'png' => 'image/png',
-        'webp' => 'image/webp',
-        'gif' => 'image/gif',
-        _ => 'image/jpeg',
-      };
-      final dataUrl = 'data:$mimeType;base64,${base64Encode(bytes)}';
+      final bytes = await prepareProfilePhoto(sourceBytes);
+      final dataUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
 
       // Offline-first : `uploadProfilePhotoBytes` stocke le data URL
       // localement (`app_users.pending_photo_data_url`) et enqueue un
       // sync op `profile_photo`. Renvoie le data URL pour repaint
       // immédiat. Le sync engine pousse vers `/api/profile/photo` qui
-      // sauvegarde dans Vercel Blob + dans NocoDB ergotherapeutes.
+      // sauvegarde dans NocoDB ergotherapeutes.
       final photoDataUrl = await _dataService.uploadProfilePhotoBytes(dataUrl);
       if (!mounted) return;
       setState(() {
@@ -365,7 +350,7 @@ class _AccountDialogState extends State<AccountDialog> {
               ),
               const SizedBox(height: 16),
               Text(
-                widget.currentUser.displayName,
+                widget.currentUser.shortDisplayName,
                 style: const TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w600,

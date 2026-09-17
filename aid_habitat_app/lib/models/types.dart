@@ -57,6 +57,11 @@ class LocalAccessScope {
 }
 
 class LocalAppUser {
+  String get shortDisplayName =>
+      role == LocalUserRole.admin &&
+          email.toLowerCase() == 'contact@aidhabitat.fr'
+      ? "Aid'habitat"
+      : displayName.trim().split(RegExp(r'\s+')).first;
   final String id;
   final String email;
   final String displayName;
@@ -1445,7 +1450,7 @@ extension LocalUserRoleLabel on LocalUserRole {
       case LocalUserRole.admin:
         return 'Admin';
       case LocalUserRole.ergo:
-        return 'Ergo';
+        return 'Ergothérapeute';
       case LocalUserRole.technician:
         return 'Technicien';
     }

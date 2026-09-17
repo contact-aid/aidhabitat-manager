@@ -250,7 +250,7 @@ class _SidebarState extends State<Sidebar> {
                       padding: const EdgeInsets.only(bottom: 16.0),
                       child: _SidebarSideTooltip(
                         message:
-                            "${widget.currentUser.displayName} • ${widget.currentUser.role.label}",
+                            "${widget.currentUser.shortDisplayName} • ${widget.currentUser.role.label}",
                         child: InkWell(
                           onTap: _openAccountDialog,
                           // Refonte 2026-05-15 : avatar rond complet (demande
