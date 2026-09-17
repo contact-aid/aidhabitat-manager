@@ -478,7 +478,7 @@ class NocodbApiClient {
   /// le serveur depuis le fix 2026-05-13). Permet au caller de
   /// rafraîchir `dossiers.remote_updated_at` en local et d'éviter qu'une
   /// édition consécutive (avant le prochain pull) tombe sur un 409.
-  /// Renvoie `null` si le serveur ne renvoie pas le champ.
+  /// Une confirmation sans version valide reste en attente de reprise.
   Future<String?> updateDossier({
     required String dossierId,
     required Map<String, dynamic> updates,
@@ -530,14 +530,15 @@ class NocodbApiClient {
         final data = body['data'];
         if (data is Map) {
           final v = data['updatedAt'];
-          if (v is String && v.isNotEmpty) return v;
+          if (v is String && _isChildTimestamp(v)) return v;
         }
       }
     } catch (_) {
-      // Réponse non JSON ou champ absent : on tombe sur null, le caller
-      // gardera l'ancien `remote_updated_at` jusqu'au prochain pull.
+      // Keep the exact queued mutation until the server confirms its version.
     }
-    return null;
+    throw TransientRemoteException(
+      'Dossier write unconfirmed: missing valid updatedAt',
+    );
   }
 
   /// PATCH /api/beneficiaires/:patientId — updates a beneficiary record.
@@ -556,8 +557,7 @@ class NocodbApiClient {
   /// par le serveur depuis le fix 2026-05-13). Permet au caller de
   /// rafraîchir `patients.remote_updated_at` en local et d'éviter qu'une
   /// édition consécutive (avant le prochain pull) tombe sur un 409.
-  /// Renvoie `null` si le serveur ne renvoie pas le champ (ancien
-  /// déploiement, autre raison).
+  /// Une confirmation sans version valide reste en attente de reprise.
   Future<String?> updateBeneficiary({
     required String patientId,
     required Map<String, dynamic> updates,
@@ -601,14 +601,15 @@ class NocodbApiClient {
         final data = body['data'];
         if (data is Map) {
           final v = data['updatedAt'];
-          if (v is String && v.isNotEmpty) return v;
+          if (v is String && _isChildTimestamp(v)) return v;
         }
       }
     } catch (_) {
-      // Réponse non JSON ou champ absent : on tombe sur null, le caller
-      // gardera l'ancien `remote_updated_at` jusqu'au prochain pull.
+      // Keep the exact queued mutation until the server confirms its version.
     }
-    return null;
+    throw TransientRemoteException(
+      'Beneficiary write unconfirmed: missing valid updatedAt',
+    );
   }
 
   /// PATCH /api/logements/by-beneficiary/:beneficiaryId — updates a housing
@@ -665,15 +666,15 @@ class NocodbApiClient {
         final data = body['data'];
         if (data is Map) {
           final v = data['updatedAt'];
-          if (v is String && v.isNotEmpty) return v;
+          if (v is String && _isChildTimestamp(v)) return v;
         }
       }
     } catch (_) {
-      // Si le serveur ne renvoie pas le champ (ancien déploiement) ou
-      // si la réponse n'est pas JSON, on retourne null. Le caller
-      // gardera l'ancien `remote_updated_at` jusqu'au prochain pull.
+      // Keep the exact queued mutation until the server confirms its version.
     }
-    return null;
+    throw TransientRemoteException(
+      'Housing write unconfirmed: missing valid updatedAt',
+    );
   }
 
   /// PUT /api/mesures/:dossierId — upsert mesures anthropométriques.

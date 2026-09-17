@@ -201,7 +201,10 @@ void main() {
       apiClient: NocodbApiClient(
         client: MockClient((request) async {
           sent++;
-          return http.Response('{"data":{}}', 200);
+          return http.Response(
+            '{"data":{"updatedAt":"2026-09-17T10:00:00Z"}}',
+            200,
+          );
         }),
       ),
     );
@@ -347,7 +350,10 @@ void main() {
             entered.complete();
             await release.future;
           }
-          return http.Response('{"success":true,"data":{}}', 200);
+          return http.Response(
+            '{"success":true,"data":{"updatedAt":"2026-09-17T10:00:00Z"}}',
+            200,
+          );
         }),
       );
       final first = NocodbSyncService(

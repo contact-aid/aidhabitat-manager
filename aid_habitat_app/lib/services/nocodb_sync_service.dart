@@ -20,6 +20,7 @@ import 'visit_recommendations_wiki_remap.dart';
 import 'nocodb_api_client.dart';
 import 'report_generation_service.dart';
 import 'sync_repository.dart';
+import 'sync_mutation.dart';
 
 /// Vrai si l'erreur attrapée par le catch générique du sync engine est
 /// en réalité un hoquet réseau (à rejouer silencieusement) plutôt qu'une
@@ -409,13 +410,47 @@ class NocodbSyncService {
               'patient',
               'housing',
               'dossier',
+              'mesures_anthropometriques',
+              'observations_synthese',
+              'diagnostic_sanitaires',
             }.contains(operation.entityType)) {
           final payload =
               jsonDecode(operation.payloadJson) as Map<String, dynamic>;
+          final sentPayload =
+              (payload['retryMutation'] as Map?)?.cast<String, dynamic>() ??
+              payload;
+          if (payload['retryMutation'] is Map &&
+              rebaseAcknowledgedMutation(
+                    sent: sentPayload,
+                    pending: payload,
+                    version:
+                        (sentPayload['concurrency']
+                                as Map?)?['expectedUpdatedAt']
+                            ?.toString() ??
+                        '',
+                  ) ==
+                  null) {
+            throw ConflictException(
+              'La reference de la sauvegarde precedente doit etre verifiee.',
+              remoteData: {'error': 'SYNC_BASELINE_REQUIRED'},
+            );
+          }
           final version = await switch (operation.entityType) {
-            'patient' => _processPatientOperation(operation, payload),
-            'housing' => _processHousingOperation(operation, payload),
-            _ => _processDossierOperation(operation, payload),
+            'patient' => _processPatientOperation(operation, sentPayload),
+            'housing' => _processHousingOperation(operation, sentPayload),
+            'mesures_anthropometriques' => _processMesuresOperation(
+              operation,
+              sentPayload,
+            ),
+            'observations_synthese' => _processObservationsOperation(
+              operation,
+              sentPayload,
+            ),
+            'diagnostic_sanitaires' => _processDiagnosticSanitairesOperation(
+              operation,
+              sentPayload,
+            ),
+            _ => _processDossierOperation(operation, sentPayload),
           };
           SyncSessionScope.current?.check();
           acknowledged = await _syncRepository.acknowledgeVersionedMutation(
@@ -835,7 +870,7 @@ class NocodbSyncService {
   /// Avant cette méthode, les saisies (taille debout, hauteur d'assise,
   /// profondeur genoux, hauteur coudes) ne quittaient JAMAIS l'iPad —
   /// `upsertMesures` n'enqueueait pas de sync_op.
-  Future<void> _processMesuresOperation(
+  Future<String?> _processMesuresOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -862,14 +897,14 @@ class NocodbSyncService {
       expectedUpdatedAt: expected,
       concurrency: (payload['concurrency'] as Map?)?.cast<String, dynamic>(),
     );
-    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
+    return newUpdatedAt;
   }
 
   /// Push des observations de synthèse via
   /// `PUT /api/observations/:dossierId`. Alimente les pages 6 et 7 du
   /// rapport PDF (« Projet ou souhait de l'usager », « Résumé des
   /// préconisations », « Observation sur les équipements »).
-  Future<void> _processObservationsOperation(
+  Future<String?> _processObservationsOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -896,12 +931,12 @@ class NocodbSyncService {
       expectedUpdatedAt: expected,
       concurrency: (payload['concurrency'] as Map?)?.cast<String, dynamic>(),
     );
-    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
+    return newUpdatedAt;
   }
 
   /// Pushes a Diagnostic sanitaires update (salle de bain + WC instances)
   /// via `PUT /api/diagnostic-sanitaires/:dossierId`.
-  Future<void> _processDiagnosticSanitairesOperation(
+  Future<String?> _processDiagnosticSanitairesOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -943,7 +978,7 @@ class NocodbSyncService {
       expectedUpdatedAt: expected,
       concurrency: (payload['concurrency'] as Map?)?.cast<String, dynamic>(),
     );
-    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
+    return newUpdatedAt;
   }
 
   Future<String> _resolveChildDossierId(String dossierId) async {

@@ -44,6 +44,8 @@ Map<String, dynamic> buildSyncMutation({
         jsonEncode({
           idKey: entityId,
           'updates': combinedUpdates,
+          if (previous?['retryMutation'] is Map)
+            'retryMutation': previous!['retryMutation'],
           if (previous?.containsKey('conflict') == true)
             'conflict': previous!['conflict'],
           'concurrency': {
@@ -149,6 +151,7 @@ Map<String, dynamic>? rebaseAcknowledgedMutation({
   base.addAll(Map<String, dynamic>.from(oldUpdates));
   return {
     ...pending,
+    'retryMutation': null,
     'concurrency': {
       ...Map<String, dynamic>.from(guard),
       'baseValues': base,

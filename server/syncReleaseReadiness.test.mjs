@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createGuardedMutation, SyncMutationError } from './guardedMutation.mjs';
 import { ConditionalWriteUncertainError } from './nocodbConditionalWrite.mjs';
+import { inspectLegacyRecovery } from './legacySyncRecovery.mjs';
 
 // Characterization of existing release blockers, not an integration test.
 // Never import index.mjs: its warmup can contact configured remote services.
@@ -38,6 +39,8 @@ function fixture(enabled = true) {
     conditionalSyncEnabled: enabled,
     TABLES: { dossiers: 'synthetic_table' },
     SyncMutationError,
+    inspectLegacyRecovery,
+    unwrapRecordFields: (row) => row.fields,
     ConditionalWriteUncertainError,
     field: (row, key) => row.fields[key],
     canAccessDossierRecord: () => true,
@@ -57,6 +60,10 @@ function fixture(enabled = true) {
       },
     }) : null,
   };
+  dependencies.recoverLegacySync = evaluate(
+    `${fragment('function recoverLegacySync(', 'const sendConflictIfStale =')}; return recoverLegacySync;`,
+    dependencies,
+  );
   dependencies.sendConflictIfStale = evaluate(
     `${fragment('const sendConflictIfStale =', 'const normalizeLabelForMatch =')}; return sendConflictIfStale;`,
     dependencies,

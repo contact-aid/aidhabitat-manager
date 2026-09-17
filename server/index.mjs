@@ -16,6 +16,7 @@ import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureCo
 import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
 import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
+import { inspectLegacyRecovery } from './legacySyncRecovery.mjs';
 import { createMobileSyncStore } from './mobileSyncStore.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
@@ -887,6 +888,28 @@ const getWorkspaceUpdatedAt = (...records) => {
   if (timestamps.length === 0) return null;
   return new Date(Math.max(...timestamps)).toISOString();
 };
+function recoverLegacySync(req, res, record, fields, baseFields = {}, options = {}) {
+  if (!record) return false;
+  if (typeof req.body?.expectedUpdatedAt !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}[T ](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(req.body.expectedUpdatedAt)
+      || !Number.isFinite(Date.parse(req.body.expectedUpdatedAt))
+      || new Date(`${req.body.expectedUpdatedAt.slice(0, 10)}T00:00:00Z`).toISOString().slice(0, 10)
+        !== req.body.expectedUpdatedAt.slice(0, 10)) return false;
+  const updatedAt = options.updatedAt || getRecordUpdatedAt(record);
+  const outcome = inspectLegacyRecovery({ guard: req.body?.concurrency,
+    fields, baseFields, observed: unwrapRecordFields(record), updatedAt,
+    equals: options.equals });
+  if (outcome === 'replay') {
+    res.json({ success: true, error: null, data: { updatedAt, ...options.identity } });
+    return true;
+  }
+  if (outcome === 'conflict') {
+    res.status(409).json({ conflict: true, error: 'SYNC_FIELD_CONFLICT',
+      remoteUpdatedAt: updatedAt, remoteData: unwrapRecordFields(record) });
+    return true;
+  }
+  return false;
+}
 const sendConflictIfStale = (req, res, record) => {
   const expectedRaw = req.body?.expectedUpdatedAt || req.get('If-Unmodified-Since');
   if (!expectedRaw) return false;
@@ -7256,9 +7279,12 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       return;
     }
 
-    if (!conditionalSyncEnabled && sendConflictIfStale(req, res, beneficiaryRecord)) return;
-
     const fields = mapBeneficiaryUpdatesToFields(updates, references);
+    if (!conditionalSyncEnabled) {
+      if (recoverLegacySync(req, res, beneficiaryRecord, fields,
+        mapBeneficiaryUpdatesToFields(updates.concurrency?.baseValues || {}, references))) return;
+      if (sendConflictIfStale(req, res, beneficiaryRecord)) return;
+    }
 
     if (conditionalSyncEnabled) {
       if (await applyConditionalSync(req, res, {
@@ -7322,13 +7348,16 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
     // local. Sans ça, le client garde l'ancien timestamp jusqu'au
     // prochain pull → toute édition consécutive (avant pull) tombe sur
     // un 409 et passe en force-local (bruyant mais fonctionnel).
-    res.json({
-      success: true,
-      error: null,
-      data: {
-        updatedAt: refreshedDossier?.patient?.updatedAt || null,
-      },
+    const confirmedRows = await queryAll(TABLES.beneficiaires, {
+      fields: FIELD_SETS.beneficiaires,
+      where: `(Id,eq,${Number(beneficiaryRecord.id)})`,
     });
+    const confirmed = confirmedRows.find((row) => String(row.id) === String(beneficiaryRecord.id));
+    const updatedAt = confirmed ? getRecordUpdatedAt(confirmed) : null;
+    if (!updatedAt || !Number.isFinite(Date.parse(updatedAt))) {
+      throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
+    }
+    res.json({ success: true, error: null, data: { updatedAt } });
   } catch (error) {
     next(error);
   }
@@ -7342,7 +7371,7 @@ app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    if ((!conditionalSyncEnabled || updates.medicalContext || updates.autonomy)
+    if ((updates.medicalContext || updates.autonomy)
         && sendConflictIfStale(req, res, dossierRecord)) return;
     if (conditionalSyncEnabled && req.body?.concurrency && (updates.medicalContext || updates.autonomy)) {
       throw new SyncMutationError(400, 'SYNC_MULTITABLE_MUTATION_UNSUPPORTED');
@@ -7366,6 +7395,11 @@ app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
         : undefined,
     });
     const fields = await mapDossierFields(updates);
+    if (!conditionalSyncEnabled && !updates.medicalContext && !updates.autonomy) {
+      if (recoverLegacySync(req, res, dossierRecord, fields,
+        await mapDossierFields(updates.concurrency?.baseValues || {}))) return;
+      if (sendConflictIfStale(req, res, dossierRecord)) return;
+    }
 
     if (Object.keys(fields).length > 0) {
       if (conditionalSyncEnabled) {
@@ -7399,11 +7433,9 @@ app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
       // gardera l'ancien `remote_updated_at` jusqu'au prochain pull.
     }
 
-    res.json({
-      success: true,
-      error: null,
-      data: { id: dossierUuid, updatedAt: refreshedUpdatedAt },
-    });
+    if (!refreshedUpdatedAt) throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
+    res.json({ success: true, error: null,
+      data: { id: dossierUuid, updatedAt: refreshedUpdatedAt } });
   } catch (error) {
     next(error);
   }
@@ -7532,6 +7564,8 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
           mapBaseline: mapHousingFields,
         })) return;
       } else {
+        if (recoverLegacySync(req, res, existingHousing, fields,
+          mapHousingFields(updates.concurrency?.baseValues || {}))) return;
         if (sendConflictIfStale(req, res, existingHousing)) return;
         await updateRecord(TABLES.logements, existingHousing.id, fields);
       }
@@ -7549,6 +7583,7 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
         // best-effort : si le re-fetch échoue, le client gardera son
         // ancien `remote_updated_at` jusqu'au prochain pull.
       }
+      if (!refreshedUpdatedAt) throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
       res.json({
         success: true,
         error: null,
@@ -8471,8 +8506,24 @@ const secondaryScalarEquals = createDatabaseValueComparator([
   { title: 'updated_at', uidt: 'DateTime' },
   { title: 'created_at', uidt: 'DateTime' },
 ]);
+function recoverSecondarySync(req, res, record, fields, mapping) {
+  if (!record) return false;
+  const base = req.body?.concurrency?.baseValues || {};
+  const baseFields = {};
+  for (const [appKey, dbKey] of Object.entries(mapping)) {
+    if (!Object.hasOwn(base, appKey)) continue;
+    baseFields[dbKey] = appKey.endsWith('Instances')
+      ? (Array.isArray(base[appKey]) && base[appKey].length ? JSON.stringify(base[appKey]) : null)
+      : nullableString(base[appKey]);
+  }
+  return recoverLegacySync(req, res, record,
+    Object.fromEntries(Object.entries(fields).filter(([key]) => !['updated_at', 'created_at', 'dossier_id', 'dossiers_id'].includes(key))),
+    baseFields, { updatedAt: secondaryUpdatedAt(record), equals: secondaryValueMatches,
+      identity: secondaryIdentity(record) });
+}
 const secondaryValueMatches = (key, expected, observed) => {
   if (secondaryScalarEquals(key, expected, observed)) return true;
+  if ((expected == null && observed === '') || (observed == null && expected === '')) return true;
   if (expected == null || observed == null) return false;
   if (key === 'sdb_instances_json' || key === 'wc_instances_json') {
     try {
@@ -8636,7 +8687,6 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    if (secondaryWriteConflict(req, res, existing)) return;
     const sdbInstances = Array.isArray(payload.sdbInstances) ? payload.sdbInstances : [];
     const wcInstances = Array.isArray(payload.wcInstances) ? payload.wcInstances : [];
     const hasBathroom = sdbInstances.length > 0;
@@ -8693,6 +8743,9 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
             || (wcField && !Object.hasOwn(payload, 'wcInstances'))) delete fields[key];
       }
     }
+    if (recoverSecondarySync(req, res, existing, fields,
+      { sdbInstances: 'sdb_instances_json', wcInstances: 'wc_instances_json' })) return;
+    if (secondaryWriteConflict(req, res, existing)) return;
     const data = await saveSecondaryRecord(TABLES.diagnosticSanitaires,
       FIELD_SETS.diagnosticSanitaires, existing,
       { ...(!existing ? { created_at: new Date().toISOString() } : {}), ...fields });
@@ -8747,7 +8800,6 @@ app.put('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    if (secondaryWriteConflict(req, res, existing)) return;
     const fields = {
       dossier_id: field(dossierRecord, 'uuid_source'),
       dossiers_id: Number(dossierRecord.id),
@@ -8759,6 +8811,12 @@ app.put('/api/mesures/:dossierId', requireAuth, async (req, res, next) => {
       updated_at: new Date().toISOString(),
     };
 
+    if (recoverSecondarySync(req, res, existing, fields, {
+      deboutHauteurCoude: 'debout_hauteur_coude', assisHauteurAssise: 'assis_hauteur_assise',
+      assisProfondeurGenoux: 'assis_profondeur_genoux', assisHauteurCoudes: 'assis_hauteur_coudes',
+      observations: 'observations',
+    })) return;
+    if (secondaryWriteConflict(req, res, existing)) return;
     const data = await saveSecondaryRecord(TABLES.mesuresAnthropometriques,
       FIELD_SETS.mesuresAnthropometriques, existing,
       { ...(!existing ? { created_at: new Date().toISOString() } : {}), ...fields });
@@ -8811,7 +8869,6 @@ app.put('/api/observations/:dossierId', requireAuth, async (req, res, next) => {
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
-    if (secondaryWriteConflict(req, res, existing)) return;
     const fields = {
       dossier_id: field(dossierRecord, 'uuid_source'),
       dossiers_id: Number(dossierRecord.id),
@@ -8820,6 +8877,11 @@ app.put('/api/observations/:dossierId', requireAuth, async (req, res, next) => {
       resume_preconisations: nullableString(payload.resumePreconisations),
     };
 
+    if (recoverSecondarySync(req, res, existing, fields, {
+      observationEquipements: 'observation_equipements', projetSouhaitUsage: 'projet_souhait_usage',
+      resumePreconisations: 'resume_preconisations',
+    })) return;
+    if (secondaryWriteConflict(req, res, existing)) return;
     const data = await saveSecondaryRecord(TABLES.observations, FIELD_SETS.observations, existing, fields);
     res.json({ success: true, error: null, data });
   } catch (error) {

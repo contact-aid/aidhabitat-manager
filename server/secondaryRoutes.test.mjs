@@ -248,8 +248,12 @@ async function runRoutes() {
         assert.deepEqual(body, captured);
         assert.equal(writes().length, 1);
         assert.equal(expect(await request(pathname, owner), 200).updatedAt, after);
+        const replay = expect(await request(pathname, owner, body), 200);
+        assert.equal(replay.data.updatedAt, after);
+        assert.equal(writes().length, 1, 'Lost-response retry must confirm without a second write');
+        row()[definition.changed] = 'concurrent edit';
         expect(await request(pathname, owner, body), 409);
-        assert.equal(writes().length, 1, 'Stale retry must not overwrite the stored values');
+        assert.equal(writes().length, 1, 'A different remote value must remain protected');
       });
       await check('explicit null or empty list still clears supplied field', async () => {
         expect(await request(pathname, owner, definition.clear), 200);

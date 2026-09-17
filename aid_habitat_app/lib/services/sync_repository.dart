@@ -397,12 +397,18 @@ class SyncRepository {
         final currentPayload = await OfflineVault.instance.openString(
           rows.single['payload_json'] as String,
         );
+        final expected =
+            jsonDecode(expectedPayloadJson) as Map<String, dynamic>;
+        final retry = expected['retryMutation'];
         if (rows.single['status'] != 'running' ||
-            currentPayload != expectedPayloadJson) {
-          if (rows.single['status'] == 'pending' &&
+            currentPayload != expectedPayloadJson ||
+            retry is Map) {
+          if ((rows.single['status'] == 'pending' ||
+                  (rows.single['status'] == 'running' &&
+                      currentPayload == expectedPayloadJson)) &&
               acknowledgedVersion != null) {
             final rebased = rebaseAcknowledgedMutation(
-              sent: jsonDecode(expectedPayloadJson) as Map<String, dynamic>,
+              sent: retry is Map ? retry.cast<String, dynamic>() : expected,
               pending: jsonDecode(currentPayload) as Map<String, dynamic>,
               version: acknowledgedVersion,
             );
@@ -413,6 +419,7 @@ class SyncRepository {
                   'payload_json': await OfflineVault.instance.sealString(
                     jsonEncode(rebased),
                   ),
+                  'status': 'pending',
                   'updated_at': DateTime.now().toIso8601String(),
                 },
                 where: 'id = ?',
@@ -497,14 +504,22 @@ class SyncRepository {
       'patient' => 'patients',
       'housing' => 'housings',
       'dossier' => 'dossiers',
+      'mesures_anthropometriques' ||
+      'observations_synthese' ||
+      'diagnostic_sanitaires' => type,
       _ => throw StateError('Unsupported versioned entity: $type'),
     };
     await db.update(
       table,
       {'remote_updated_at': version},
-      where: type == 'housing'
-          ? 'local_id IN (SELECT housing_local_id FROM dossiers WHERE local_id = ?)'
-          : 'local_id = ?',
+      where: switch (type) {
+        'housing' =>
+          'local_id IN (SELECT housing_local_id FROM dossiers WHERE local_id = ?)',
+        'mesures_anthropometriques' ||
+        'observations_synthese' ||
+        'diagnostic_sanitaires' => 'dossier_local_id = ?',
+        _ => 'local_id = ?',
+      },
       whereArgs: [id],
     );
   }

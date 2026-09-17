@@ -7,6 +7,7 @@ import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/nocodb_api_client.dart';
 import 'package:aid_habitat_app/services/nocodb_sync_service.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
+import 'package:aid_habitat_app/services/sync_mutation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -144,6 +145,56 @@ void main() {
   );
 
   for (final table in _tables) {
+    for (final editBeforeVersionStorage in [true, false]) {
+      test(
+        '$table successor advances only after atomic ACK (edit before ACK: $editBeforeVersionStorage)',
+        () async {
+          final sent = buildSyncMutation(
+            idKey: 'dossierId',
+            entityId: 'local_dossier',
+            updates: {'observations': 'first edit'},
+            baseValues: {'observations': 'original'},
+            expectedUpdatedAt: _old,
+          );
+          final operation = await seed(table, payload: sent);
+          if (!editBeforeVersionStorage) {
+            await repository.storeRemoteUpdatedAt(operation, _new);
+          }
+          final successor = buildSyncMutation(
+            idKey: 'dossierId',
+            entityId: 'local_dossier',
+            updates: {'observations': 'second edit'},
+            baseValues: {'observations': 'first edit'},
+            expectedUpdatedAt: _new,
+            previous: sent,
+          );
+          await db.update(
+            'sync_operations',
+            {'payload_json': jsonEncode(successor), 'status': 'pending'},
+            where: 'id = ?',
+            whereArgs: [operation.id],
+          );
+          expect(
+            await repository.acknowledgeVersionedMutation(operation, _new),
+            isFalse,
+          );
+          final pending =
+              jsonDecode(
+                    (await db.query('sync_operations')).single['payload_json']
+                        as String,
+                  )
+                  as Map;
+          expect(pending['concurrency']['expectedUpdatedAt'], _new);
+          expect(
+            pending['concurrency']['baseValues']['observations'],
+            'first edit',
+          );
+          expect(pending['updates']['observations'], 'second edit');
+          expect((await db.query(table)).single['sync_state'], 'pendingSync');
+        },
+      );
+    }
+
     test(
       '$table stores version by dossier key and acknowledges exact payload',
       () async {

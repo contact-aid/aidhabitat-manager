@@ -386,6 +386,7 @@ class DossierRepository {
       final payload = jsonDecode(review.payloadJson) as Map<String, dynamic>;
       payload.remove('conflict');
       payload.remove('localReference');
+      payload.remove('retryMutation');
       payload['updates'] = review.localValues;
       if (review.entityType == 'diagnostic_sanitaires') {
         for (final key in _secondaryFields['diagnostic_sanitaires']!.keys) {
@@ -2190,7 +2191,7 @@ class DossierRepository {
   }) async {
     final existing = await db.query(
       'sync_operations',
-      columns: const ['payload_json', 'status'],
+      columns: const ['payload_json', 'status', 'attempt_count'],
       where: 'id = ? AND status IN (?, ?, ?, ?)',
       whereArgs: [
         operationId,
@@ -2222,6 +2223,14 @@ class DossierRepository {
     }
     if (existing.first['status'] == 'conflict') {
       payload.putIfAbsent('conflict', () => <String, dynamic>{});
+    }
+    if (payload['concurrency'] is Map &&
+        payload['retryMutation'] == null &&
+        (existing.first['status'] == 'running' ||
+            (existing.first['attempt_count'] as int? ?? 0) > 0)) {
+      // An in-flight or uncertain write must be confirmed before its newer
+      // coalesced edit can use the server version it produced.
+      payload['retryMutation'] = jsonDecode(jsonEncode(payload));
     }
     return payload;
   }

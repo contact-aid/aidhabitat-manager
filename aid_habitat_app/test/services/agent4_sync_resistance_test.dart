@@ -189,7 +189,7 @@ void main() {
               } else {
                 expect(body['invalidity'], true);
               }
-            version = '2026-09-02T10:0$requests:00.000Z';
+              version = '2026-09-02T10:0$requests:00.000Z';
               return http.Response(
                 jsonEncode({
                   'data': {'updatedAt': version},
@@ -220,6 +220,74 @@ void main() {
         final patient = (await device.db.query('patients')).single;
         expect(patient['birth_date'], '1957-09-11');
         expect(patient['invalidity'], 1);
+        expect(patient['sync_state'], 'synced');
+      },
+    );
+  }
+
+  for (final missingVersion in [false, true]) {
+    test(
+      'lost ACK then newer edit confirms predecessor first (missingVersion=$missingVersion)',
+      () async {
+        final device = await _openDevice();
+        addTearDown(device.db.close);
+        await device.dossiers.mergeRemoteDossierPayloads([_remoteDossier()]);
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        var calls = 0;
+        String? firstWriteId;
+        final service = NocodbSyncService(
+          database: device.local,
+          syncRepository: device.queue,
+          apiClient: NocodbApiClient(
+            client: MockClient((request) async {
+              final body = jsonDecode(request.body) as Map;
+              calls++;
+              if (calls == 1) {
+                firstWriteId = body['concurrency']['writeId'] as String;
+                entered.complete();
+                await release.future;
+                if (missingVersion) {
+                  return http.Response('{"success":true,"data":{}}', 200);
+                }
+                throw http.ClientException('response lost after commit');
+              }
+              if (calls == 2) {
+                expect(body['concurrency']['writeId'], firstWriteId);
+                expect(body.containsKey('invalidity'), isFalse);
+              } else {
+                expect(body['invalidity'], true);
+                expect(body['expectedUpdatedAt'], '2026-09-02T10:01:00.000Z');
+              }
+              return http.Response(
+                jsonEncode({
+                  'data': {
+                    'updatedAt': calls == 2
+                        ? '2026-09-02T10:01:00.000Z'
+                        : '2026-09-02T10:02:00.000Z',
+                  },
+                }),
+                200,
+              );
+            }),
+          ),
+        );
+        await device.dossiers.updatePatient('patient-1', {
+          'birth_date': '1957-09-11',
+        });
+        final sending = service.pushPendingChanges();
+        await entered.future;
+        await device.dossiers.updatePatient('patient-1', {'invalidity': 1});
+        release.complete();
+        expect((await sending).conflictCount, 0);
+        expect((await service.pushPendingChanges()).conflictCount, 0);
+        final result = await service.pushPendingChanges();
+        expect(result.conflictCount, 0);
+        expect(result.pushedOperations, 1);
+        expect(calls, 3);
+        final patient = (await device.db.query('patients')).single;
+        expect(patient['invalidity'], 1);
+        expect(patient['birth_date'], '1957-09-11');
         expect(patient['sync_state'], 'synced');
       },
     );
