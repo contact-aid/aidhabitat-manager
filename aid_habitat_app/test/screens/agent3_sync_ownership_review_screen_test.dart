@@ -58,7 +58,9 @@ void main() {
     do {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       await tester.pump();
-      if (!waitForLoad || find.byType(CircularProgressIndicator).evaluate().isEmpty) {
+      if (!waitForLoad ||
+          (find.byType(CircularProgressIndicator).evaluate().isEmpty &&
+              find.text('Enregistrement…').evaluate().isEmpty)) {
         return;
       }
     } while (DateTime.now().isBefore(deadline));
