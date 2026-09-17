@@ -42,6 +42,10 @@ const DEFAULT_TEMPLATE_PATH = path.resolve(
   __dirname,
   '../templates/visitReport.template.pdf',
 );
+const TECHNICIAN_TEMPLATE_PATH = path.resolve(
+  __dirname,
+  '../templates/visitReport.technician.pdf',
+);
 const LEGACY_ACROFORM_TEMPLATE_PATH = path.resolve(
   __dirname,
   '../templates/visitReport.legacy-acroform.pdf',
@@ -3409,9 +3413,10 @@ export async function generateVisitReport({
   fetchImageBytes,
   flatten = true,
 }) {
-  // Un seul template PDF : les coordonnées de l'ergo sont injectées
-  // dynamiquement via le mapping AcroForm (`view.ergo.*`).
-  const { templateBytes, mapping } = await loadTemplate(DEFAULT_TEMPLATE_PATH);
+  // Both professional templates share the same field and layout pipeline.
+  const { templateBytes, mapping } = await loadTemplate(
+    ergoProfile?.role === 'TECHNICIAN' ? TECHNICIAN_TEMPLATE_PATH : DEFAULT_TEMPLATE_PATH,
+  );
   const view = buildViewModel({
     dossier,
     sanitaires,
@@ -3962,6 +3967,18 @@ export async function generateVisitReport({
   // plus un formulaire éditable. Mettre flatten=false pour debug.
   if (flatten) {
     form.flatten();
+    // pdf-lib can leave references to widgets it deleted while flattening.
+    // Keep valid links, but never ship dangling annotation references.
+    for (const page of pdfDoc.getPages()) {
+      const annotations = page.node.Annots();
+      if (!annotations) continue;
+      for (let i = annotations.size() - 1; i >= 0; i -= 1) {
+        const annotation = pdfDoc.context.lookup(annotations.get(i));
+        if (!annotation || annotation.get?.(PDFName.of('Subtype')) === PDFName.of('Widget')) {
+          annotations.remove(i);
+        }
+      }
+    }
   }
 
   if (isFlat2026Template) {

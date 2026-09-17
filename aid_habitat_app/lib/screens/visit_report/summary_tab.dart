@@ -88,7 +88,7 @@ _SummaryTextNote _textNoteFromTabKey(String tabKey) {
 class _SummaryTabState extends State<SummaryTab>
     with AutomaticKeepAliveClientMixin {
   _SummaryMode _mode = _SummaryMode.drawing;
-  _SummaryTextNote _activeTextNote = _SummaryTextNote.project;
+  _SummaryTextNote _activeTextNote = _SummaryTextNote.recommendations;
 
   @override
   bool get wantKeepAlive => true;

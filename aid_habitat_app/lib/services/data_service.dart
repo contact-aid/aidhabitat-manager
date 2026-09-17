@@ -421,7 +421,7 @@ class DataService {
     return {
       'email': m.email,
       'displayName': m.displayName,
-      'role': m.role == LocalUserRole.admin ? 'ADMIN' : 'ERGO',
+      'role': m.role.apiValue,
       'establishmentId': m.establishmentLabel,
       'ergoLabel': m.ergoLabel,
       'isActive': m.selectable,

@@ -1206,6 +1206,8 @@ class AuthService {
     switch ((role ?? '').trim().toUpperCase()) {
       case 'ADMIN':
         return LocalUserRole.admin;
+      case 'TECHNICIAN':
+        return LocalUserRole.technician;
       case 'ERGO':
       default:
         return LocalUserRole.ergo;

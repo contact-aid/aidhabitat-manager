@@ -216,7 +216,7 @@ class AccessMembersRepository {
           jsonEncode({
             'email': email,
             'displayName': displayName,
-            'role': role == LocalUserRole.admin ? 'ADMIN' : 'ERGO',
+            'role': role.apiValue,
             if (establishmentId != null && establishmentId.isNotEmpty)
               'establishmentId': establishmentId,
             if (password != null && password.isNotEmpty) 'password': password,

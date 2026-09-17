@@ -18,6 +18,7 @@ import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from '.
 import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
 import { inspectLegacyRecovery } from './legacySyncRecovery.mjs';
 import { registerContextRoutes } from './contextRoutes.mjs';
+import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore } from './mobileSyncStore.mjs';
 import {
@@ -2876,7 +2877,7 @@ const buildMemberFromErgoRecord = (record) => {
   return {
     email,
     displayName: derivedName,
-    role: special?.role || 'ERGO',
+    role: special?.role || (isTechnicianEmail(email) ? 'TECHNICIAN' : 'ERGO'),
     selectable: special?.selectable ?? true,
     profilePhotoUrl: resolvedPhotoUrl,
     establishmentId: field(record, 'etablissements_id') ? String(field(record, 'etablissements_id')) : '',
@@ -2943,6 +2944,7 @@ const memberToReportErgoProfile = (member) => {
   return {
     displayName: stringValue(member.displayName || member.ergoLabel).trim(),
     email: normalizeEmail(member.email),
+    role: member.role,
     establishmentLabel: stringValue(member.establishmentLabel).trim() || "Aid'Habitat",
   };
 };
@@ -2956,6 +2958,7 @@ const ergoRecordToReportProfile = (record) => {
   return {
     displayName: fullName || refLabel(record) || email,
     email,
+    role: specialMemberProfile(email)?.role || (isTechnicianEmail(email) ? 'TECHNICIAN' : 'ERGO'),
     establishmentLabel: refLabel(field(record, 'etablissement')) || "Aid'Habitat",
   };
 };
@@ -2998,7 +3001,7 @@ const resolveReportErgoProfile = async ({ dossier, appUser }) => {
     console.warn('[report] résolution profil ergo échouée :', error?.message || error);
   }
 
-  if (appUser?.role === 'ERGO') {
+  if (['ERGO', 'TECHNICIAN'].includes(appUser?.role)) {
     return memberToReportErgoProfile(appUser);
   }
   const fallbackLabel = stringValue(dossier?.ergoId || dossier?.assignedErgoLabel).trim();
@@ -4725,6 +4728,16 @@ app.post('/api/admin/access-members', requireAdmin, async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'email et displayName requis' });
     }
     const normalizedEmail = normalizeEmail(email);
+    if (role && !['ADMIN', 'ERGO', 'TECHNICIAN'].includes(role)) {
+      return res.status(400).json({ success: false, error: 'Role invalide' });
+    }
+    if (role === 'TECHNICIAN' && !isTechnicianEmail(normalizedEmail)) {
+      return res.status(400).json({ success: false, error: 'Profil technicien non configure' });
+    }
+    const { members: existingMembers } = await loadMemberRegistry({ forceRefresh: true });
+    if (existingMembers.some(member => member.email === normalizedEmail)) {
+      return res.status(409).json({ success: false, error: 'Un compte existe deja pour cet email' });
+    }
     const explicitPassword = stringValue(password).trim();
     if (explicitPassword) assertPasswordPolicy(explicitPassword);
     const chosenPassword = explicitPassword || generatePassword();
@@ -4748,7 +4761,7 @@ app.post('/api/admin/access-members', requireAdmin, async (req, res, next) => {
       password: chosenPassword,
       credential,
       displayName,
-      role: role === 'ADMIN' ? 'ADMIN' : 'ERGO',
+      role: role || 'ERGO',
     });
     await writeAuthStore(store);
     memberRegistryCache = null;
@@ -4756,7 +4769,7 @@ app.post('/api/admin/access-members', requireAdmin, async (req, res, next) => {
     const member = members.find((m) => m.email === normalizedEmail) || {
       email: normalizedEmail,
       displayName,
-      role: role === 'ADMIN' ? 'ADMIN' : 'ERGO',
+      role: role || 'ERGO',
       selectable: true,
       establishmentLabel: '',
       ergoLabel: displayName,
