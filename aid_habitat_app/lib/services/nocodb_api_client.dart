@@ -2364,7 +2364,7 @@ class NocodbApiClient {
           body: jsonEncode({
             'email': email,
             'displayName': displayName,
-            'role': role == LocalUserRole.admin ? 'ADMIN' : 'ERGO',
+            'role': role.apiValue,
             if (establishmentId != null && establishmentId.isNotEmpty)
               'establishmentId': establishmentId,
             if (password != null && password.isNotEmpty) 'password': password,
@@ -2749,6 +2749,8 @@ class NocodbApiClient {
     switch ((role ?? '').trim().toUpperCase()) {
       case 'ADMIN':
         return LocalUserRole.admin;
+      case 'TECHNICIAN':
+        return LocalUserRole.technician;
       case 'ERGO':
       default:
         return LocalUserRole.ergo;

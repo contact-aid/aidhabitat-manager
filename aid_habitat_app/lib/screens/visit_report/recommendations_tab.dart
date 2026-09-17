@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../models/types.dart';
@@ -13,6 +14,12 @@ import '../../components/confirmation_dialog.dart';
 import '../../components/dashed_border_painter.dart';
 import '../../components/form_widgets.dart';
 import '../../components/soft_transitions.dart';
+
+@visibleForTesting
+int recommendationGridColumns(double width, {required bool isWeb}) {
+  if (!isWeb) return 3;
+  return ((width + 12) / 192).floor().clamp(1, 5);
+}
 
 /// Préconisations tab — parité 1:1 avec `PreconisationsForm` React.
 ///
@@ -468,9 +475,6 @@ class _RecommendationsTabState extends State<RecommendationsTab>
                         child: SaveStatusIndicator(saving: true),
                       ),
                     ),
-                  // Grille 3 colonnes : chaque préconisation est ajoutée
-                  // sur la même ligne jusqu'à 3, puis on saute à une
-                  // nouvelle ligne (demande utilisateur 2026-04-28).
                   // La card "Ajouter" reste toujours visible en fin de
                   // grille, même après l'ajout d'une préconisation.
                   _buildRecommendationsGrid(),
@@ -485,11 +489,11 @@ class _RecommendationsTabState extends State<RecommendationsTab>
 
   /// Reorder by holding the image; text fields keep their editing gestures.
   Widget _buildRecommendationsGrid() {
-    const int columns = 3;
     const double gap = 12.0;
     return LayoutBuilder(
       builder: (context, constraints) {
         final available = constraints.maxWidth;
+        final columns = recommendationGridColumns(available, isWeb: kIsWeb);
         final cardWidth = (available - gap * (columns - 1)) / columns;
         final cardHeight = _recommendationCardHeight(cardWidth);
         final totalItems =
@@ -1140,7 +1144,7 @@ class _InlineTitleFieldState extends State<_InlineTitleField> {
 }
 
 // =============================================================================
-// Draggable wrapper around a recommendation card (grid 3 cols)
+// Draggable wrapper around a recommendation card.
 // =============================================================================
 
 /// The whole card accepts drops; only the image starts a long-press drag.

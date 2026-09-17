@@ -187,6 +187,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'Administrateur';
       case LocalUserRole.ergo:
         return 'Ergothérapeute';
+      case LocalUserRole.technician:
+        return 'Technicien';
     }
   }
 

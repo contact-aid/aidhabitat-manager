@@ -24,7 +24,7 @@ enum SyncState { localOnly, pendingSync, syncing, synced, syncError, conflict }
 
 enum SyncOperationStatus { pending, running, completed, failed, conflict }
 
-enum LocalUserRole { admin, ergo }
+enum LocalUserRole { admin, ergo, technician }
 
 const kAutonomyItemNames = [
   'Déplacements/transferts',
@@ -1434,12 +1434,20 @@ extension SyncStateLabel on SyncState {
 }
 
 extension LocalUserRoleLabel on LocalUserRole {
+  String get apiValue => switch (this) {
+    LocalUserRole.admin => 'ADMIN',
+    LocalUserRole.ergo => 'ERGO',
+    LocalUserRole.technician => 'TECHNICIAN',
+  };
+
   String get label {
     switch (this) {
       case LocalUserRole.admin:
         return 'Admin';
       case LocalUserRole.ergo:
         return 'Ergo';
+      case LocalUserRole.technician:
+        return 'Technicien';
     }
   }
 }
