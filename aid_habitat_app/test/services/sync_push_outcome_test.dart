@@ -87,8 +87,9 @@ class _Queue extends SyncRepository {
   @override
   Future<bool> acknowledgeVersionedMutation(
     SyncOperation operation,
-    String? version,
-  ) => markCompleted(
+    String? version, {
+    String? remoteEntityId,
+  }) => markCompleted(
     operationId: operation.id,
     entityType: operation.entityType,
     entityLocalId: operation.entityLocalId,

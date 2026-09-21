@@ -16,7 +16,8 @@ import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureCo
 import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
 import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
-import { inspectLegacyRecovery } from './legacySyncRecovery.mjs';
+import { inspectLegacyRecovery, mappedDatabaseValueEquals } from './legacySyncRecovery.mjs';
+import { createKeyedSerialExecutor } from './keyedSerialExecutor.mjs';
 import { registerContextRoutes } from './contextRoutes.mjs';
 import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
@@ -506,6 +507,7 @@ const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter
   allowedTableIds: conditionalTables,
   request: requestConditionalNocodbRest,
 }) : null;
+const serializeHousingMutation = createKeyedSerialExecutor();
 const guardedMutation = conditionalWriter ? createGuardedMutation({
   writer: conditionalWriter,
   readColumns: async (tableId) => {
@@ -7507,13 +7509,20 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
     const existingHousing = latestRecord(
       logements.filter((record) => field(record, 'beneficiaire_id') === beneficiaryId || String(field(record, 'beneficiaires_id')) === String(beneficiaryRecord.id))
     );
+    const guard = updates.concurrency;
+    const guardedCreation = guard?.version === 1 && guard.createIfAbsent === true
+      && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(guard.writeId ?? '');
+    if (guard?.createIfAbsent === true && !guardedCreation) {
+      throw new SyncMutationError(428, 'SYNC_CREATION_BASELINE_REQUIRED');
+    }
+    const creationId = guardedCreation ? guard.writeId : crypto.randomUUID();
     const mapHousingFields = (updates) => {
     const typeLogement = findByLabel(typeLogements, updates.typology);
     const porteGarage = findByLabel(porteGarageRefs, updates.motorisationPorteGarage);
     const portail = findByLabel(portailRefs, updates.motorisationPortail);
 
     return sanitizeUndefined({
-      uuid_source: existingHousing ? undefined : crypto.randomUUID(),
+      uuid_source: existingHousing ? undefined : creationId,
       beneficiaire_id: beneficiaryId,
       beneficiaires_id: Number(beneficiaryRecord.id),
       annee_construction: nullableString(updates.yearConstruction),
@@ -7588,6 +7597,37 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
     };
     const fields = mapHousingFields(updates);
 
+    const readConfirmedHousing = async (recordId) => {
+      const refreshedLogements = await queryAll(TABLES.logements, { fields: FIELD_SETS.logements });
+      const refreshed = refreshedLogements.find((record) => String(record.id) === String(recordId));
+      const updatedAt = refreshed ? getRecordUpdatedAt(refreshed) : null;
+      if (!refreshed || !updatedAt || !Number.isFinite(Date.parse(updatedAt))) {
+        throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
+      }
+      return { record: refreshed, updatedAt };
+    };
+
+    if (existingHousing && guard?.createIfAbsent === true) {
+      const observed = unwrapRecordFields(existingHousing);
+      const desired = Object.entries(fields).filter(([, value]) => value !== undefined);
+      const sameContents = desired.every(([key, value]) =>
+        Object.hasOwn(observed, key) && mappedDatabaseValueEquals(key, observed[key], value));
+      const sameWrite = field(existingHousing, 'uuid_source') === guard.writeId;
+      if (!sameContents) {
+        res.status(409).json({ conflict: true,
+          error: sameWrite ? 'SYNC_WRITE_ID_MISMATCH' : 'SYNC_CREATE_CONFLICT',
+          remoteUpdatedAt: getRecordUpdatedAt(existingHousing),
+          remoteData: observed });
+        return;
+      }
+      const confirmed = await readConfirmedHousing(existingHousing.id);
+      res.json({ success: true, error: null, data: {
+        id: field(confirmed.record, 'uuid_source') || `nocodb-housing-${existingHousing.id}`,
+        updatedAt: confirmed.updatedAt,
+      } });
+      return;
+    }
+
     if (existingHousing) {
       if (conditionalSyncEnabled) {
         if (await applyConditionalSync(req, res, {
@@ -7605,35 +7645,55 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
       // local. Sans ça, le 2e save consécutif envoie l'ancien
       // `expectedUpdatedAt` → 409 conflit garanti → retry force-local
       // bruyant. Cf. fix identique sur PATCH /api/beneficiaires/:id.
-      let refreshedUpdatedAt = null;
-      try {
-        const refreshedLogements = await queryAll(TABLES.logements, { fields: FIELD_SETS.logements });
-        const refreshed = refreshedLogements.find((r) => String(r.id) === String(existingHousing.id));
-        if (refreshed) refreshedUpdatedAt = getRecordUpdatedAt(refreshed);
-      } catch (_) {
-        // best-effort : si le re-fetch échoue, le client gardera son
-        // ancien `remote_updated_at` jusqu'au prochain pull.
-      }
-      if (!refreshedUpdatedAt) throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
+      const confirmed = await readConfirmedHousing(existingHousing.id);
       res.json({
         success: true,
         error: null,
         data: {
           id: field(existingHousing, 'uuid_source') || `nocodb-housing-${existingHousing.id}`,
-          updatedAt: refreshedUpdatedAt,
+          updatedAt: confirmed.updatedAt,
         },
       });
       return;
     }
 
-    const created = await createRecord(TABLES.logements, fields);
-    res.json({
-      success: true,
-      error: null,
-      data: {
-        id: field(created, 'uuid_source') || `nocodb-housing-${created.id}`,
-        updatedAt: getRecordUpdatedAt(created),
-      },
+    await serializeHousingMutation(String(beneficiaryRecord.id), async () => {
+      const currentRows = await queryAll(TABLES.logements, { fields: FIELD_SETS.logements });
+      const current = latestRecord(currentRows.filter((record) =>
+        field(record, 'beneficiaire_id') === beneficiaryId
+        || String(field(record, 'beneficiaires_id')) === String(beneficiaryRecord.id)));
+      if (current) {
+        const observed = unwrapRecordFields(current);
+        const desired = Object.entries(fields).filter(([, value]) => value !== undefined);
+        const sameContents = desired.every(([key, value]) =>
+          Object.hasOwn(observed, key) && mappedDatabaseValueEquals(key, observed[key], value));
+        if (!sameContents) {
+          res.status(409).json({ conflict: true, error: 'SYNC_CREATE_CONFLICT',
+            remoteUpdatedAt: getRecordUpdatedAt(current), remoteData: observed });
+          return;
+        }
+        const confirmed = await readConfirmedHousing(current.id);
+        res.json({ success: true, error: null, data: {
+          id: field(confirmed.record, 'uuid_source') || `nocodb-housing-${current.id}`,
+          updatedAt: confirmed.updatedAt,
+        } });
+        return;
+      }
+      if (conditionalSyncEnabled && !conditionalCreatesReady) {
+        throw new SyncMutationError(503, 'SYNC_HOUSING_CREATION_NOT_PREPARED');
+      }
+      if (conditionalSyncEnabled && !guardedCreation) {
+        throw new SyncMutationError(428, 'SYNC_CREATION_BASELINE_REQUIRED');
+      }
+      const created = await createRecord(TABLES.logements, {
+        ...fields,
+        ...(conditionalSyncEnabled ? { [SYNC_REVISION_FIELD]: guard.writeId } : {}),
+      });
+      const confirmed = await readConfirmedHousing(created.id);
+      res.json({ success: true, error: null, data: {
+        id: field(confirmed.record, 'uuid_source') || `nocodb-housing-${created.id}`,
+        updatedAt: confirmed.updatedAt,
+      } });
     });
   } catch (error) {
     next(error);

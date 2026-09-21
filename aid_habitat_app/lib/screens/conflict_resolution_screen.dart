@@ -163,9 +163,12 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
           Text(title, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            describeSyncConflict(
-              jsonDecode(review.payloadJson) as Map<String, dynamic>,
-            ),
+            review.remoteExists
+                ? describeSyncConflict(
+                    jsonDecode(review.payloadJson) as Map<String, dynamic>,
+                  )
+                : 'Aucun logement n’existe encore sur le serveur. '
+                      'Vos saisies sont conservées sur cet appareil.',
           ),
           const SizedBox(height: 12),
           for (final key in review.localValues.keys)
@@ -186,7 +189,9 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                         review.localValues[key],
                       );
                       final remote = _value(
-                        'Serveur',
+                        review.remoteExists
+                            ? 'Serveur'
+                            : 'Serveur — aucun logement',
                         review.remoteValues[key],
                       );
                       return constraints.maxWidth < 600
@@ -220,15 +225,20 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                     ? null
                     : () => _resolve(review, true),
                 icon: const Icon(LucideIcons.uploadCloud),
-                label: const Text('Conserver mes changements'),
+                label: Text(
+                  review.remoteExists
+                      ? 'Conserver mes changements'
+                      : 'Conserver mes changements et créer le logement',
+                ),
               ),
-              OutlinedButton.icon(
-                onPressed: _resolving || _error != null
-                    ? null
-                    : () => _resolve(review, false),
-                icon: const Icon(LucideIcons.downloadCloud),
-                label: const Text('Prendre ces valeurs du serveur'),
-              ),
+              if (review.remoteExists)
+                OutlinedButton.icon(
+                  onPressed: _resolving || _error != null
+                      ? null
+                      : () => _resolve(review, false),
+                  icon: const Icon(LucideIcons.downloadCloud),
+                  label: const Text('Prendre ces valeurs du serveur'),
+                ),
             ],
           ),
           if (_resolving) const LinearProgressIndicator(),

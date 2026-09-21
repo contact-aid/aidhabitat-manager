@@ -20,10 +20,10 @@ void main() {
         patientId: 'synthetic',
         updates: {},
       ),
-      'housing' => client.updateLogement(
-        beneficiaryId: 'synthetic',
-        updates: {},
-      ),
+      'housing' =>
+        client
+            .updateLogement(beneficiaryId: 'synthetic', updates: {})
+            .then((result) => result.updatedAt),
       _ => client.updateDossier(dossierId: 'synthetic', updates: {}),
     };
     for (final value in [
@@ -38,7 +38,7 @@ void main() {
           client: MockClient(
             (_) async => http.Response(
               jsonEncode({
-                'data': {'updatedAt': value},
+                'data': {'id': 'housing-1', 'updatedAt': value},
               }),
               200,
             ),
@@ -56,7 +56,7 @@ void main() {
         client: MockClient(
           (_) async => http.Response(
             jsonEncode({
-              'data': {'updatedAt': version},
+              'data': {'id': 'housing-1', 'updatedAt': version},
             }),
             200,
           ),

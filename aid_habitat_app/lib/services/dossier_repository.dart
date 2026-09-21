@@ -23,6 +23,7 @@ class SyncConflictReview {
     required this.remoteColumns,
     required this.localRowId,
     required this.table,
+    required this.remoteExists,
     this.contextReferenceJson,
   });
 
@@ -30,12 +31,13 @@ class SyncConflictReview {
   final String entityType;
   final String entityLocalId;
   final String payloadJson;
-  final String remoteUpdatedAt;
+  final String? remoteUpdatedAt;
   final Map<String, dynamic> localValues;
   final Map<String, dynamic> remoteValues;
   final Map<String, dynamic> remoteColumns;
   final String localRowId;
   final String table;
+  final bool remoteExists;
   final String? contextReferenceJson;
 }
 
@@ -137,8 +139,12 @@ class DossierRepository {
             ? (remote['housing'] as Map?)?.cast<String, dynamic>()
             : remote;
         if (raw == null) throw StateError('Version distante incomplete.');
-        final version = _extractRemoteUpdatedAt(raw);
-        if (version == null || DateTime.tryParse(version) == null) {
+        final remoteExists =
+            type != 'housing' ||
+            (raw['id']?.toString().trim().isNotEmpty ?? false);
+        final version = remoteExists ? _extractRemoteUpdatedAt(raw) : null;
+        if (remoteExists &&
+            (version == null || DateTime.tryParse(version) == null)) {
           throw StateError('Version serveur absente : resolution suspendue.');
         }
         final now = DateTime.now().toIso8601String();
@@ -154,6 +160,7 @@ class DossierRepository {
             : _mapDossierFieldsToApi;
         final remoteApi = mapper(columns);
         for (final key in updates.keys) {
+          if (!remoteExists) continue;
           final rawKey = key == 'occupant1BirthDate' ? 'birthDate' : key;
           if (!raw.containsKey(rawKey) || !remoteApi.containsKey(key)) {
             throw StateError('Valeur distante absente pour $key.');
@@ -176,7 +183,9 @@ class DossierRepository {
             selectedColumns[column.key] = column.value;
           }
         }
-        if (selectedColumns.isEmpty) throw StateError('Aucun champ resoluble.');
+        if (selectedColumns.isEmpty && remoteExists) {
+          throw StateError('Aucun champ resoluble.');
+        }
         reviews.add(
           SyncConflictReview._(
             operationId: operation['id'] as String,
@@ -186,7 +195,8 @@ class DossierRepository {
             remoteUpdatedAt: version,
             localValues: Map.unmodifiable(updates),
             remoteValues: Map.unmodifiable({
-              for (final key in updates.keys) key: remoteApi[key],
+              for (final key in updates.keys)
+                key: remoteExists ? remoteApi[key] : null,
             }),
             remoteColumns: Map.unmodifiable(selectedColumns),
             localRowId: type == 'patient'
@@ -199,6 +209,7 @@ class DossierRepository {
                 : type == 'housing'
                 ? 'housings'
                 : 'dossiers',
+            remoteExists: remoteExists,
           ),
         );
       }
@@ -347,6 +358,7 @@ class DossierRepository {
               remoteColumns: Map.unmodifiable(columns),
               localRowId: rows.single['local_id'] as String,
               table: type,
+              remoteExists: true,
             ),
           );
         }
@@ -394,6 +406,9 @@ class DossierRepository {
       if (others.isNotEmpty) {
         throw StateError('Une autre modification attend sur cette fiche.');
       }
+      if (!review.remoteExists && !keepLocal) {
+        throw StateError('Aucun logement serveur ne peut etre restaure.');
+      }
       final now = DateTime.now().toIso8601String();
       await txn.insert('sync_conflict_history', {
         'operation_id': review.operationId,
@@ -423,7 +438,8 @@ class DossierRepository {
         'version': 1,
         'writeId': newSyncWriteId(),
         'expectedUpdatedAt': review.remoteUpdatedAt,
-        'baseValues': review.remoteValues,
+        'baseValues': review.remoteExists ? review.remoteValues : {},
+        if (!review.remoteExists) 'createIfAbsent': true,
         if (review.contextReferenceJson != null)
           'reference': jsonDecode(review.contextReferenceJson!),
       };
@@ -445,7 +461,8 @@ class DossierRepository {
         review.table,
         {
           if (!keepLocal) ...review.remoteColumns,
-          if (review.contextReferenceJson == null)
+          if (review.contextReferenceJson == null &&
+              review.remoteUpdatedAt != null)
             'remote_updated_at': review.remoteUpdatedAt,
           if (review.contextReferenceJson != null) ...{
             'remote_reference_json': review.contextReferenceJson == 'null'
@@ -2113,6 +2130,14 @@ class DossierRepository {
     // beneficiary from the dossier).
     if (entityType == 'housing') {
       payloadMap['dossierLocalId'] = entityLocalId;
+      final guard = (payloadMap['concurrency'] as Map).cast<String, dynamic>();
+      if (previous == null && expectedUpdatedAt == null) {
+        payloadMap['concurrency'] = {
+          ...guard,
+          'baseValues': <String, dynamic>{},
+          'createIfAbsent': true,
+        };
+      }
     }
     await db.insert('sync_operations', {
       'id': opId,

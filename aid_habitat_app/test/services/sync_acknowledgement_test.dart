@@ -1,3 +1,4 @@
+import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -39,6 +40,7 @@ void main() {
         'local_id TEXT PRIMARY KEY, sync_state TEXT NOT NULL, remote_updated_at TEXT)',
       );
     }
+    await db.execute('ALTER TABLE housings ADD COLUMN remote_housing_id TEXT');
     await db.execute('ALTER TABLE note_pages ADD COLUMN dossier_local_id TEXT');
     await db.execute('ALTER TABLE note_pages ADD COLUMN patient_local_id TEXT');
     await db.execute(
@@ -116,6 +118,50 @@ void main() {
     await db.insert('dossiers', {'local_id': 'd2', 'patient_local_id': 'p1'});
     expect(await repository.conflictDossierId('c'), isNull);
     expect(await repository.conflictDossierId('missing'), isNull);
+  });
+
+  test('housing ACK stores remote identity and version atomically', () async {
+    await db.insert('housings', {
+      'local_id': 'housing-local',
+      'sync_state': 'pendingSync',
+    });
+    await db.insert('dossiers', {
+      'local_id': 'd1',
+      'housing_local_id': 'housing-local',
+      'sync_state': 'pendingSync',
+    });
+    const payload = '{"updates":{"surface":80}}';
+    await insertOperation(
+      'housing-op',
+      status: 'running',
+      entityType: 'housing',
+      entityId: 'd1',
+      operationType: 'update',
+      payload: payload,
+    );
+    final operation = SyncOperation(
+      id: 'housing-op',
+      entityType: 'housing',
+      entityLocalId: 'd1',
+      operationType: 'update',
+      payloadJson: payload,
+      status: SyncOperationStatus.running,
+      attemptCount: 0,
+      createdAt: DateTime.parse(timestamp),
+      updatedAt: DateTime.parse(timestamp),
+    );
+    expect(
+      await repository.acknowledgeVersionedMutation(
+        operation,
+        '2026-09-10T10:00:00.000Z',
+        remoteEntityId: 'housing-remote',
+      ),
+      isTrue,
+    );
+    final housing = (await db.query('housings')).single;
+    expect(housing['remote_housing_id'], 'housing-remote');
+    expect(housing['remote_updated_at'], '2026-09-10T10:00:00.000Z');
+    expect(housing['sync_state'], 'synced');
   });
 
   Future<Map<String, Object?>> document() async => (await db.query(

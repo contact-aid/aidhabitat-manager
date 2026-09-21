@@ -438,31 +438,42 @@ class NocodbSyncService {
               remoteData: {'error': 'SYNC_BASELINE_REQUIRED'},
             );
           }
-          final version = await switch (operation.entityType) {
-            'patient' => _processPatientOperation(operation, sentPayload),
-            'housing' => _processHousingOperation(operation, sentPayload),
-            'contexte_de_vie' => _processContexteDeVieOperation(
+          String? remoteEntityId;
+          final String? version;
+          if (operation.entityType == 'housing') {
+            final result = await _processHousingOperation(
               operation,
               sentPayload,
-            ),
-            'mesures_anthropometriques' => _processMesuresOperation(
-              operation,
-              sentPayload,
-            ),
-            'observations_synthese' => _processObservationsOperation(
-              operation,
-              sentPayload,
-            ),
-            'diagnostic_sanitaires' => _processDiagnosticSanitairesOperation(
-              operation,
-              sentPayload,
-            ),
-            _ => _processDossierOperation(operation, sentPayload),
-          };
+            );
+            version = result.updatedAt;
+            remoteEntityId = result.id;
+          } else {
+            version = await switch (operation.entityType) {
+              'patient' => _processPatientOperation(operation, sentPayload),
+              'contexte_de_vie' => _processContexteDeVieOperation(
+                operation,
+                sentPayload,
+              ),
+              'mesures_anthropometriques' => _processMesuresOperation(
+                operation,
+                sentPayload,
+              ),
+              'observations_synthese' => _processObservationsOperation(
+                operation,
+                sentPayload,
+              ),
+              'diagnostic_sanitaires' => _processDiagnosticSanitairesOperation(
+                operation,
+                sentPayload,
+              ),
+              _ => _processDossierOperation(operation, sentPayload),
+            };
+          }
           SyncSessionScope.current?.check();
           acknowledged = await _syncRepository.acknowledgeVersionedMutation(
             operation,
             version,
+            remoteEntityId: remoteEntityId,
           );
         } else {
           await _processOperation(operation);
@@ -1063,7 +1074,7 @@ class NocodbSyncService {
 
   /// Pushes a housing update to NocoDB. The housing row is resolved to a
   /// beneficiary remote ID by joining `dossiers` and `patients`.
-  Future<String?> _processHousingOperation(
+  Future<HousingWriteResult> _processHousingOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -1115,11 +1126,11 @@ class NocodbSyncService {
       'updates=${updates.keys.toList()} '
       'expectedUpdatedAt=${expected ?? "null"}',
     );
-    final newUpdatedAt = await _apiClient.updateLogement(
+    final result = await _apiClient.updateLogement(
       beneficiaryId: remoteId,
       updates: updatesWithGuard,
     );
-    return newUpdatedAt;
+    return result;
   }
 
   Future<String?> _resolveRemotePatientId(String localId) async {

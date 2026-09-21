@@ -367,13 +367,15 @@ class SyncRepository {
 
   Future<bool> acknowledgeVersionedMutation(
     SyncOperation operation,
-    String? version,
-  ) => _markCompleted(
+    String? version, {
+    String? remoteEntityId,
+  }) => _markCompleted(
     operationId: operation.id,
     entityType: operation.entityType,
     entityLocalId: operation.entityLocalId,
     expectedPayloadJson: operation.payloadJson,
     acknowledgedVersion: version,
+    acknowledgedRemoteEntityId: remoteEntityId,
   );
 
   Future<bool> _markCompleted({
@@ -382,6 +384,7 @@ class SyncRepository {
     required String entityLocalId,
     String? expectedPayloadJson,
     String? acknowledgedVersion,
+    String? acknowledgedRemoteEntityId,
   }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
@@ -430,6 +433,7 @@ class SyncRepository {
                 entityType,
                 entityLocalId,
                 acknowledgedVersion,
+                remoteEntityId: acknowledgedRemoteEntityId,
               );
             }
           }
@@ -442,6 +446,7 @@ class SyncRepository {
           entityType,
           entityLocalId,
           acknowledgedVersion,
+          remoteEntityId: acknowledgedRemoteEntityId,
         );
       }
       final updated = await txn.update(
@@ -498,8 +503,9 @@ class SyncRepository {
     DatabaseExecutor db,
     String type,
     String id,
-    String version,
-  ) async {
+    String version, {
+    String? remoteEntityId,
+  }) async {
     final table = switch (type) {
       'patient' => 'patients',
       'housing' => 'housings',
@@ -514,7 +520,11 @@ class SyncRepository {
       table,
       type == 'contexte_de_vie'
           ? {'remote_reference_json': version, 'remote_reference_known': 1}
-          : {'remote_updated_at': version},
+          : {
+              'remote_updated_at': version,
+              if (type == 'housing' && remoteEntityId != null)
+                'remote_housing_id': remoteEntityId,
+            },
       where: switch (type) {
         'housing' =>
           'local_id IN (SELECT housing_local_id FROM dossiers WHERE local_id = ?)',

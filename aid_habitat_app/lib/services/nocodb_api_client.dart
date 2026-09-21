@@ -119,6 +119,13 @@ class TransientRemoteException implements Exception {
   String toString() => 'TransientRemoteException: $message';
 }
 
+class HousingWriteResult {
+  const HousingWriteResult({required this.id, required this.updatedAt});
+
+  final String id;
+  final String updatedAt;
+}
+
 /// Résultat d'une tentative de login distant. 3 états :
 ///   - [success] : serveur a accepté + retourné un token JWT.
 ///   - [rejected] : serveur a explicitement rejeté (401/403). Le caller
@@ -618,7 +625,7 @@ class NocodbApiClient {
   ///
   /// Idem [updateBeneficiary] : sur 409 on lève [ConflictException]
   /// pour que la sync engine route vers `markConflict`.
-  Future<String?> updateLogement({
+  Future<HousingWriteResult> updateLogement({
     required String beneficiaryId,
     required Map<String, dynamic> updates,
   }) async {
@@ -666,15 +673,21 @@ class NocodbApiClient {
       if (body is Map) {
         final data = body['data'];
         if (data is Map) {
+          final id = data['id'];
           final v = data['updatedAt'];
-          if (v is String && _isChildTimestamp(v)) return v;
+          if (id is String &&
+              id.trim().isNotEmpty &&
+              v is String &&
+              _isChildTimestamp(v)) {
+            return HousingWriteResult(id: id, updatedAt: v);
+          }
         }
       }
     } catch (_) {
       // Keep the exact queued mutation until the server confirms its version.
     }
     throw TransientRemoteException(
-      'Housing write unconfirmed: missing valid updatedAt',
+      'Housing write unconfirmed: missing valid id or updatedAt',
     );
   }
 
