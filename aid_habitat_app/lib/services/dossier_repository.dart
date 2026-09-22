@@ -139,20 +139,24 @@ class DossierRepository {
             ? (remote['housing'] as Map?)?.cast<String, dynamic>()
             : remote;
         if (raw == null) throw StateError('Version distante incomplete.');
-        // Un logement jamais créé côté serveur (saisie locale avant le
-        // 1er sync) n'a ni `id` ni `updatedAt` distant : ce n'est pas un
-        // conflit de version, il n'y a simplement rien à comparer côté
-        // serveur. On l'affiche quand même dans la revue (valeurs
-        // distantes vides) au lieu de bloquer toute résolution avec
-        // « Version serveur absente » (cf. dossier
-        // demo-technicien-20260917-annegaelle, 2026-09-22).
-        final remoteRowMissing =
-            type == 'housing' &&
-            (raw['id'] == null || raw['id'].toString().trim().isEmpty);
         final extractedVersion = _extractRemoteUpdatedAt(raw);
-        if (!remoteRowMissing &&
-            (extractedVersion == null ||
-                DateTime.tryParse(extractedVersion) == null)) {
+        final extractedVersionValid =
+            extractedVersion != null && DateTime.tryParse(extractedVersion) != null;
+        // Un logement jamais créé côté serveur (saisie locale avant le 1er
+        // sync) n'a pas d'`updatedAt` distant : ce n'est pas un conflit de
+        // version, il n'y a simplement rien à comparer côté serveur (le
+        // serveur renvoie alors explicitement `updatedAt: null`, jamais un
+        // horodatage fabrique — cf. `mapHousing`). On l'affiche quand même
+        // dans la revue (valeurs distantes vides) au lieu de bloquer toute
+        // résolution avec « Version serveur absente » (cf. dossier
+        // demo-technicien-20260917-annegaelle, 2026-09-22). Ce relâchement
+        // ne s'applique qu'au logement : patient/dossier existent toujours
+        // dès qu'un conflit est atteignable, donc une version manquante y
+        // reste une vraie anomalie a rejeter (cf.
+        // sync_conflict_resolution_test.dart « missing field or version is
+        // not manufactured for a decision »).
+        final remoteRowMissing = type == 'housing' && !extractedVersionValid;
+        if (!remoteRowMissing && !extractedVersionValid) {
           throw StateError('Version serveur absente : resolution suspendue.');
         }
         final version = remoteRowMissing ? null : extractedVersion!;
@@ -267,32 +271,13 @@ class DossierRepository {
         );
         if (operations.isEmpty) continue;
         final raw = remoteByType[type];
-        // `raw == null` sert aussi de tombstone à la fusion normale (hors
-        // conflit) pour signaler « supprimé côté serveur » (cf.
-        // mergeRemote*Payload) : on ne peut donc pas changer sa forme ici.
-        // Mais une fiche jamais créée sur le serveur n'est pas non plus un
-        // conflit de version — il n'y a rien à comparer. On affiche la
-        // revue avec des valeurs distantes vides au lieu de bloquer avec
-        // « Version distante de la fiche indisponible » (même classe de
-        // bug que le logement jamais synchronisé, 2026-09-22).
-        String? version;
-        if (raw == null) {
-          version = null;
-        } else {
-          final extracted = _extractRemoteUpdatedAt(raw);
-          if (raw['dossierId'] != remoteId ||
-              extracted == null ||
-              DateTime.tryParse(extracted) == null) {
-            throw StateError('Version distante de la fiche indisponible.');
-          }
-          version = extracted;
+        final version = raw == null ? null : _extractRemoteUpdatedAt(raw);
+        if (raw == null ||
+            raw['dossierId'] != remoteId ||
+            version == null ||
+            DateTime.tryParse(version) == null) {
+          throw StateError('Version distante de la fiche indisponible.');
         }
-        final effectiveRaw =
-            raw ??
-            <String, dynamic>{
-              for (final key in _secondaryFields[type]!.keys)
-                key: type == 'diagnostic_sanitaires' ? <dynamic>[] : null,
-            };
         final rows = await txn.query(
           type,
           where: 'dossier_local_id = ?',
@@ -323,10 +308,10 @@ class DossierRepository {
           final values = <String, dynamic>{};
           final columns = <String, dynamic>{};
           for (final key in updates.keys) {
-            if (!fields.containsKey(key) || !effectiveRaw.containsKey(key)) {
+            if (!fields.containsKey(key) || !raw.containsKey(key)) {
               throw StateError('Valeur distante absente pour $key.');
             }
-            final value = effectiveRaw[key];
+            final value = raw[key];
             if (type == 'diagnostic_sanitaires') {
               if (value is! List || value.any((entry) => entry is! Map)) {
                 throw StateError('Diagnostic distant incomplet.');
@@ -430,24 +415,12 @@ class DossierRepository {
           payload[key] = review.localValues[key];
         }
       }
-      if (review.remoteUpdatedAt != null) {
-        payload['concurrency'] = {
-          'version': 1,
-          'writeId': newSyncWriteId(),
-          'expectedUpdatedAt': review.remoteUpdatedAt,
-          'baseValues': review.remoteValues,
-        };
-      } else {
-        // Fiche distante inexistante (cf. `reviewConflicts` /
-        // `reviewSecondaryConflicts`) : ne pas envoyer de garde de
-        // concurrence du tout. `secondaryWriteConflict` (server/index.mjs)
-        // exige un `expectedUpdatedAt` bien forme des qu'un objet
-        // `concurrency` est present dans la requete, quel que soit son
-        // contenu — meme quand la fiche n'existe pas encore. Envoyer un
-        // guard « factice » ferait echouer le push avec 428
-        // SYNC_EXPECTED_VERSION_REQUIRED au lieu de creer normalement.
-        payload.remove('concurrency');
-      }
+      payload['concurrency'] = {
+        'version': 1,
+        'writeId': newSyncWriteId(),
+        'expectedUpdatedAt': review.remoteUpdatedAt,
+        'baseValues': review.remoteValues,
+      };
       await txn.update(
         'sync_operations',
         {
