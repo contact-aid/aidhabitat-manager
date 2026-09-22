@@ -134,10 +134,23 @@ class DossierRepository {
             ? (remote['housing'] as Map?)?.cast<String, dynamic>()
             : remote;
         if (raw == null) throw StateError('Version distante incomplete.');
-        final version = _extractRemoteUpdatedAt(raw);
-        if (version == null || DateTime.tryParse(version) == null) {
+        // Un logement jamais créé côté serveur (saisie locale avant le
+        // 1er sync) n'a ni `id` ni `updatedAt` distant : ce n'est pas un
+        // conflit de version, il n'y a simplement rien à comparer côté
+        // serveur. On l'affiche quand même dans la revue (valeurs
+        // distantes vides) au lieu de bloquer toute résolution avec
+        // « Version serveur absente » (cf. dossier
+        // demo-technicien-20260917-annegaelle, 2026-09-22).
+        final remoteRowMissing =
+            type == 'housing' &&
+            (raw['id'] == null || raw['id'].toString().trim().isEmpty);
+        final extractedVersion = _extractRemoteUpdatedAt(raw);
+        if (!remoteRowMissing &&
+            (extractedVersion == null ||
+                DateTime.tryParse(extractedVersion) == null)) {
           throw StateError('Version serveur absente : resolution suspendue.');
         }
+        final version = remoteRowMissing ? '' : extractedVersion!;
         final now = DateTime.now().toIso8601String();
         final columns = type == 'patient'
             ? _buildPatientPayload(raw: raw, now: now)
