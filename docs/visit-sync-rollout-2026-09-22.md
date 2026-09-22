@@ -29,9 +29,20 @@ synchronisation conditionnelle en production.
 - `gzip -t` et un parsing JSON en flux ont réussi pour les deux archives.
 
 Ce sont des exports API complets, pas des sauvegardes transactionnelles de
-PostgreSQL. Easypanel ne présentait aucune sauvegarde native configurée pour
-`nocodb-db`. Une restauration PostgreSQL doit encore être testée avant la
-migration de production.
+PostgreSQL.
+
+Le 22/09/2026, une sauvegarde PostgreSQL quotidienne à 02:00 a été configurée
+dans Easypanel pour la base `apps`, avec le fournisseur `Local Disk` et le
+chemin `apps/nocodb-db`. Un dump natif immédiat au format custom a également
+été créé dans le conteneur PostgreSQL :
+`/tmp/apps-before-conditional-sync-20260922.dump` (environ 100 Mo). La liste du
+dump est lisible par `pg_restore`.
+
+Ce dump a été restauré sans erreur dans la base isolée
+`apps_restore_test_20260922`. La base restaurée contient 578 tables. Cette
+preuve lève le blocage « dump PostgreSQL non restaurable », mais la copie reste
+sur le même serveur : une copie hors site est encore nécessaire pour la
+protection durable contre une perte complète de l'hôte.
 
 ## Staging préparé et vérifié
 
@@ -89,15 +100,19 @@ La base production `pskgbjythubfzv9` n'a toujours aucune des sept colonnes
 `Diagnostic_sanitaires` comporte deux lignes, Id `23` et `24`, pour le même
 `dossier_id`. Elles divergent notamment sur les dimensions des portes de salle
 de bain et WC, la hauteur de cuvette et les deux JSON d'instances. Ce n'est pas
-le dossier de démonstration d'Anne-Gaëlle. Aucune ligne n'a été supprimée ou
-fusionnée. Une décision métier explicite est obligatoire avant l'index unique.
+le dossier de démonstration d'Anne-Gaëlle.
 
 Comparaison minimale : la ligne 23 contient `76 / 53 / 34` pour largeur porte
 SDB / largeur porte WC / hauteur cuvette. La ligne 24 contient `70 / 60 / 42`,
 avec les mêmes valeurs dans ses JSON structurés. Les deux ont été créées le
 04/08/2026 ; seule la ligne 24 porte une mise à jour au 05/08/2026. Cette
-chronologie suggère une correction ultérieure, mais ne constitue pas une preuve
-métier suffisante pour supprimer automatiquement la ligne 23.
+chronologie suggérait une correction ultérieure.
+
+Décision métier confirmée le 22/09/2026 : la ligne `24`, avec les mesures
+`70 / 60 / 42`, est la version de référence. La ligne `23` (`76 / 53 / 34`)
+doit être archivée comme ancien doublon, puis retirée des données actives avant
+la création de l'index unique. Au moment de cette mise à jour documentaire,
+aucune des deux lignes de production n'a encore été supprimée ou fusionnée.
 
 Il faut également inventorier les opérations en attente et la version des
 trois iPad et cinq postes web. Ne jamais forcer une déconnexion, vider le cache
@@ -105,10 +120,11 @@ ou réinstaller l'application pour faire disparaître une file locale.
 
 ## Suite obligatoire
 
-1. Configurer une sauvegarde PostgreSQL hors site et réussir une restauration
-   de test de la base `apps`.
-2. Comparer les lignes sanitaires `23` et `24`, conserver ou fusionner les
-   valeurs avec validation métier, puis archiver la preuve de décision.
+1. Copier le dump PostgreSQL vérifié hors du serveur Easypanel et conserver la
+   preuve de restauration de `apps_restore_test_20260922`.
+2. Archiver la ligne sanitaire `23`, conserver la ligne `24`, puis vérifier
+   qu'il ne reste aucun doublon ou `dossier_id` vide dans les quatre tables
+   enfants.
 3. Ajouter et remplir `app_sync_revision` sur les sept tables de production.
 4. Créer les quatre index uniques SQL après un nouveau contrôle des doublons.
 5. Déployer le serveur et les clients compatibles en staging avec les deux
