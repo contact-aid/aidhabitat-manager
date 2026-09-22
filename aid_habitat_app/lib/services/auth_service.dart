@@ -177,7 +177,39 @@ class AuthService {
       ergoLabel: 'Christelle',
       dossierErgoScope: 'christelle',
     ),
+    _SeedUser(
+      id: 'user_technician_fabien',
+      email: 'f.cribier@aidhabitat.fr',
+      displayName: 'Fabien CRIBIER',
+      role: LocalUserRole.technician,
+      establishmentId: '2',
+      ergoLabel: 'Fabien CRIBIER',
+      dossierErgoScope: 'Fabien CRIBIER',
+    ),
+    _SeedUser(
+      id: 'user_technician_renan',
+      email: 'r.lamour@aidhabitat.fr',
+      displayName: 'Renan LAMOUR',
+      role: LocalUserRole.technician,
+      establishmentId: '2',
+      ergoLabel: 'Renan LAMOUR',
+      dossierErgoScope: 'Renan LAMOUR',
+    ),
+    _SeedUser(
+      id: 'user_technician_anne_gaelle',
+      email: 'ag.rozec@aidhabitat.fr',
+      displayName: 'Anne-Gaëlle ROZEC',
+      role: LocalUserRole.technician,
+      establishmentId: '2',
+      ergoLabel: 'Anne-Gaëlle ROZEC',
+      dossierErgoScope: 'Anne-Gaëlle ROZEC',
+    ),
   ];
+
+  /// Comptes disponibles même après un effacement complet du stockage local.
+  /// Les mots de passe restent exclusivement vérifiés par l'API distante.
+  static List<String> get bootstrapAccountEmails =>
+      List.unmodifiable(_seedUsers.map((user) => user.email));
 
   static const List<_AuthEmailMigration> _emailMigrations = [
     _AuthEmailMigration(
