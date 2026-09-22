@@ -3762,10 +3762,6 @@ const getDossiersForApp = async (appUser) => {
   ]);
 
   await ensureDossiersForBeneficiaries({ beneficiaires, dossiers, logements, contextes, infosAdmin });
-  await Promise.all([
-    backfillChildDossierLinks({ tableId: TABLES.contexteDeVie, records: contextes, dossiers }),
-    backfillChildDossierLinks({ tableId: TABLES.informationsAdministratives, records: infosAdmin, dossiers }),
-  ]);
 
   const dossiersByBeneficiary = groupBy(dossiers, 'beneficiaires_id');
   const logementsByBeneficiary = groupBy(logements, 'beneficiaires_id');
@@ -3820,11 +3816,10 @@ const getDossiersForApp = async (appUser) => {
  * requête NocoDB → 5 fetches ciblés ramenant 1-3 rows chacun, ~1 s
  * total même cold.
  *
- * Skipper les backfills (`ensureDossiersForBeneficiaries` et
- * `backfillChildDossierLinks`)
- * est sûr ici car ils sont déjà exécutés par `getDossiersForApp` au
- * démarrage de l'app (premier `/api/dossiers`). Pour la génération
- * PDF, on suppose que la base est déjà cohérente.
+ * Comme la liste générale, cette lecture ne répare pas les anciennes
+ * relations NocoDB. Les migrations restent hors des routes GET afin
+ * qu'une lecture ne puisse jamais échouer à cause d'une écriture de
+ * maintenance refusée par les protections de synchronisation.
  *
  * Retourne `null` si le dossier n'existe pas ou est hors scope du
  * `appUser` — mêmes règles que `filterDossiersByScopes`.

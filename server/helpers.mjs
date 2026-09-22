@@ -2471,11 +2471,6 @@ export const getDossiersForApp = async (appUser) => {
   ]);
 
   await ensureDossiersForBeneficiaries({ beneficiaires, dossiers, logements, contextes, infosAdmin });
-  await backfillLegacyDossierAssignments(dossiers);
-  await Promise.all([
-    backfillChildDossierLinks({ tableId: TABLES.contexteDeVie, records: contextes, dossiers }),
-    backfillChildDossierLinks({ tableId: TABLES.informationsAdministratives, records: infosAdmin, dossiers }),
-  ]);
 
   const dossiersByBeneficiary = groupBy(dossiers, 'beneficiaires_id');
   const logementsByBeneficiary = groupBy(logements, 'beneficiaires_id');

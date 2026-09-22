@@ -9,6 +9,7 @@ import {
 } from './dossierAssignments.mjs';
 
 const source = readFileSync(new URL('./index.mjs', import.meta.url), 'utf8');
+const helpersSource = readFileSync(new URL('./helpers.mjs', import.meta.url), 'utf8');
 
 const sourceFragment = (start, end) => {
   const from = source.indexOf(start);
@@ -94,12 +95,20 @@ test('implicit dossier creation contains no assignment field', () => {
   });
 });
 
-test('GET dossier listing has no assignment migration or assignment update', () => {
+test('GET dossier listing has no legacy migration writes', () => {
   const listing = sourceFragment(
     'const getDossiersForApp = async',
     'const getDossierByIdForApp = async',
   );
+  const helperStart = helpersSource.indexOf('export const getDossiersForApp = async');
+  const helperEnd = helpersSource.indexOf('export const ensureDossierRecord = async', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helperListing = helpersSource.slice(helperStart, helperEnd);
+
   assert.doesNotMatch(listing, /backfillLegacyDossierAssignments/);
+  assert.doesNotMatch(listing, /backfillChildDossierLinks/);
+  assert.doesNotMatch(helperListing, /backfillLegacyDossierAssignments/);
+  assert.doesNotMatch(helperListing, /backfillChildDossierLinks/);
   assert.doesNotMatch(listing, /ergo_id\s*:/);
   assert.doesNotMatch(source, /const backfillLegacyDossierAssignments/);
 });
