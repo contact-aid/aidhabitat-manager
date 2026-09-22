@@ -28,7 +28,12 @@ class SyncConflictReview {
   final String entityType;
   final String entityLocalId;
   final String payloadJson;
-  final String remoteUpdatedAt;
+  // `null` : la fiche distante n'existe pas encore (saisie locale avant
+  // le 1er sync) — rien a comparer, pas de garde de concurrence a poser
+  // au push de la resolution (cf. `_expectedVersion` dans
+  // nocodb_sync_service.dart, qui traite `null` comme « pas de version
+  // connue », exactement comme pour une 1ere sauvegarde normale).
+  final String? remoteUpdatedAt;
   final Map<String, dynamic> localValues;
   final Map<String, dynamic> remoteValues;
   final Map<String, dynamic> remoteColumns;
@@ -134,10 +139,27 @@ class DossierRepository {
             ? (remote['housing'] as Map?)?.cast<String, dynamic>()
             : remote;
         if (raw == null) throw StateError('Version distante incomplete.');
-        final version = _extractRemoteUpdatedAt(raw);
-        if (version == null || DateTime.tryParse(version) == null) {
+        final extractedVersion = _extractRemoteUpdatedAt(raw);
+        final extractedVersionValid =
+            extractedVersion != null && DateTime.tryParse(extractedVersion) != null;
+        // Un logement jamais créé côté serveur (saisie locale avant le 1er
+        // sync) n'a pas d'`updatedAt` distant : ce n'est pas un conflit de
+        // version, il n'y a simplement rien à comparer côté serveur (le
+        // serveur renvoie alors explicitement `updatedAt: null`, jamais un
+        // horodatage fabrique — cf. `mapHousing`). On l'affiche quand même
+        // dans la revue (valeurs distantes vides) au lieu de bloquer toute
+        // résolution avec « Version serveur absente » (cf. dossier
+        // demo-technicien-20260917-annegaelle, 2026-09-22). Ce relâchement
+        // ne s'applique qu'au logement : patient/dossier existent toujours
+        // dès qu'un conflit est atteignable, donc une version manquante y
+        // reste une vraie anomalie a rejeter (cf.
+        // sync_conflict_resolution_test.dart « missing field or version is
+        // not manufactured for a decision »).
+        final remoteRowMissing = type == 'housing' && !extractedVersionValid;
+        if (!remoteRowMissing && !extractedVersionValid) {
           throw StateError('Version serveur absente : resolution suspendue.');
         }
+        final version = remoteRowMissing ? null : extractedVersion!;
         final now = DateTime.now().toIso8601String();
         final columns = type == 'patient'
             ? _buildPatientPayload(raw: raw, now: now)

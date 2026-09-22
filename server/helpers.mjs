@@ -1581,33 +1581,20 @@ export const ensureDossiersForBeneficiaries = async ({ beneficiaires, dossiers, 
 };
 
 export const mapHousing = (housingRecord) => {
-  if (!housingRecord) {
-    return {
-      basement: false,
-      rdc: false,
-      floor: false,
-      garage: false,
-      veranda: false,
-      balcon: false,
-      terrasse: false,
-      jardin: false,
-      heatingMain: false,
-      heatingDetails: {
-        electric: false,
-        gas: false,
-        oil: false,
-        heatPump: false,
-        collective: false,
-        wood: false,
-        pellet: false,
-        other: false,
-      },
-      easyAccess: null,
-    };
-  }
-
+  // Pas de branche « valeurs par défaut » séparée : un logement pas
+  // encore créé côté NocoDB (housingRecord absent) doit renvoyer le
+  // même jeu de clés qu'un logement existant, juste vides/false/null.
+  // Avant ce fix, la branche par défaut ne renvoyait qu'une dizaine de
+  // clés (les booléens) sans `id` ni `updatedAt` ni les champs texte
+  // (surface, typology, …) → côté Flutter, `reviewConflicts` détectait
+  // ces clés manquantes et bloquait toute résolution de conflit sur un
+  // logement fraîchement créé en local avec « Version serveur absente :
+  // resolution suspendue » (signalé 2026-09-22, dossier
+  // demo-technicien-20260917-annegaelle).
   return {
-    id: field(housingRecord, 'uuid_source') || `nocodb-housing-${housingRecord.id}`,
+    id: housingRecord
+      ? field(housingRecord, 'uuid_source') || `nocodb-housing-${housingRecord.id}`
+      : undefined,
     yearConstruction: stringValue(field(housingRecord, 'annee_construction')),
     yearHabitation: stringValue(field(housingRecord, 'annee_habitation')),
     surface: stringValue(field(housingRecord, 'surface_habitable')),

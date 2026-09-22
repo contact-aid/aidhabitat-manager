@@ -2366,33 +2366,21 @@ const ensureDossiersForBeneficiaries = async ({ beneficiaires, dossiers, logemen
 };
 
 const mapHousing = (housingRecord) => {
-  if (!housingRecord) {
-    return {
-      basement: false,
-      rdc: false,
-      floor: false,
-      garage: false,
-      veranda: false,
-      balcon: false,
-      terrasse: false,
-      jardin: false,
-      heatingMain: false,
-      heatingDetails: {
-        electric: false,
-        gas: false,
-        oil: false,
-        heatPump: false,
-        collective: false,
-        wood: false,
-        pellet: false,
-        other: false,
-      },
-      easyAccess: null,
-    };
-  }
-
+  // Pas de branche « valeurs par défaut » séparée : un logement pas
+  // encore créé côté NocoDB (housingRecord absent, ex. saisie locale
+  // avant 1er sync) doit renvoyer le même jeu de clés qu'un logement
+  // existant, juste vides/false/null. Avant ce fix, la branche par
+  // défaut ne renvoyait qu'une dizaine de clés (les booléens) sans
+  // `id` ni `updatedAt` ni les champs texte (surface, typology, …) →
+  // côté Flutter, `reviewConflicts` (dossier_repository.dart) détectait
+  // ces clés manquantes et bloquait toute résolution de conflit sur un
+  // logement fraîchement créé en local avec « Version serveur absente :
+  // resolution suspendue » (signalé 2026-09-22, dossier
+  // demo-technicien-20260917-annegaelle).
   return {
-    id: field(housingRecord, 'uuid_source') || `nocodb-housing-${housingRecord.id}`,
+    id: housingRecord
+      ? field(housingRecord, 'uuid_source') || `nocodb-housing-${housingRecord.id}`
+      : undefined,
     yearConstruction: stringValue(field(housingRecord, 'annee_construction')),
     yearHabitation: stringValue(field(housingRecord, 'annee_habitation')),
     surface: stringValue(field(housingRecord, 'surface_habitable')),
@@ -2457,11 +2445,22 @@ const mapHousing = (housingRecord) => {
     // figeant le `expectedUpdatedAt` à la date de création →
     // 409 Conflict permanent sur les PATCH /api/logements.
     // Cf. commentaire détaillé dans `createDossier`.
-    updatedAt: field(housingRecord, 'UpdatedAt')
-        || field(housingRecord, 'updated_at')
-        || field(housingRecord, 'CreatedAt')
-        || field(housingRecord, 'created_at')
-        || new Date().toISOString(),
+    //
+    // Le fallback `new Date().toISOString()` ne doit jamais s'appliquer
+    // quand `housingRecord` est absent (logement pas encore créé côté
+    // NocoDB) : ça injecterait un horodatage fictif « maintenant » que
+    // le client stockerait comme `remote_updated_at`, puis renverrait
+    // en `expectedUpdatedAt` lors du 1er vrai PATCH une fois le
+    // logement créé — mismatch garanti avec le vrai `UpdatedAt` NocoDB
+    // → faux conflit 409. `null` signale explicitement « pas de version
+    // serveur, ce logement n'existe pas encore ».
+    updatedAt: housingRecord
+      ? field(housingRecord, 'UpdatedAt')
+          || field(housingRecord, 'updated_at')
+          || field(housingRecord, 'CreatedAt')
+          || field(housingRecord, 'created_at')
+          || new Date().toISOString()
+      : null,
   };
 };
 
