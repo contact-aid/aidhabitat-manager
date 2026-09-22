@@ -1509,8 +1509,17 @@ class SyncRepository {
     final op = operations.single;
     final column = switch (op['entity_type']) {
       'patient' => 'patient_local_id',
-      'housing' => 'housing_local_id',
+      // Unlike 'patient' (whose entity_local_id is the patient's own
+      // local_id), 'housing' operations are enqueued with the dossier's
+      // local_id directly (cf. `_enqueueEntityUpdate(entityType: 'housing',
+      // entityLocalId: dossierId, ...)`) — same as 'dossier' and the
+      // secondary entities below. Matching it against `housing_local_id`
+      // compared a dossier id against a housing id from two different id
+      // spaces, which never matched, so `conflictDossierId` always
+      // returned null for a housing conflict and the review screen showed
+      // "Comparaison indisponible" no matter what. (2026-09-22)
       'dossier' ||
+      'housing' ||
       'mesures_anthropometriques' ||
       'observations_synthese' ||
       'diagnostic_sanitaires' => 'local_id',

@@ -120,6 +120,31 @@ void main() {
     expect(await repository.conflictDossierId('missing'), isNull);
   });
 
+  test(
+    'a housing conflict resolves to the dossier, not the housing row',
+    () async {
+      // Housing operations are enqueued with the dossier's own local_id as
+      // entity_local_id (unlike 'patient', which uses the patient's own
+      // local_id) — cf. `_enqueueEntityUpdate(entityType: 'housing',
+      // entityLocalId: dossierId, ...)` in dossier_repository.dart. A
+      // review must key off that same id, not the housing row's local_id,
+      // or it can never find the dossier (regression covered here after
+      // it shipped broken: "Comparaison indisponible" for every housing
+      // conflict, reported 2026-09-22).
+      await db.insert('dossiers', {
+        'local_id': 'd1',
+        'housing_local_id': 'housing-local',
+      });
+      await insertOperation(
+        'h',
+        status: 'conflict',
+        entityType: 'housing',
+        entityId: 'd1',
+      );
+      expect(await repository.conflictDossierId('h'), 'd1');
+    },
+  );
+
   test('housing ACK stores remote identity and version atomically', () async {
     await db.insert('housings', {
       'local_id': 'housing-local',
