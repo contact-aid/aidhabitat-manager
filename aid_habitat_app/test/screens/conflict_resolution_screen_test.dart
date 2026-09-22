@@ -128,6 +128,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(find.textContaining('offline'), findsOneWidget);
       expect(find.textContaining('Vos modifications restent'), findsOneWidget);
       expect(find.byType(OutlinedButton), findsNothing);
       await tester.tap(find.byTooltip('Actualiser'));

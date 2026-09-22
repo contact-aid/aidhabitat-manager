@@ -39,6 +39,7 @@ void main() {
         'local_id TEXT PRIMARY KEY, sync_state TEXT NOT NULL, remote_updated_at TEXT)',
       );
     }
+    await db.execute('ALTER TABLE housings ADD COLUMN remote_housing_id TEXT');
     await db.execute('ALTER TABLE note_pages ADD COLUMN dossier_local_id TEXT');
     await db.execute('ALTER TABLE note_pages ADD COLUMN patient_local_id TEXT');
     await db.execute(
@@ -117,6 +118,55 @@ void main() {
     expect(await repository.conflictDossierId('c'), isNull);
     expect(await repository.conflictDossierId('missing'), isNull);
   });
+
+  test('housing conflict resolves through the dossier local ID', () async {
+    await db.insert('dossiers', {
+      'local_id': 'd1',
+      'housing_local_id': 'housing-1',
+    });
+    await insertOperation(
+      'housing-conflict',
+      status: 'conflict',
+      entityType: 'housing',
+      entityId: 'd1',
+    );
+    expect(await repository.conflictDossierId('housing-conflict'), 'd1');
+  });
+
+  test(
+    'housing acknowledgement stores version and confirmed remote ID',
+    () async {
+      await db.insert('dossiers', {
+        'local_id': 'd1',
+        'housing_local_id': 'housing-1',
+      });
+      await db.insert('housings', {
+        'local_id': 'housing-1',
+        'sync_state': 'pendingSync',
+      });
+      await insertOperation(
+        'housing-ack',
+        status: 'pending',
+        entityType: 'housing',
+        entityId: 'd1',
+        operationType: 'update',
+        payload: '{"updates":{"surface":91}}',
+      );
+      final operation = (await repository.fetchRunnableOperations()).single;
+      await repository.tryMarkRunning(operation);
+      expect(
+        await repository.acknowledgeVersionedMutation(
+          operation,
+          '2026-09-22T10:00:00Z',
+          remoteEntityId: 'remote-housing-1',
+        ),
+        isTrue,
+      );
+      final housing = (await db.query('housings')).single;
+      expect(housing['remote_updated_at'], '2026-09-22T10:00:00Z');
+      expect(housing['remote_housing_id'], 'remote-housing-1');
+    },
+  );
 
   Future<Map<String, Object?>> document() async => (await db.query(
     'documents',

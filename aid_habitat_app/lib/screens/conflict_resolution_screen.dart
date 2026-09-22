@@ -54,12 +54,13 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
         _reviews = reviews;
         _loading = false;
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error =
-            'Comparaison indisponible. Vos modifications restent sur cet appareil.';
+        _error = error is StateError
+            ? 'Comparaison indisponible : ${error.message} Vos modifications restent sur cet appareil.'
+            : 'Comparaison indisponible. Vos modifications restent sur cet appareil.';
       });
     }
   }

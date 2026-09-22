@@ -15,7 +15,7 @@ void main() {
     AppConfig.clearAppSessionToken();
   });
   for (final entity in ['patient', 'housing', 'dossier']) {
-    Future<String?> send(NocodbApiClient client) => switch (entity) {
+    Future<Object?> send(NocodbApiClient client) => switch (entity) {
       'patient' => client.updateBeneficiary(
         patientId: 'synthetic',
         updates: {},
@@ -38,7 +38,10 @@ void main() {
           client: MockClient(
             (_) async => http.Response(
               jsonEncode({
-                'data': {'updatedAt': value},
+                'data': {
+                  'updatedAt': value,
+                  if (entity == 'housing') 'id': 'housing-1',
+                },
               }),
               200,
             ),
@@ -56,13 +59,35 @@ void main() {
         client: MockClient(
           (_) async => http.Response(
             jsonEncode({
-              'data': {'updatedAt': version},
+              'data': {
+                'updatedAt': version,
+                if (entity == 'housing') 'id': 'housing-1',
+              },
             }),
             200,
           ),
         ),
       );
-      expect(await send(client), version);
+      final result = await send(client);
+      if (entity == 'housing') {
+        expect((result as HousingWriteResult).updatedAt, version);
+        expect(result.id, 'housing-1');
+      } else {
+        expect(result, version);
+      }
     });
   }
+
+  test('housing acknowledgement without an ID remains retryable', () async {
+    final client = NocodbApiClient(
+      client: MockClient(
+        (_) async =>
+            http.Response('{"data":{"updatedAt":"2026-09-22T10:00:00Z"}}', 200),
+      ),
+    );
+    await expectLater(
+      client.updateLogement(beneficiaryId: 'synthetic', updates: {}),
+      throwsA(isA<TransientRemoteException>()),
+    );
+  });
 }
