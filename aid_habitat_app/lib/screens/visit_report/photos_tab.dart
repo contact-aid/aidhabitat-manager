@@ -337,7 +337,7 @@ class _PhotosTabState extends State<PhotosTab>
           await _persistPickedFilesOptimistic([
             DroppedFile(
               name: picked.name,
-              bytes: Uint8List.fromList(picked.bytes),
+              bytes: picked.bytes,
               mimeType: 'image/*',
             ),
           ], categoryTag);
@@ -349,7 +349,7 @@ class _PhotosTabState extends State<PhotosTab>
                 .map(
                   (f) => DroppedFile(
                     name: f.name,
-                    bytes: Uint8List.fromList(f.bytes),
+                    bytes: f.bytes,
                     mimeType: 'image/*',
                   ),
                 )
@@ -392,7 +392,12 @@ class _PhotosTabState extends State<PhotosTab>
       return;
     }
 
-    await _persistPickedFilesOptimistic(images, categoryTag);
+    setState(() => _isImporting = true);
+    try {
+      await _persistPickedFilesOptimistic(images, categoryTag);
+    } finally {
+      if (mounted) setState(() => _isImporting = false);
+    }
   }
 
   Future<void> _persistPickedFilesOptimistic(
@@ -404,9 +409,9 @@ class _PhotosTabState extends State<PhotosTab>
     // Optimistic UI (fix 2026-05-15) : les tuiles photos s'affichent
     // INSTANTANÉMENT au drop, sans attendre la compression + l'upload.
     // Pattern :
-    //   1. Crée un DocItem placeholder par image (id temp_xxx, bytes
-    //      bruts dans `_photoBytesCache` pour rendu immédiat depuis la
-    //      mémoire).
+    //   1. Crée un DocItem placeholder par image. Ne jamais décoder l'image
+    //      originale pour la vignette pendant sa compression web : cela
+    //      double le pic mémoire et peut faire planter l'onglet.
     //   2. setState une seule fois → toutes les tuiles apparaissent
     //      dans la milliseconde du drop.
     //   3. En arrière-plan, pour chaque image : compresse + persiste
@@ -424,9 +429,6 @@ class _PhotosTabState extends State<PhotosTab>
       final tempId = 'temp_${stampUs}_$i';
       final order = baseOrder + i;
       final simpleTitle = _buildSimplePhotoTitle(categoryTag, order);
-      // Cache des bytes BRUTS (non compressés) sous l'id temporaire →
-      // la tuile rend l'image immédiatement depuis la mémoire.
-      _photoBytesCache[tempId] = f.bytes;
       placeholders.add(
         DocItem(
           id: tempId,
@@ -442,12 +444,10 @@ class _PhotosTabState extends State<PhotosTab>
     }
     setState(() => _photos = [..._photos, ...placeholders]);
 
-    unawaited(
-      _persistPlaceholdersInBackground(
-        images: images,
-        placeholders: placeholders,
-        categoryTag: categoryTag,
-      ),
+    await _persistPlaceholdersInBackground(
+      images: images,
+      placeholders: placeholders,
+      categoryTag: categoryTag,
     );
   }
 
@@ -491,7 +491,7 @@ class _PhotosTabState extends State<PhotosTab>
                 .map((p) => p.id == temp.id ? inserted : p)
                 .toList(growable: false);
           });
-        } catch (_) {
+        } catch (error) {
           // Échec d'UNE image : retire son placeholder, continue avec
           // les autres. L'utilisateur peut re-dropper l'image si besoin.
           if (mounted) {
@@ -501,6 +501,7 @@ class _PhotosTabState extends State<PhotosTab>
                   .where((p) => p.id != temp.id)
                   .toList(growable: false);
             });
+            _showError('Import de ${f.name} impossible : $error');
           }
         }
       }

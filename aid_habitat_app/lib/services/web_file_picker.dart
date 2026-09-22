@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'web_file_picker_web.dart'
     if (dart.library.io) 'web_file_picker_io.dart';
@@ -7,7 +8,7 @@ import 'web_file_picker_web.dart'
 /// web (no filesystem), [name] is the original filename.
 class WebPickedFile {
   final String name;
-  final List<int> bytes;
+  final Uint8List bytes;
   const WebPickedFile({required this.name, required this.bytes});
 }
 

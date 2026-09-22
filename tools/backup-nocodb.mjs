@@ -40,13 +40,13 @@
 // Upload off-site : enchaîne avec rclone après le dump :
 //   0 3 * * * /opt/aidhabitat/tools/backup-and-upload.sh
 
-import { gzip } from 'node:zlib';
-import { promisify } from 'node:util';
-import { mkdir, writeFile, readdir, unlink } from 'node:fs/promises';
+import { createGzip } from 'node:zlib';
+import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { mkdir, readdir, unlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-
-const gzipAsync = promisify(gzip);
 
 // ----- Config -----
 const API_URL = (process.env.NOCODB_API_URL || '').trim().replace(/\/+$/, '');
@@ -120,87 +120,64 @@ async function fetchTableSchema(tableId) {
   }
 }
 
-// ----- Pagination de tous les records d'une table -----
-async function fetchAllRecords(tableId, tableName) {
-  const records = [];
-  let offset = 0;
-  while (true) {
-    const url = new URL(`${API_URL}/api/v2/tables/${encodeURIComponent(tableId)}/records`);
-    url.searchParams.set('limit', String(PAGE_SIZE));
-    url.searchParams.set('offset', String(offset));
-    const payload = await fetchJson(url.toString());
-    const list = payload?.list || [];
-    if (!Array.isArray(list)) {
-      throw Object.assign(
-        new Error(`Réponse inattendue sur ${tableName} (pas de .list)`),
-        { code: 2 },
-      );
-    }
-    records.push(...list);
-    const pageInfo = payload?.pageInfo || {};
-    const isLast = Boolean(pageInfo.isLastPage) || list.length < PAGE_SIZE;
-    if (isLast) break;
-    offset += PAGE_SIZE;
-    if (offset > 200_000) {
-      throw new Error(`Garde-fou: >200k records sur ${tableName}, arrêt`);
-    }
-  }
-  return records;
-}
-
-// ----- Dump complet -----
-async function dumpBase() {
+// ----- Dump complet, une ligne à la fois pour éviter la limite de JSON.stringify -----
+async function* dumpBaseChunks(createdAt) {
   console.log(`[backup] début dump base=${BASE_ID} url=${API_URL}`);
   const tables = await listTables();
   console.log(`[backup] ${tables.length} table(s) trouvée(s)`);
-
-  const dump = {
-    version: 1,
-    createdAt: new Date().toISOString(),
-    baseId: BASE_ID,
-    apiUrl: API_URL,
-    tables: [],
-  };
-
-  for (const t of tables) {
+  yield `{"version":1,"createdAt":${JSON.stringify(createdAt)},"baseId":${JSON.stringify(BASE_ID)},"apiUrl":${JSON.stringify(API_URL)},"tables":[`;
+  for (let index = 0; index < tables.length; index++) {
+    const t = tables[index];
     const start = Date.now();
-    const [fields, records] = await Promise.all([
-      fetchTableSchema(t.id),
-      fetchAllRecords(t.id, t.name),
-    ]);
+    const fields = await fetchTableSchema(t.id);
+    yield `${index ? ',' : ''}{"id":${JSON.stringify(t.id)},"name":${JSON.stringify(t.name)},"fields":${JSON.stringify(fields)},"records":[`;
+    let count = 0;
+    let offset = 0;
+    while (true) {
+      const url = new URL(`${API_URL}/api/v2/tables/${encodeURIComponent(t.id)}/records`);
+      url.searchParams.set('limit', String(PAGE_SIZE));
+      url.searchParams.set('offset', String(offset));
+      const payload = await fetchJson(url.toString());
+      const list = payload?.list;
+      if (!Array.isArray(list) || list.length > PAGE_SIZE) {
+        throw Object.assign(new Error(`Réponse inattendue sur ${t.name}`), { code: 2 });
+      }
+      for (const record of list) {
+        yield `${count++ ? ',' : ''}${JSON.stringify(record)}`;
+      }
+      if (payload.pageInfo?.isLastPage || list.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+      if (offset > 200_000) throw new Error(`Garde-fou: >200k records sur ${t.name}, arrêt`);
+    }
+    yield ']}';
     const ms = Date.now() - start;
-    console.log(`[backup]   ${t.name.padEnd(40)} ${String(records.length).padStart(6)} records (${ms}ms)`);
-    dump.tables.push({
-      id: t.id,
-      name: t.name,
-      fields,
-      records,
-    });
+    console.log(`[backup]   ${t.name.padEnd(40)} ${String(count).padStart(6)} records (${ms}ms)`);
   }
-
-  return dump;
+  yield ']}';
 }
 
 // ----- Compression + écriture disque -----
-async function writeDump(dump) {
+async function writeDump() {
   await mkdir(BACKUP_DIR, { recursive: true });
-  const stamp = dump.createdAt.replace(/[:T]/g, '-').replace(/\.\d+Z$/, '').replace('-', '_');
+  const createdAt = new Date().toISOString();
   // Format final : aidhabitat-2026-05-13_18-42-30.json.gz
-  const yyyy_mm_dd = dump.createdAt.slice(0, 10);
-  const hh_mm_ss = dump.createdAt.slice(11, 19).replace(/:/g, '-');
-  const filename = `aidhabitat-${yyyy_mm_dd}_${hh_mm_ss}.json.gz`;
+  const yyyy_mm_dd = createdAt.slice(0, 10);
+  const hh_mm_ss = createdAt.slice(11, 19).replace(/:/g, '-');
+  const millis = createdAt.slice(20, 23);
+  const filename = `aidhabitat-${yyyy_mm_dd}_${hh_mm_ss}-${millis}.json.gz`;
   const filepath = path.join(BACKUP_DIR, filename);
-
-  const json = JSON.stringify(dump);
-  const buf = Buffer.from(json, 'utf8');
-  const gz = await gzipAsync(buf, { level: 9 });
-
-  await writeFile(filepath, gz);
-  const ratio = ((1 - gz.length / buf.length) * 100).toFixed(1);
-  console.log(
-    `[backup] ✓ écrit ${filepath}` +
-      ` (${(gz.length / 1024 / 1024).toFixed(2)} MB compressé, ratio ${ratio}%)`,
-  );
+  try {
+    await pipeline(
+      Readable.from(dumpBaseChunks(createdAt)),
+      createGzip({ level: 9 }),
+      createWriteStream(filepath, { flags: 'wx', mode: 0o600 }),
+    );
+  } catch (error) {
+    await unlink(filepath).catch(() => {});
+    throw error;
+  }
+  const { size } = await stat(filepath);
+  console.log(`[backup] ✓ écrit ${filepath} (${(size / 1024 / 1024).toFixed(2)} MB compressé)`);
   return filepath;
 }
 
@@ -238,8 +215,7 @@ async function pruneOldBackups() {
 (async () => {
   const t0 = Date.now();
   try {
-    const dump = await dumpBase();
-    const filepath = await writeDump(dump);
+    const filepath = await writeDump();
     await pruneOldBackups();
     const total = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[backup] terminé en ${total}s — ${filepath}`);

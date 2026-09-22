@@ -1520,6 +1520,7 @@ class SyncRepository {
       // "Comparaison indisponible" no matter what. (2026-09-22)
       'dossier' ||
       'housing' ||
+      'contexte_de_vie' ||
       'mesures_anthropometriques' ||
       'observations_synthese' ||
       'diagnostic_sanitaires' => 'local_id',

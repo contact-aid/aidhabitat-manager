@@ -66,6 +66,7 @@ import {
   validateSyncBatchPayload,
 } from './syncBatch.mjs';
 import { readAuthorizedDossierRecord } from './dossierReadQueries.mjs';
+import { resolveNocodbTables } from './nocodbTables.mjs';
 import {
   buildImplicitDossierFields,
   canAccessDossierAssignment,
@@ -381,36 +382,7 @@ app.use('/uploads/documents', requireAuthForUploads, express.static(DOCUMENTS_DI
 app.use('/uploads/visit-plans', requireAuthForUploads, express.static(VISIT_PLANS_DIR_URL.pathname));
 app.use('/uploads/wiki-library', requireAuthForUploads, express.static(WIKI_LIBRARY_DIR_URL.pathname));
 
-const TABLES = {
-  beneficiaires: 'muvp56d5i9z2qbe',
-  logements: 'mgdpvdrnzyy6n4k',
-  dossiers: 'mez74y7ndoej30p',
-  observations: 'mbkuomk0aazes1c',
-  diagnosticSanitaires: 'mdukulxcd18ae3o',
-  mesuresAnthropometriques: 'mbaj91z97utreco',
-  // Photos visite — table dédiée (séparée de mobile_documents).
-  // Demande utilisateur 2026-04-30 : « les photos de l'espace photos
-  // ne doivent pas être mélangées avec les documents ». Les rows
-  // existantes ont été migrées depuis mobile_documents le 2026-04-30.
-  visitPhotos: 'mfeu4lijbge4opz',
-  communes: 'mtwhx481kcfn19h',
-  epci: 'mntevbq41mk4y6h',
-  situationProprietaire: 'mqwqqzsfopejd5q',
-  statutOccupation: 'mqgrx6hut8oskbr',
-  dependancesParticulieres: 'm09p3a4xns7wqdg',
-  etablissements: 'mw1ajdw6ictkdzf',
-  ergotherapeutes: 'mww8mr4ngp3nbxh',
-  caissesRetraite: 'mxmsm320nnljdmm',
-  caissesRetraiteComplementaires: 'm067j5k5a03beog',
-  wikiTags: 'mt36dqp3ybw5dtt',
-  wiki: 'm34ho32msfz8b2x',
-  typeDeLogement: 'mp34j2fxnupoxd0',
-  porteDeGarage: 'my9em2miybwiwr0',
-  portail: 'm8e1g1ab3a4ubtx',
-  contexteDeVie: 'mjyj2lz4wfs5pd5',
-  informationsAdministratives: 'mv2hgaqj3u5ittg',
-  baremesAnah: 'mtg6pgm9t274ya9',
-};
+const TABLES = resolveNocodbTables();
 
 const FIELD_SETS = {
   beneficiaires: [
@@ -8583,6 +8555,11 @@ const secondaryIdentity = (record, canonicalDossierId = field(record, 'dossier_i
 });
 const secondaryWriteConflict = (req, res, record) => {
   const guarded = Object.hasOwn(req.body || {}, 'concurrency');
+  if (guarded && req.body?.concurrency?.createIfAbsent === true &&
+      !conditionalSyncEnabled) {
+    res.status(503).json({ success: false, error: 'SYNC_CONDITIONAL_NOT_PREPARED' });
+    return true;
+  }
   const guard = req.body?.concurrency;
   const expected = req.body?.expectedUpdatedAt ?? req.get('If-Unmodified-Since');
   const expectedTime = typeof expected === 'string' && expected.trim() ? Date.parse(expected) : NaN;

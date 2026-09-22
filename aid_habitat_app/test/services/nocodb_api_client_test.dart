@@ -83,18 +83,17 @@ void main() {
     });
 
     test(
-      '200 OK sans `updatedAt` → renvoie null (rétrocompat ancien deploy)',
+      '200 OK sans `updatedAt` reste non confirmé et réessayable',
       () async {
         final client = NocodbApiClient(
           client: MockClient((_) async {
             return http.Response('{"success":true,"data":{}}', 200);
           }),
         );
-        final updated = await client.updateDossier(
-          dossierId: 'dos-123',
-          updates: {'foo': 'bar'},
+        await expectLater(
+          client.updateDossier(dossierId: 'dos-123', updates: {'foo': 'bar'}),
+          throwsA(isA<TransientRemoteException>()),
         );
-        expect(updated, isNull);
       },
     );
 
@@ -320,7 +319,12 @@ void main() {
                 return {
                   'id': operation['id'],
                   'status': isDossier ? 200 : 503,
-                  'body': {'success': isDossier},
+                  'body': isDossier
+                      ? {
+                          'success': true,
+                          'data': {'updatedAt': '2026-09-22T10:00:00Z'},
+                        }
+                      : {'success': false},
                 };
               }).toList(),
             }),
@@ -338,11 +342,13 @@ void main() {
         updates: {'firstName': 'Alice'},
       );
 
-      await expectLater(dossierFuture, completes);
-      await expectLater(
-        beneficiaryFuture,
-        throwsA(isA<TransientRemoteException>()),
-      );
+      await Future.wait([
+        expectLater(dossierFuture, completes),
+        expectLater(
+          beneficiaryFuture,
+          throwsA(isA<TransientRemoteException>()),
+        ),
+      ]);
     });
   });
 

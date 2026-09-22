@@ -425,7 +425,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         ? null
         : await _dataService.fetchDossierById(dossierId);
     if (!mounted) return;
-    if (dossier == null || !_dossiers.any((d) => d.id == dossier.id)) {
+    if (dossier == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(

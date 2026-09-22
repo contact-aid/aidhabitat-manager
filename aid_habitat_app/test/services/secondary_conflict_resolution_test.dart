@@ -208,6 +208,50 @@ void main() {
   });
   tearDown(() async => db.close());
 
+  test('every visit child conflict can open its dossier', () async {
+    for (final type in [
+      'contexte_de_vie',
+      'mesures_anthropometriques',
+      'observations_synthese',
+      'diagnostic_sanitaires',
+    ]) {
+      final id = 'review_$type';
+      await db.insert('sync_operations', {
+        'id': id,
+        'entity_type': type,
+        'entity_local_id': _dossier,
+        'operation_type': 'update',
+        'payload_json': '{}',
+        'status': 'conflict',
+        'created_at': _pulled,
+        'updated_at': _pulled,
+      });
+      expect(await queue.conflictDossierId(id), _dossier);
+    }
+  });
+
+  test('absent context row is reviewed as guarded creation', () async {
+    await repository.upsertContexteDeVie(
+      _dossier,
+      _patient,
+      medicalContext: const MedicalContext(pathology: 'synthetic'),
+    );
+    await conflict('contexte_de_vie');
+    final before = await snapshot();
+    final compared = (await repository.reviewSecondaryConflicts(_dossier, {
+      'contexte_de_vie': {
+        'dossierId': _dossier,
+        'serverReference': null,
+      },
+    })).single;
+    expect(compared.remoteExists, isFalse);
+    expect(await snapshot(), before);
+    await repository.resolveReviewedConflict(compared, keepLocal: true);
+    final retry = await payload('contexte_de_vie');
+    expect(retry['concurrency']['reference'], isNull);
+    expect(retry['concurrency']['createIfAbsent'], isTrue);
+  });
+
   test(
     'child conflict aggregates to dossier until every child is resolved',
     () async {
@@ -499,6 +543,30 @@ void main() {
         },
       );
 
+      test('absent server row permits only guarded local creation', () async {
+        await edit(type, 1);
+        await conflict(type);
+        final before = await snapshot();
+        final compared = (await repository.reviewSecondaryConflicts(_dossier, {
+          type: null,
+        })).single;
+        expect(compared.remoteExists, isFalse);
+        expect(compared.remoteUpdatedAt, isNull);
+        expect(compared.remoteValues.keys, _patch(type, 1).keys);
+        expect(await snapshot(), before);
+        await expectLater(
+          repository.resolveReviewedConflict(compared, keepLocal: false),
+          throwsStateError,
+        );
+        expect(await snapshot(), before);
+        await repository.resolveReviewedConflict(compared, keepLocal: true);
+        final retry = await payload(type);
+        expect(retry['concurrency']['createIfAbsent'], isTrue);
+        expect(retry['concurrency']['expectedUpdatedAt'], isNull);
+        expect(retry['concurrency']['baseValues'], isEmpty);
+        expect((await operation(type))['status'], 'pending');
+      });
+
       for (final keepLocal in [false, true]) {
         test(
           'a new edit invalidates a stale keepLocal=$keepLocal review',
@@ -526,7 +594,6 @@ void main() {
 
       for (final invalid in [
         'missing entry',
-        'null entry',
         'wrong dossier',
         'missing version',
         'invalid version',
