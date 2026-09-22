@@ -92,10 +92,18 @@ le manifeste web référence l'URL de l'API staging. Après cette isolation, les
 deux indicateurs conditionnels ont été activés uniquement en staging et l'API
 a retrouvé l'état `ready` en HTTP 200.
 
-## Blocages de production
+## Production préparée partiellement
 
-La base production `pskgbjythubfzv9` n'a toujours aucune des sept colonnes
-`app_sync_revision` et aucune des quatre contraintes uniques sur `dossier_id`.
+Après restauration réussie du dump et archivage du doublon, la commande gardée
+`tools/prepare-conditional-sync-production.mjs` a ajouté la colonne texte
+`app_sync_revision` aux sept tables de la base `pskgbjythubfzv9`, puis rempli
+et relu chaque UUID. Le rapport `applied-and-verified` couvre 24 bénéficiaires,
+13 logements, 24 dossiers, 11 contextes de vie et 13 diagnostics sanitaires ;
+les tables mesures et observations sont actuellement vides.
+
+La base production n'a encore aucune des quatre contraintes uniques sur
+`dossier_id`. Les deux indicateurs de synchronisation doivent donc rester
+désactivés.
 
 `Diagnostic_sanitaires` comporte deux lignes, Id `23` et `24`, pour le même
 `dossier_id`. Elles divergent notamment sur les dimensions des portes de salle
@@ -133,8 +141,9 @@ ou réinstaller l'application pour faire disparaître une file locale.
    preuve de restauration de `apps_restore_test_20260922`.
 2. ~~Archiver la ligne sanitaire `23` et conserver la ligne `24`.~~ Terminé et
    vérifié par l'API NocoDB le 22/09/2026.
-3. Contrôler les trois autres tables enfants, puis ajouter et remplir
-   `app_sync_revision` sur les sept tables de production.
+3. ~~Contrôler les trois autres tables enfants, puis ajouter et remplir
+   `app_sync_revision` sur les sept tables de production.~~ Terminé et relu par
+   l'API NocoDB le 22/09/2026.
 4. Créer les quatre index uniques SQL après un nouveau contrôle des doublons.
 5. Déployer le serveur et les clients compatibles en staging avec les deux
    indicateurs activés, puis réaliser le scénario physique à deux iPad décrit
