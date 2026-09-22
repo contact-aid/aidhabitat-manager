@@ -28,7 +28,12 @@ class SyncConflictReview {
   final String entityType;
   final String entityLocalId;
   final String payloadJson;
-  final String remoteUpdatedAt;
+  // `null` : la fiche distante n'existe pas encore (saisie locale avant
+  // le 1er sync) — rien a comparer, pas de garde de concurrence a poser
+  // au push de la resolution (cf. `_expectedVersion` dans
+  // nocodb_sync_service.dart, qui traite `null` comme « pas de version
+  // connue », exactement comme pour une 1ere sauvegarde normale).
+  final String? remoteUpdatedAt;
   final Map<String, dynamic> localValues;
   final Map<String, dynamic> remoteValues;
   final Map<String, dynamic> remoteColumns;
@@ -150,7 +155,7 @@ class DossierRepository {
                 DateTime.tryParse(extractedVersion) == null)) {
           throw StateError('Version serveur absente : resolution suspendue.');
         }
-        final version = remoteRowMissing ? '' : extractedVersion!;
+        final version = remoteRowMissing ? null : extractedVersion!;
         final now = DateTime.now().toIso8601String();
         final columns = type == 'patient'
             ? _buildPatientPayload(raw: raw, now: now)
@@ -262,13 +267,32 @@ class DossierRepository {
         );
         if (operations.isEmpty) continue;
         final raw = remoteByType[type];
-        final version = raw == null ? null : _extractRemoteUpdatedAt(raw);
-        if (raw == null ||
-            raw['dossierId'] != remoteId ||
-            version == null ||
-            DateTime.tryParse(version) == null) {
-          throw StateError('Version distante de la fiche indisponible.');
+        // `raw == null` sert aussi de tombstone à la fusion normale (hors
+        // conflit) pour signaler « supprimé côté serveur » (cf.
+        // mergeRemote*Payload) : on ne peut donc pas changer sa forme ici.
+        // Mais une fiche jamais créée sur le serveur n'est pas non plus un
+        // conflit de version — il n'y a rien à comparer. On affiche la
+        // revue avec des valeurs distantes vides au lieu de bloquer avec
+        // « Version distante de la fiche indisponible » (même classe de
+        // bug que le logement jamais synchronisé, 2026-09-22).
+        String? version;
+        if (raw == null) {
+          version = null;
+        } else {
+          final extracted = _extractRemoteUpdatedAt(raw);
+          if (raw['dossierId'] != remoteId ||
+              extracted == null ||
+              DateTime.tryParse(extracted) == null) {
+            throw StateError('Version distante de la fiche indisponible.');
+          }
+          version = extracted;
         }
+        final effectiveRaw =
+            raw ??
+            <String, dynamic>{
+              for (final key in _secondaryFields[type]!.keys)
+                key: type == 'diagnostic_sanitaires' ? <dynamic>[] : null,
+            };
         final rows = await txn.query(
           type,
           where: 'dossier_local_id = ?',
@@ -299,10 +323,10 @@ class DossierRepository {
           final values = <String, dynamic>{};
           final columns = <String, dynamic>{};
           for (final key in updates.keys) {
-            if (!fields.containsKey(key) || !raw.containsKey(key)) {
+            if (!fields.containsKey(key) || !effectiveRaw.containsKey(key)) {
               throw StateError('Valeur distante absente pour $key.');
             }
-            final value = raw[key];
+            final value = effectiveRaw[key];
             if (type == 'diagnostic_sanitaires') {
               if (value is! List || value.any((entry) => entry is! Map)) {
                 throw StateError('Diagnostic distant incomplet.');
@@ -406,12 +430,24 @@ class DossierRepository {
           payload[key] = review.localValues[key];
         }
       }
-      payload['concurrency'] = {
-        'version': 1,
-        'writeId': newSyncWriteId(),
-        'expectedUpdatedAt': review.remoteUpdatedAt,
-        'baseValues': review.remoteValues,
-      };
+      if (review.remoteUpdatedAt != null) {
+        payload['concurrency'] = {
+          'version': 1,
+          'writeId': newSyncWriteId(),
+          'expectedUpdatedAt': review.remoteUpdatedAt,
+          'baseValues': review.remoteValues,
+        };
+      } else {
+        // Fiche distante inexistante (cf. `reviewConflicts` /
+        // `reviewSecondaryConflicts`) : ne pas envoyer de garde de
+        // concurrence du tout. `secondaryWriteConflict` (server/index.mjs)
+        // exige un `expectedUpdatedAt` bien forme des qu'un objet
+        // `concurrency` est present dans la requete, quel que soit son
+        // contenu — meme quand la fiche n'existe pas encore. Envoyer un
+        // guard « factice » ferait echouer le push avec 428
+        // SYNC_EXPECTED_VERSION_REQUIRED au lieu de creer normalement.
+        payload.remove('concurrency');
+      }
       await txn.update(
         'sync_operations',
         {

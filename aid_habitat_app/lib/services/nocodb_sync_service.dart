@@ -580,6 +580,14 @@ class NocodbSyncService {
       throw StateError('Unsupported queued mutation version');
     }
     final expected = guard['expectedUpdatedAt'];
+    // Une revue de conflit resolue peut porter un guard versionne sans
+    // valeur de reference distante : c'est le cas d'une fiche jamais
+    // creee cote serveur (rien a comparer, cf. `reviewConflicts` /
+    // `reviewSecondaryConflicts` dans dossier_repository.dart). `null`
+    // signale explicitement « pas de version connue », exactement comme
+    // `legacyVersion()` ci-dessus pour une 1ere sauvegarde normale. Une
+    // valeur non-null mais malformee reste rejetee (bug client reel).
+    if (expected == null) return null;
     if (expected is! String || DateTime.tryParse(expected) == null) {
       throw ConflictException('La version de reference doit etre verifiee.');
     }
