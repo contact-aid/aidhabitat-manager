@@ -8,6 +8,7 @@ import { callNocoTool, closeMcpClient } from './nocodbMcpClient.mjs';
 import { createMobileSyncStore } from './mobileSyncStore.mjs';
 import { getRetirementFundMeta } from './retirementFundsCatalog.mjs';
 import { WIKI_FILTER_TAGS, WIKI_LIBRARY_SEED } from './wikiLibraryCatalog.mjs';
+import { resolveNocodbTables } from './nocodbTables.mjs';
 import {
   buildPasswordCredential,
   parsePasswordCredential,
@@ -94,31 +95,7 @@ export const BENEFICIARY_TRUSTED_EMAIL_FIELD_ID = 'c8s1kh1eqqx6xl6';
 export const DEFAULT_LEGACY_ERGO_EMAIL = 'c.demenais@aidhabitat.fr';
 export let memberRegistryCache = null;
 
-export const TABLES = {
-  beneficiaires: 'muvp56d5i9z2qbe',
-  logements: 'mgdpvdrnzyy6n4k',
-  dossiers: 'mez74y7ndoej30p',
-  observations: 'mbkuomk0aazes1c',
-  diagnosticSanitaires: 'mdukulxcd18ae3o',
-  mesuresAnthropometriques: 'mbaj91z97utreco',
-  communes: 'mtwhx481kcfn19h',
-  epci: 'mntevbq41mk4y6h',
-  situationProprietaire: 'mqwqqzsfopejd5q',
-  statutOccupation: 'mqgrx6hut8oskbr',
-  dependancesParticulieres: 'm09p3a4xns7wqdg',
-  etablissements: 'mw1ajdw6ictkdzf',
-  ergotherapeutes: 'mww8mr4ngp3nbxh',
-  caissesRetraite: 'mxmsm320nnljdmm',
-  caissesRetraiteComplementaires: 'm067j5k5a03beog',
-  wikiTags: 'mt36dqp3ybw5dtt',
-  wiki: 'm34ho32msfz8b2x',
-  typeDeLogement: 'mp34j2fxnupoxd0',
-  porteDeGarage: 'my9em2miybwiwr0',
-  portail: 'm8e1g1ab3a4ubtx',
-  contexteDeVie: 'mjyj2lz4wfs5pd5',
-  informationsAdministratives: 'mv2hgaqj3u5ittg',
-  baremesAnah: 'mtg6pgm9t274ya9',
-};
+export const TABLES = resolveNocodbTables();
 
 export const FIELD_SETS = {
   beneficiaires: [

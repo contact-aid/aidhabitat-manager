@@ -12,6 +12,10 @@ synchronisation conditionnelle en production.
   JSON de plusieurs gigaoctets en mémoire. Le test couvre la pagination, les
   permissions `0600` et la suppression d'un fichier partiel.
 - `d8806d4` ajoute la préparation gardée du staging.
+- Le serveur accepte désormais `NOCODB_TABLE_IDS_JSON`, un objet strict qui
+  remplace les identifiants de tables par environnement. Cette configuration
+  est indispensable : les endpoints NocoDB v2 utilisent des identifiants
+  globaux et l'ancien service staging conservait ceux de la production.
 - Validation locale : 258 tests serveur et 931 tests Flutter passent.
 
 ## Sauvegardes vérifiées
@@ -61,6 +65,13 @@ CREATE UNIQUE INDEX aidhabitat_diagnostic_dossier_uidx
 Une relecture de `pg_indexes` a confirmé quatre index uniques. Un test avec deux
 écritures concurrentes sur une vraie ligne staging de `Beneficiaires` a eu un
 seul gagnant et un rejet, sans changer la valeur métier.
+
+Les 24 identifiants nécessaires au serveur ont été résolus par titre puis
+contrôlés individuellement : leurs métadonnées déclarent toutes la base
+`p7jzofcton1tabh`. Le service API staging doit définir l'objet complet dans
+`NOCODB_TABLE_IDS_JSON` avant son prochain déploiement. Une valeur absente garde
+le défaut production ; une clé inconnue, un JSON invalide ou un identifiant non
+alphanumérique bloque le démarrage.
 
 ## Blocages de production
 
