@@ -1518,8 +1518,15 @@ class SyncRepository {
       // spaces, which never matched, so `conflictDossierId` always
       // returned null for a housing conflict and the review screen showed
       // "Comparaison indisponible" no matter what. (2026-09-22)
+      // 'contexte_de_vie' was missing here entirely (fell through to the
+      // `_ => null` case below): every context/autonomy conflict has
+      // always returned null and shown "Comparaison indisponible", never
+      // reaching the review screen at all — cf. `_enqueueChildUpdate`,
+      // which enqueues it with the dossier's own local_id exactly like
+      // the other entries in this group. (2026-09-22)
       'dossier' ||
       'housing' ||
+      'contexte_de_vie' ||
       'mesures_anthropometriques' ||
       'observations_synthese' ||
       'diagnostic_sanitaires' => 'local_id',
