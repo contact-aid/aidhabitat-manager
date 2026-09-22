@@ -101,9 +101,23 @@ et relu chaque UUID. Le rapport `applied-and-verified` couvre 24 bénéficiaires
 13 logements, 24 dossiers, 11 contextes de vie et 13 diagnostics sanitaires ;
 les tables mesures et observations sont actuellement vides.
 
-La base production n'a encore aucune des quatre contraintes uniques sur
-`dossier_id`. Les deux indicateurs de synchronisation doivent donc rester
-désactivés.
+Les quatre index uniques de production ont ensuite été créés et relus :
+
+- `aidhabitat_contexte_dossier_active_uidx` ;
+- `aidhabitat_mesures_dossier_active_uidx` ;
+- `aidhabitat_observations_dossier_active_uidx` ;
+- `aidhabitat_diagnostic_dossier_active_uidx`.
+
+NocoDB conserve physiquement des lignes masquées par `__nc_deleted`. Les index
+portent donc sur `dossier_id` avec le prédicat
+`WHERE NOT COALESCE(__nc_deleted, false)`. Ils interdisent deux fiches actives
+pour un dossier sans empêcher une recréation après suppression logique. Un
+contrôle SQL dans la même transaction a confirmé zéro doublon et zéro
+`dossier_id` vide parmi les lignes actives des quatre tables.
+
+Le contrôle API final rapporte `schemaAndRevisionsReady: true` pour les sept
+tables. Les deux indicateurs de synchronisation restent néanmoins désactivés
+jusqu'au déploiement du code compatible et à la recette des clients.
 
 `Diagnostic_sanitaires` comporte deux lignes, Id `23` et `24`, pour le même
 `dossier_id`. Elles divergent notamment sur les dimensions des portes de salle
@@ -144,7 +158,8 @@ ou réinstaller l'application pour faire disparaître une file locale.
 3. ~~Contrôler les trois autres tables enfants, puis ajouter et remplir
    `app_sync_revision` sur les sept tables de production.~~ Terminé et relu par
    l'API NocoDB le 22/09/2026.
-4. Créer les quatre index uniques SQL après un nouveau contrôle des doublons.
+4. ~~Créer les quatre index uniques SQL après un nouveau contrôle des
+   doublons.~~ Terminé et relu dans `pg_indexes` le 22/09/2026.
 5. Déployer le serveur et les clients compatibles en staging avec les deux
    indicateurs activés, puis réaliser le scénario physique à deux iPad décrit
    dans `sync-context-atomic-2026-09-17.md`.
