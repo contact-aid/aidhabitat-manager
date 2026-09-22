@@ -73,6 +73,14 @@ contrôlés individuellement : leurs métadonnées déclarent toutes la base
 le défaut production ; une clé inconnue, un JSON invalide ou un identifiant non
 alphanumérique bloque le démarrage.
 
+Le contrôle Easypanel a découvert que `aidhabitat-api-staging` utilisait encore
+`NOCODB_BASE_ID=pskgbjythubfzv9` et les identifiants codés en dur de production.
+Le service a été corrigé vers la base staging et les 24 identifiants vérifiés.
+L'API et le web staging exécutent le SHA `45d5a68d04cf10e4fad43d6b768f9f1972c878bf` ;
+le manifeste web référence l'URL de l'API staging. Après cette isolation, les
+deux indicateurs conditionnels ont été activés uniquement en staging et l'API
+a retrouvé l'état `ready` en HTTP 200.
+
 ## Blocages de production
 
 La base production `pskgbjythubfzv9` n'a toujours aucune des sept colonnes
@@ -83,6 +91,13 @@ La base production `pskgbjythubfzv9` n'a toujours aucune des sept colonnes
 de bain et WC, la hauteur de cuvette et les deux JSON d'instances. Ce n'est pas
 le dossier de démonstration d'Anne-Gaëlle. Aucune ligne n'a été supprimée ou
 fusionnée. Une décision métier explicite est obligatoire avant l'index unique.
+
+Comparaison minimale : la ligne 23 contient `76 / 53 / 34` pour largeur porte
+SDB / largeur porte WC / hauteur cuvette. La ligne 24 contient `70 / 60 / 42`,
+avec les mêmes valeurs dans ses JSON structurés. Les deux ont été créées le
+04/08/2026 ; seule la ligne 24 porte une mise à jour au 05/08/2026. Cette
+chronologie suggère une correction ultérieure, mais ne constitue pas une preuve
+métier suffisante pour supprimer automatiquement la ligne 23.
 
 Il faut également inventorier les opérations en attente et la version des
 trois iPad et cinq postes web. Ne jamais forcer une déconnexion, vider le cache
