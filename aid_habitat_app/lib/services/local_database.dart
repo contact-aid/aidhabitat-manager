@@ -32,7 +32,7 @@ class LocalDatabase {
   static final LocalDatabase instance = LocalDatabase._();
   static const _dbName = 'aid_habitat_offline.db';
   static const _debugFallbackDbName = 'aid_habitat_offline.debug_fallback.db';
-  static const _dbVersion = 24;
+  static const _dbVersion = 25;
 
   Database? _database;
   Future<Database>? _opening;
@@ -429,6 +429,20 @@ class LocalDatabase {
     }
     if (oldVersion < 24) {
       await SyncOperationOwnership.installSchemaAndSeed(db);
+    }
+    if (oldVersion < 25) {
+      await _addColumnIfMissing(
+        db,
+        'contexte_de_vie',
+        'remote_reference_json',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'contexte_de_vie',
+        'remote_reference_known',
+        'INTEGER NOT NULL DEFAULT 0',
+      );
     }
   }
 
@@ -1045,6 +1059,8 @@ class LocalDatabase {
       patient_local_id TEXT,
       medical_context_json TEXT,
       autonomy_json TEXT,
+      remote_reference_json TEXT,
+      remote_reference_known INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL,
       sync_state TEXT NOT NULL DEFAULT 'synced'
     )

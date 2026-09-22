@@ -9,6 +9,7 @@ import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
+import 'context_sync_protocol.dart';
 
 class SyncConflictReview {
   SyncConflictReview._({
@@ -22,6 +23,8 @@ class SyncConflictReview {
     required this.remoteColumns,
     required this.localRowId,
     required this.table,
+    required this.remoteExists,
+    this.contextReferenceJson,
   });
 
   final String operationId;
@@ -39,6 +42,8 @@ class SyncConflictReview {
   final Map<String, dynamic> remoteColumns;
   final String localRowId;
   final String table;
+  final bool remoteExists;
+  final String? contextReferenceJson;
 }
 
 class DossierRepository {
@@ -141,7 +146,8 @@ class DossierRepository {
         if (raw == null) throw StateError('Version distante incomplete.');
         final extractedVersion = _extractRemoteUpdatedAt(raw);
         final extractedVersionValid =
-            extractedVersion != null && DateTime.tryParse(extractedVersion) != null;
+            extractedVersion != null &&
+            DateTime.tryParse(extractedVersion) != null;
         // Un logement jamais créé côté serveur (saisie locale avant le 1er
         // sync) n'a pas d'`updatedAt` distant : ce n'est pas un conflit de
         // version, il n'y a simplement rien à comparer côté serveur (le
@@ -155,11 +161,18 @@ class DossierRepository {
         // reste une vraie anomalie a rejeter (cf.
         // sync_conflict_resolution_test.dart « missing field or version is
         // not manufactured for a decision »).
-        final remoteRowMissing = type == 'housing' && !extractedVersionValid;
-        if (!remoteRowMissing && !extractedVersionValid) {
+        //
+        // Le signal utilisé pour "logement absent" est directement la
+        // validite de la version extraite, pas la presence de `raw['id']`
+        // (essaye en premier, puis abandonne : certains payloads legitimes,
+        // dont un fixture de test, omettent `id` tout en portant un vrai
+        // `updatedAt` — s'appuyer sur `id` les aurait a tort traites comme
+        // "absent" et fait perdre une version reelle).
+        final remoteExists = type != 'housing' || extractedVersionValid;
+        final version = remoteExists ? extractedVersion : null;
+        if (remoteExists && !extractedVersionValid) {
           throw StateError('Version serveur absente : resolution suspendue.');
         }
-        final version = remoteRowMissing ? null : extractedVersion!;
         final now = DateTime.now().toIso8601String();
         final columns = type == 'patient'
             ? _buildPatientPayload(raw: raw, now: now)
@@ -173,6 +186,7 @@ class DossierRepository {
             : _mapDossierFieldsToApi;
         final remoteApi = mapper(columns);
         for (final key in updates.keys) {
+          if (!remoteExists) continue;
           final rawKey = key == 'occupant1BirthDate' ? 'birthDate' : key;
           if (!raw.containsKey(rawKey) || !remoteApi.containsKey(key)) {
             throw StateError('Valeur distante absente pour $key.');
@@ -195,7 +209,9 @@ class DossierRepository {
             selectedColumns[column.key] = column.value;
           }
         }
-        if (selectedColumns.isEmpty) throw StateError('Aucun champ resoluble.');
+        if (selectedColumns.isEmpty && remoteExists) {
+          throw StateError('Aucun champ resoluble.');
+        }
         reviews.add(
           SyncConflictReview._(
             operationId: operation['id'] as String,
@@ -205,7 +221,8 @@ class DossierRepository {
             remoteUpdatedAt: version,
             localValues: Map.unmodifiable(updates),
             remoteValues: Map.unmodifiable({
-              for (final key in updates.keys) key: remoteApi[key],
+              for (final key in updates.keys)
+                key: remoteExists ? remoteApi[key] : null,
             }),
             remoteColumns: Map.unmodifiable(selectedColumns),
             localRowId: type == 'patient'
@@ -218,6 +235,7 @@ class DossierRepository {
                 : type == 'housing'
                 ? 'housings'
                 : 'dossiers',
+            remoteExists: remoteExists,
           ),
         );
       }
@@ -226,6 +244,10 @@ class DossierRepository {
   }
 
   static const _secondaryFields = <String, Map<String, String>>{
+    'contexte_de_vie': {
+      'medicalContext': 'medical_context_json',
+      'autonomy': 'autonomy_json',
+    },
     'mesures_anthropometriques': {
       'deboutHauteurCoude': 'debout_hauteur_coude',
       'assisHauteurAssise': 'assis_hauteur_assise',
@@ -271,11 +293,22 @@ class DossierRepository {
         );
         if (operations.isEmpty) continue;
         final raw = remoteByType[type];
-        final version = raw == null ? null : _extractRemoteUpdatedAt(raw);
+        final context = type == 'contexte_de_vie';
+        final reference = context && raw?['serverReference'] != null
+            ? ContextServerReference.fromJson(
+                (raw!['serverReference'] as Map).cast<String, dynamic>(),
+              )
+            : null;
+        final version = context
+            ? (reference?.updatedAt ?? '')
+            : raw == null
+            ? null
+            : _extractRemoteUpdatedAt(raw);
         if (raw == null ||
             raw['dossierId'] != remoteId ||
-            version == null ||
-            DateTime.tryParse(version) == null) {
+            (context
+                ? !raw.containsKey('serverReference')
+                : version == null || DateTime.tryParse(version) == null)) {
           throw StateError('Version distante de la fiche indisponible.');
         }
         final rows = await txn.query(
@@ -312,7 +345,12 @@ class DossierRepository {
               throw StateError('Valeur distante absente pour $key.');
             }
             final value = raw[key];
-            if (type == 'diagnostic_sanitaires') {
+            if (context) {
+              if (value is! Map) {
+                throw StateError('Contexte distant incomplet.');
+              }
+              columns[fields[key]!] = jsonEncode(value);
+            } else if (type == 'diagnostic_sanitaires') {
               if (value is! List || value.any((entry) => entry is! Map)) {
                 throw StateError('Diagnostic distant incomplet.');
               }
@@ -337,12 +375,16 @@ class DossierRepository {
               entityType: type,
               entityLocalId: dossierId,
               payloadJson: payloadJson,
-              remoteUpdatedAt: version,
+              remoteUpdatedAt: version!,
+              contextReferenceJson: context
+                  ? jsonEncode(reference?.toJson())
+                  : null,
               localValues: Map.unmodifiable(updates),
               remoteValues: Map.unmodifiable(values),
               remoteColumns: Map.unmodifiable(columns),
               localRowId: rows.single['local_id'] as String,
               table: type,
+              remoteExists: true,
             ),
           );
         }
@@ -390,6 +432,9 @@ class DossierRepository {
       if (others.isNotEmpty) {
         throw StateError('Une autre modification attend sur cette fiche.');
       }
+      if (!review.remoteExists && !keepLocal) {
+        throw StateError('Aucun logement serveur ne peut etre restaure.');
+      }
       final now = DateTime.now().toIso8601String();
       await txn.insert('sync_conflict_history', {
         'operation_id': review.operationId,
@@ -419,7 +464,10 @@ class DossierRepository {
         'version': 1,
         'writeId': newSyncWriteId(),
         'expectedUpdatedAt': review.remoteUpdatedAt,
-        'baseValues': review.remoteValues,
+        'baseValues': review.remoteExists ? review.remoteValues : {},
+        if (!review.remoteExists) 'createIfAbsent': true,
+        if (review.contextReferenceJson != null)
+          'reference': jsonDecode(review.contextReferenceJson!),
       };
       await txn.update(
         'sync_operations',
@@ -439,7 +487,15 @@ class DossierRepository {
         review.table,
         {
           if (!keepLocal) ...review.remoteColumns,
-          'remote_updated_at': review.remoteUpdatedAt,
+          if (review.contextReferenceJson == null &&
+              review.remoteUpdatedAt != null)
+            'remote_updated_at': review.remoteUpdatedAt,
+          if (review.contextReferenceJson != null) ...{
+            'remote_reference_json': review.contextReferenceJson == 'null'
+                ? null
+                : review.contextReferenceJson,
+            'remote_reference_known': 1,
+          },
           'updated_at': now,
           'sync_state': keepLocal ? 'pendingSync' : 'synced',
         },
@@ -1430,6 +1486,17 @@ class DossierRepository {
     final data = <String, dynamic>{
       'dossier_local_id': dossierId,
       'patient_local_id': patientLocalId,
+      if (raw.containsKey('contextServerReference')) ...{
+        'remote_reference_known': 1,
+        'remote_reference_json': raw['contextServerReference'] == null
+            ? null
+            : jsonEncode(
+                ContextServerReference.fromJson(
+                  (raw['contextServerReference'] as Map)
+                      .cast<String, dynamic>(),
+                ).toJson(),
+              ),
+      },
       'updated_at': now,
       'sync_state': SyncState.synced.name,
     };
@@ -2089,6 +2156,14 @@ class DossierRepository {
     // beneficiary from the dossier).
     if (entityType == 'housing') {
       payloadMap['dossierLocalId'] = entityLocalId;
+      final guard = (payloadMap['concurrency'] as Map).cast<String, dynamic>();
+      if (previous == null && expectedUpdatedAt == null) {
+        payloadMap['concurrency'] = {
+          ...guard,
+          'baseValues': <String, dynamic>{},
+          'createIfAbsent': true,
+        };
+      }
     }
     await db.insert('sync_operations', {
       'id': opId,
@@ -2167,6 +2242,33 @@ class DossierRepository {
     );
     if (previous?['concurrency'] == null && !canCaptureVersion) {
       payload['localReference'] = payload.remove('concurrency');
+    }
+    if (entityType != 'contexte_de_vie' &&
+        _secondaryFields.containsKey(entityType) &&
+        previous == null &&
+        existingRow == null) {
+      payload['concurrency'] = {
+        ...(payload.remove('localReference') as Map),
+        'createIfAbsent': true,
+      };
+    }
+    if (entityType == 'contexte_de_vie') {
+      final previousGuard = previous?['concurrency'];
+      final known =
+          existingRow?['remote_reference_known'] == 1 || existingRow == null;
+      if (previousGuard is Map && previousGuard.containsKey('reference')) {
+        payload['concurrency'] = {
+          ...((payload['concurrency'] ?? payload.remove('localReference'))
+              as Map),
+          'reference': previousGuard['reference'],
+        };
+      } else if (previous == null && known) {
+        final reference = existingRow?['remote_reference_json'] as String?;
+        payload['concurrency'] = {
+          ...(payload.remove('localReference') as Map),
+          'reference': reference == null ? null : jsonDecode(reference),
+        };
+      }
     }
     if (existingRow?['sync_state'] == SyncState.conflict.name) {
       payload.putIfAbsent('conflict', () => <String, dynamic>{});

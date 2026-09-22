@@ -20,3 +20,21 @@ test('typed checkbox mapping preserves null and does not coerce text or numbers'
   assert.equal(equals('text', 'false', false), false);
   assert.deepEqual(canonicalDatabasePatch({ enabled: 'false', text: 'false' }, columns), { enabled: false, text: 'false' });
 });
+
+test('numeric representation changes are limited to Number columns', () => {
+  const same = createDatabaseValueComparator([{ title: 'measure', uidt: 'Number' }]);
+  assert(same('measure', '91.0', 91));
+  assert(!same('measure', '91', 92));
+  assert(!same('measure', '', 0));
+  assert(!same('measure', null, 0));
+  assert(!same('measure', '9007199254740993', 9007199254740992));
+  assert(!same('text', '91', 91));
+});
+
+test('known JSON arrays ignore formatting but preserve order and all values', () => {
+  assert(equals('sdb_instances_json', '[{"id":"1","enabled":true}]', '[ { "enabled": true, "id": "1" } ]'));
+  assert(!equals('sdb_instances_json', '[1,2]', '[2,1]'));
+  assert(!equals('sdb_instances_json', '[{"id":"1"}]', '[{"id":"2"}]'));
+  assert(!equals('sdb_instances_json', 'invalid', '[]'));
+  assert(!equals('text', '[1, 2]', '[1,2]'));
+});

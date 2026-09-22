@@ -5,6 +5,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:aid_habitat_app/services/dossier_repository.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
+import 'package:aid_habitat_app/models/types.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +24,62 @@ void main() {
   tearDown(() async {
     await db.close();
   });
+
+  test(
+    'context captures its own reference while dossier also changes',
+    () async {
+      const reference = {
+        'recordId': 11,
+        'revision': '11111111-1111-4111-8111-111111111111',
+      };
+      await repository.mergeRemoteDossierPayloads([
+        {
+          ..._remoteDossier(autonomy: _autonomy(firstAttention: false)),
+          'contextServerReference': reference,
+        },
+      ]);
+      var row = (await db.query('contexte_de_vie')).single;
+      expect(row['remote_reference_known'], 1);
+      expect(
+        jsonDecode(row['remote_reference_json'] as String)['revision'],
+        reference['revision'],
+      );
+      await repository.setBeneficiaryPrepared(
+        dossierLocalId: 'dossier-prime',
+        prepared: true,
+      );
+      await repository.upsertContexteDeVie(
+        'dossier-prime',
+        'nocodb-beneficiaire-57',
+        medicalContext: const MedicalContext(pathology: 'new'),
+      );
+      final op = (await db.query(
+        'sync_operations',
+        where: 'entity_type = ?',
+        whereArgs: ['contexte_de_vie'],
+      )).single;
+      final guard = jsonDecode(op['payload_json'] as String)['concurrency'];
+      expect(guard['reference']['revision'], reference['revision']);
+      await repository.mergeRemoteDossierPayloads([
+        {
+          ..._remoteDossier(autonomy: _autonomy(firstAttention: true)),
+          'contextServerReference': {
+            ...reference,
+            'revision': '22222222-2222-4222-8222-222222222222',
+          },
+        },
+      ]);
+      row = (await db.query('contexte_de_vie')).single;
+      expect(
+        jsonDecode(row['remote_reference_json'] as String)['revision'],
+        reference['revision'],
+      );
+      expect(
+        jsonDecode(row['medical_context_json'] as String)['pathology'],
+        'new',
+      );
+    },
+  );
 
   test('le pull workspace hydrate le contexte multi-occupants', () async {
     await repository.mergeRemoteDossierPayloads([
