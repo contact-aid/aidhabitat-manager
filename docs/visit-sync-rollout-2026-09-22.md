@@ -110,9 +110,18 @@ chronologie suggérait une correction ultérieure.
 
 Décision métier confirmée le 22/09/2026 : la ligne `24`, avec les mesures
 `70 / 60 / 42`, est la version de référence. La ligne `23` (`76 / 53 / 34`)
-doit être archivée comme ancien doublon, puis retirée des données actives avant
-la création de l'index unique. Au moment de cette mise à jour documentaire,
-aucune des deux lignes de production n'a encore été supprimée ou fusionnée.
+a été copiée intégralement dans `public.aidhabitat_sync_archives`, avec la
+raison et l'horodatage de la décision, puis retirée des données actives dans
+une transaction PostgreSQL. La transaction vérifiait les trois mesures des
+deux lignes et leur `dossier_id` commun avant toute suppression.
+
+La relecture par l'API NocoDB utilisée par l'application confirme ensuite :
+
+- ligne `23` absente des données actives ;
+- ligne `24` présente avec `70 / 60 / 42` ;
+- 13 diagnostics sanitaires actifs ;
+- aucun doublon de `dossier_id` ;
+- aucun `dossier_id` vide.
 
 Il faut également inventorier les opérations en attente et la version des
 trois iPad et cinq postes web. Ne jamais forcer une déconnexion, vider le cache
@@ -122,10 +131,10 @@ ou réinstaller l'application pour faire disparaître une file locale.
 
 1. Copier le dump PostgreSQL vérifié hors du serveur Easypanel et conserver la
    preuve de restauration de `apps_restore_test_20260922`.
-2. Archiver la ligne sanitaire `23`, conserver la ligne `24`, puis vérifier
-   qu'il ne reste aucun doublon ou `dossier_id` vide dans les quatre tables
-   enfants.
-3. Ajouter et remplir `app_sync_revision` sur les sept tables de production.
+2. ~~Archiver la ligne sanitaire `23` et conserver la ligne `24`.~~ Terminé et
+   vérifié par l'API NocoDB le 22/09/2026.
+3. Contrôler les trois autres tables enfants, puis ajouter et remplir
+   `app_sync_revision` sur les sept tables de production.
 4. Créer les quatre index uniques SQL après un nouveau contrôle des doublons.
 5. Déployer le serveur et les clients compatibles en staging avec les deux
    indicateurs activés, puis réaliser le scénario physique à deux iPad décrit
