@@ -279,7 +279,7 @@ void main() {
       }
 
       test(
-        'simultaneous first saves share one row and retain an unknown reference',
+        'simultaneous first saves share one row and preserve create-only guard',
         () async {
           await db.delete(type);
           await Future.wait([edit(type, 1), edit(type, 2)]);
@@ -289,8 +289,19 @@ void main() {
           for (final entry in _values(type, 2).entries) {
             expect(next['updates'][entry.key], entry.value);
           }
-          expect(next['localReference']['baseValues'], isEmpty);
-          expect(next.containsKey('concurrency'), isFalse);
+          if (type == 'visit_recommendations') {
+            expect(next['localReference']['baseValues'], isEmpty);
+            expect(next.containsKey('concurrency'), isFalse);
+            return;
+          }
+          expect(next['concurrency']['baseValues'], isEmpty);
+          expect(next.containsKey('localReference'), isFalse);
+          if (type == 'contexte_de_vie') {
+            expect(next['concurrency'].containsKey('reference'), isTrue);
+            expect(next['concurrency']['reference'], isNull);
+          } else {
+            expect(next['concurrency']['createIfAbsent'], isTrue);
+          }
         },
       );
 

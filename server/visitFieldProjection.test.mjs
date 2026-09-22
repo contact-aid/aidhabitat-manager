@@ -28,9 +28,18 @@ for (const [table, mapper, fieldsVariable] of [
   test(`${table}: all editable mapped columns are included in the read projection`, () => {
     const owner = mapper.startsWith('/') ? route(mapper) : variable(source, mapper);
     assert(owner, mapper);
-    const root = fieldsVariable ? variable(owner, fieldsVariable).initializer
+    let root = fieldsVariable ? variable(owner, fieldsVariable).initializer
       : find(owner, (node) => ts.isCallExpression(node)
         && node.expression.getText(source) === 'sanitizeUndefined').arguments[0];
+    // A route may bind its projected columns through a locally declared
+    // mapper function (`const fields = mapFields(payload);`) instead of an
+    // inline object literal, so a plain `fields` initializer can be a call
+    // expression. Resolve it back to the callee's own object-literal body.
+    if (root && ts.isCallExpression(root)) {
+      const callee = variable(owner, root.expression.getText(source));
+      assert(callee, `${mapper}: unresolved field mapper call ${root.getText(source)}`);
+      root = ts.isArrowFunction(callee.initializer) ? callee.initializer.body : callee.initializer;
+    }
     const columns = new Set();
     const walk = (node) => {
       if (ts.isPropertyAssignment(node)) { columns.add(propertyName(node)); return; }

@@ -17,6 +17,9 @@ bash "$script_dir/test_safely.sh" \
   test/services/sync_errors_test.dart \
   test/services/sync_acknowledgement_test.dart \
   test/services/versioned_ack_transport_test.dart \
+  test/services/context_ack_transport_test.dart \
+  test/services/context_version_storage_test.dart \
+  test/services/agent1_context_sync_protocol_test.dart \
   test/services/sync_push_outcome_test.dart \
   test/services/sync_session_scope_test.dart \
   test/services/agent3_sync_operation_ownership_test.dart \

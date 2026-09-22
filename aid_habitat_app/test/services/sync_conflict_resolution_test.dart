@@ -27,6 +27,7 @@ Map<String, dynamic> remote({
     'updatedAt': version,
   },
   'housing': {
+    'id': 'housing-1',
     'surface': 80,
     'updatedAt': version,
     'roomsBreakdown': {
@@ -278,6 +279,54 @@ void main() {
       expect(jsonDecode(housing['rdc_rooms_json'] as String), ['Remote']);
       expect(jsonDecode(housing['basement_rooms_json'] as String), ['Cave']);
       expect(housing['surface'], 80);
+    },
+  );
+
+  test(
+    'missing remote housing is reviewable and keep-local becomes a guarded create',
+    () async {
+      await db.update('housings', {'remote_updated_at': null});
+      await dossiers.updateHousing('dossier-1', {'surface': 91.0});
+      await conflict('housing');
+      final raw = remote(version: _new);
+      raw['housing'] = {
+        'basement': false,
+        'rdc': false,
+        'floor': false,
+        'garage': false,
+        'veranda': false,
+        'balcon': false,
+        'terrasse': false,
+        'jardin': false,
+        'heatingMain': false,
+        'heatingDetails': {
+          'electric': false,
+          'gas': false,
+          'oil': false,
+          'heatPump': false,
+          'collective': false,
+          'wood': false,
+          'pellet': false,
+          'other': false,
+        },
+        'easyAccess': null,
+      };
+      final review = (await dossiers.reviewConflicts('dossier-1', raw)).single;
+      expect(review.remoteExists, isFalse);
+      expect(review.remoteUpdatedAt, isNull);
+      expect(review.localValues, {'surface': 91.0});
+      expect(review.remoteValues, {'surface': null});
+      await expectLater(
+        dossiers.resolveReviewedConflict(review, keepLocal: false),
+        throwsStateError,
+      );
+      expect((await db.query('housings')).single['surface'], 91.0);
+      await dossiers.resolveReviewedConflict(review, keepLocal: true);
+      final op = await payload();
+      expect(op['concurrency']['createIfAbsent'], isTrue);
+      expect(op['concurrency']['expectedUpdatedAt'], isNull);
+      expect(op['concurrency']['baseValues'], isEmpty);
+      expect((await db.query('housings')).single['surface'], 91.0);
     },
   );
 

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'context_sync_protocol.dart';
 
 String newSyncWriteId() {
   final random = Random.secure();
@@ -51,6 +52,8 @@ Map<String, dynamic> buildSyncMutation({
           'concurrency': {
             'version': 1,
             'writeId': newSyncWriteId(),
+            if (previousGuard?['createIfAbsent'] == true)
+              'createIfAbsent': true,
             if (previousGuard?['writeId'] is String)
               'predecessorWriteIds': [
                 previousGuard!['writeId'],
@@ -123,7 +126,23 @@ Map<String, dynamic>? rebaseAcknowledgedMutation({
   final guard = pending['concurrency'];
   final oldUpdates = sent['updates'];
   final updates = pending['updates'];
-  if (DateTime.tryParse(version) == null ||
+  Map<String, dynamic>? contextReference;
+  final context = oldGuard is Map && oldGuard.containsKey('reference');
+  if (context) {
+    try {
+      contextReference = ContextServerReference.fromJson(
+        (jsonDecode(version) as Map).cast<String, dynamic>(),
+      ).toJson();
+    } catch (_) {
+      return null;
+    }
+    if (guard is! Map ||
+        !guard.containsKey('reference') ||
+        !_equalJson(oldGuard['reference'], guard['reference'])) {
+      return null;
+    }
+  }
+  if ((!context && DateTime.tryParse(version) == null) ||
       pending.containsKey('conflict') ||
       oldGuard is! Map ||
       guard is! Map ||
@@ -141,6 +160,12 @@ Map<String, dynamic>? rebaseAcknowledgedMutation({
   final base = Map<String, dynamic>.from(guard['baseValues'] as Map);
   final oldBase = oldGuard['baseValues'] as Map;
   for (final key in oldUpdates.keys) {
+    if ((context || oldGuard['createIfAbsent'] == true) &&
+        updates.containsKey(key) &&
+        !base.containsKey(key) &&
+        !oldBase.containsKey(key)) {
+      continue;
+    }
     if (!updates.containsKey(key) ||
         !base.containsKey(key) ||
         !oldBase.containsKey(key) ||
@@ -155,8 +180,10 @@ Map<String, dynamic>? rebaseAcknowledgedMutation({
     'concurrency': {
       ...Map<String, dynamic>.from(guard),
       'baseValues': base,
-      'expectedUpdatedAt': version,
+      'expectedUpdatedAt': context ? contextReference!['updatedAt'] : version,
+      if (context) 'reference': contextReference,
       'predecessorWriteIds': <String>[],
+      if (guard.containsKey('createIfAbsent')) 'createIfAbsent': false,
     },
   };
 }

@@ -145,6 +145,47 @@ if (!process.argv.includes('--runner')) {
       assert.equal((await patch()).status, 409);
       assert.equal(writes, 1);
     }
+
+    mock.reset(); active = null; mock.removeHousing();
+    const writeId = '22222222-2222-4222-8222-222222222222';
+    const createBody = { comments: 'first housing', concurrency: {
+      version: 1, writeId, createIfAbsent: true, expectedUpdatedAt: null, baseValues: {},
+    } };
+    const create = (body = createBody) => nativeFetch(
+      `${origin}/api/logements/by-beneficiary/${patientId}`,
+      { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-app-session': token },
+        body: JSON.stringify(body) },
+    );
+    mock.loseNextResponse();
+    assert.equal((await create()).status, 500);
+    assert.equal(mock.rows('logement').length, 1, 'the uncertain create committed once');
+    const replay = await create();
+    if (replay.status !== 200) assert.fail(await replay.text());
+    const replayData = await replay.json();
+    assert.equal(replayData.data.id, writeId);
+    assert.match(replayData.data.updatedAt, /^2026-09-02T10:00:00\.000Z$/);
+    assert.equal(mock.rows('logement').length, 1, 'retry must not duplicate housing');
+
+    const competing = await create({ comments: 'other device', concurrency: {
+      version: 1, writeId: '33333333-3333-4333-8333-333333333333',
+      createIfAbsent: true, expectedUpdatedAt: null, baseValues: {},
+    } });
+    if (competing.status !== 409) assert.fail(await competing.text());
+    assert.equal(mock.rows('logement').length, 1, 'competing creation must not overwrite or duplicate');
+    assert.equal(mock.row('logement').commentaire, 'first housing');
+
+    mock.reset(); mock.removeHousing();
+    const [deviceA, deviceB] = await Promise.all([
+      create({ comments: 'device A', concurrency: { version: 1,
+        writeId: '44444444-4444-4444-8444-444444444444', createIfAbsent: true,
+        expectedUpdatedAt: null, baseValues: {} } }),
+      create({ comments: 'device B', concurrency: { version: 1,
+        writeId: '55555555-5555-4555-8555-555555555555', createIfAbsent: true,
+        expectedUpdatedAt: null, baseValues: {} } }),
+    ]);
+    assert.deepEqual([deviceA.status, deviceB.status].sort(), [200, 409]);
+    assert.equal(mock.rows('logement').length, 1, 'simultaneous devices create exactly one row');
+    assert.deepEqual(mock.violations, []);
     console.log('RECOVERY_PASS');
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 }

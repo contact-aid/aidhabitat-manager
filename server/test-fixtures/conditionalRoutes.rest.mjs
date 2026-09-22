@@ -91,6 +91,8 @@ export function createRestMock({ referenceRows = {} } = {}) {
   return {
     calls, violations, schemas,
     row: (entity) => rows[tables[entity]][0],
+    rows: (entity) => rows[tables[entity]],
+    removeHousing() { rows[tables.logement] = []; },
     patches: () => calls.filter((call) => call.method === 'PATCH'),
     reset() { rows = structuredClone(initial); calls.length = 0; race = null; loseNextResponse = false; },
     loseNextResponse() { loseNextResponse = true; },
@@ -142,6 +144,23 @@ export function createRestMock({ referenceRows = {} } = {}) {
             const fields = url.searchParams.get('fields')?.split(',');
             if (fields) list = list.map((row) => Object.fromEntries(fields.map((key) => [key, row[key] ?? null])));
             return json({ list, pageInfo: { totalRows, isLastPage: offset + limit >= totalRows } });
+          }
+          if (method === 'POST') {
+            paramsOnly(url, []);
+            call.body = JSON.parse(init.body);
+            const inserts = Array.isArray(call.body) ? call.body : [call.body];
+            const created = inserts.map((fields, index) => ({
+              Id: Math.max(0, ...rows[tableId].map((row) => Number(row.Id) || 0)) + index + 1,
+              ...fields,
+              CreatedAt: '2026-09-02T10:00:00.000Z',
+              UpdatedAt: '2026-09-02T10:00:00.000Z',
+            }));
+            rows[tableId].push(...created);
+            if (loseNextResponse) {
+              loseNextResponse = false;
+              throw new Error('SIMULATED_RESPONSE_LOST_AFTER_COMMIT');
+            }
+            return json(Array.isArray(call.body) ? created : created[0]);
           }
           if (method === 'PATCH' && tableId === tables.ergos) {
             paramsOnly(url, []);

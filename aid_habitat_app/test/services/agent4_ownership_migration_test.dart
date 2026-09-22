@@ -11,6 +11,7 @@ void main() {
   setUpAll(sqfliteFfiInit);
 
   Future<void> createV23Queue(Database db) async {
+    await db.execute('CREATE TABLE contexte_de_vie (id TEXT PRIMARY KEY)');
     await db.execute('''
       CREATE TABLE app_session (
         id INTEGER PRIMARY KEY CHECK (id = 1),

@@ -410,6 +410,7 @@ class NocodbSyncService {
               'patient',
               'housing',
               'dossier',
+              'contexte_de_vie',
               'mesures_anthropometriques',
               'observations_synthese',
               'diagnostic_sanitaires',
@@ -419,7 +420,9 @@ class NocodbSyncService {
           final sentPayload =
               (payload['retryMutation'] as Map?)?.cast<String, dynamic>() ??
               payload;
-          if (payload['retryMutation'] is Map &&
+          if (operation.entityType != 'contexte_de_vie' &&
+              (sentPayload['concurrency'] as Map?)?['createIfAbsent'] != true &&
+              payload['retryMutation'] is Map &&
               rebaseAcknowledgedMutation(
                     sent: sentPayload,
                     pending: payload,
@@ -435,27 +438,42 @@ class NocodbSyncService {
               remoteData: {'error': 'SYNC_BASELINE_REQUIRED'},
             );
           }
-          final version = await switch (operation.entityType) {
-            'patient' => _processPatientOperation(operation, sentPayload),
-            'housing' => _processHousingOperation(operation, sentPayload),
-            'mesures_anthropometriques' => _processMesuresOperation(
+          String? remoteEntityId;
+          final String? version;
+          if (operation.entityType == 'housing') {
+            final result = await _processHousingOperation(
               operation,
               sentPayload,
-            ),
-            'observations_synthese' => _processObservationsOperation(
-              operation,
-              sentPayload,
-            ),
-            'diagnostic_sanitaires' => _processDiagnosticSanitairesOperation(
-              operation,
-              sentPayload,
-            ),
-            _ => _processDossierOperation(operation, sentPayload),
-          };
+            );
+            version = result.updatedAt;
+            remoteEntityId = result.id;
+          } else {
+            version = await switch (operation.entityType) {
+              'patient' => _processPatientOperation(operation, sentPayload),
+              'contexte_de_vie' => _processContexteDeVieOperation(
+                operation,
+                sentPayload,
+              ),
+              'mesures_anthropometriques' => _processMesuresOperation(
+                operation,
+                sentPayload,
+              ),
+              'observations_synthese' => _processObservationsOperation(
+                operation,
+                sentPayload,
+              ),
+              'diagnostic_sanitaires' => _processDiagnosticSanitairesOperation(
+                operation,
+                sentPayload,
+              ),
+              _ => _processDossierOperation(operation, sentPayload),
+            };
+          }
           SyncSessionScope.current?.check();
           acknowledged = await _syncRepository.acknowledgeVersionedMutation(
             operation,
             version,
+            remoteEntityId: remoteEntityId,
           );
         } else {
           await _processOperation(operation);
@@ -580,6 +598,7 @@ class NocodbSyncService {
       throw StateError('Unsupported queued mutation version');
     }
     final expected = guard['expectedUpdatedAt'];
+    if (expected == null && guard['createIfAbsent'] == true) return null;
     if (expected is! String || DateTime.tryParse(expected) == null) {
       throw ConflictException('La version de reference doit etre verifiee.');
     }
@@ -819,10 +838,8 @@ class NocodbSyncService {
   }
 
   /// Pushes a Contexte de vie update (medical context + autonomy
-  /// checklists) via `PATCH /api/dossiers/:dossierId`. The server's
-  /// `upsertContexte` reads `medicalContext` + `autonomy` from the body
-  /// and writes them into the NocoDB context table.
-  Future<void> _processContexteDeVieOperation(
+  /// checklists) with the context row's own revision, never the dossier clock.
+  Future<String> _processContexteDeVieOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -836,34 +853,17 @@ class NocodbSyncService {
     if (dossierId == null || dossierId.isEmpty || updates == null) {
       throw Exception('Payload contexte de vie incomplet');
     }
-    // Optimistic concurrency : on transmet le timestamp serveur connu
-    // localement. Le serveur (sendConflictIfStale) renvoie 409 si la
-    // ligne a été modifiée depuis — l'op est alors marquée `conflict`
-    // et l'écran de résolution est proposé à l'utilisateur.
-    final expected = await _expectedVersion(
-      payload,
-      () => _readRemoteUpdatedAt(
-        table: 'dossiers',
-        idColumn: 'local_id',
-        idValue: dossierId,
-      ),
+    final guard = payload['concurrency'];
+    if (guard is! Map || !guard.containsKey('reference')) {
+      throw ConflictException(
+        'La reference propre au contexte de vie doit etre verifiee.',
+        remoteData: {'error': 'CONTEXT_REFERENCE_REQUIRED'},
+      );
+    }
+    return _apiClient.updateContext(
+      dossierId: await _resolveChildDossierId(dossierId),
+      payload: payload,
     );
-    final updatesWithGuard = <String, dynamic>{
-      ...updates,
-      if (expected != null) 'expectedUpdatedAt': expected,
-      if (payload['concurrency'] is Map) 'concurrency': payload['concurrency'],
-    };
-    // ignore: avoid_print
-    print(
-      '[sync] PATCH /api/dossiers/$dossierId (contexte) '
-      'keys=${updates.keys.toList()} '
-      'expectedUpdatedAt=${expected ?? "null"}',
-    );
-    final newUpdatedAt = await _apiClient.updateDossier(
-      dossierId: dossierId,
-      updates: updatesWithGuard,
-    );
-    await _syncRepository.storeRemoteUpdatedAt(operation, newUpdatedAt);
   }
 
   /// Push des mesures anthropométriques via `PUT /api/mesures/:dossierId`.
@@ -1074,7 +1074,7 @@ class NocodbSyncService {
 
   /// Pushes a housing update to NocoDB. The housing row is resolved to a
   /// beneficiary remote ID by joining `dossiers` and `patients`.
-  Future<String?> _processHousingOperation(
+  Future<HousingWriteResult> _processHousingOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -1126,11 +1126,11 @@ class NocodbSyncService {
       'updates=${updates.keys.toList()} '
       'expectedUpdatedAt=${expected ?? "null"}',
     );
-    final newUpdatedAt = await _apiClient.updateLogement(
+    final result = await _apiClient.updateLogement(
       beneficiaryId: remoteId,
       updates: updatesWithGuard,
     );
-    return newUpdatedAt;
+    return result;
   }
 
   Future<String?> _resolveRemotePatientId(String localId) async {

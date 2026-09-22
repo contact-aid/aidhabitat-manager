@@ -239,6 +239,18 @@ void main() {
     },
   );
 
+  test(
+    'first housing save is explicitly guarded as create-if-absent',
+    () async {
+      await db.update('housings', {'remote_updated_at': null});
+      await repository.updateHousing('dossier-1', {'surface': 95});
+      final op = await operation('housing');
+      expect(op['concurrency']['createIfAbsent'], isTrue);
+      expect(op['concurrency']['expectedUpdatedAt'], isNull);
+      expect(op['concurrency']['baseValues'], isEmpty);
+    },
+  );
+
   test('unchanged save leaves the captured operation untouched', () async {
     await repository.updatePatient('patient-1', {'first_name': 'Local'});
     final before = (await db.query('sync_operations')).single;
