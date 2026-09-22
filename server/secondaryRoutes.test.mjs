@@ -215,6 +215,16 @@ async function runRoutes() {
         rows.set(table, []);
         assert.equal(expect(await request(pathname, owner), 200), null);
       });
+      await check('guarded creation waits for database preparation', async () => {
+        rows.set(table, []);
+        const body = { ...definition.update, concurrency: {
+          version: 1, writeId: '11111111-1111-4111-8111-111111111111',
+          createIfAbsent: true, baseValues: {},
+        } };
+        const result = expect(await request(pathname, owner, body), 503);
+        assert.equal(result.error, 'SYNC_CONDITIONAL_NOT_PREPARED');
+        assert.equal(writes().length, 0);
+      });
       await check('authentication and ownership checked before writes', async () => {
         expect(await request(pathname, undefined, guarded()), 401);
         expect(await request(pathname, other, guarded()), 403);

@@ -292,6 +292,9 @@ class DossierRepository {
           orderBy: 'created_at, id',
         );
         if (operations.isEmpty) continue;
+        if (!remoteByType.containsKey(type)) {
+          throw StateError('Lecture distante de la fiche indisponible.');
+        }
         final raw = remoteByType[type];
         final context = type == 'contexte_de_vie';
         final reference = context && raw?['serverReference'] != null
@@ -299,16 +302,17 @@ class DossierRepository {
                 (raw!['serverReference'] as Map).cast<String, dynamic>(),
               )
             : null;
+        final remoteExists = context ? reference != null : raw != null;
         final version = context
-            ? (reference?.updatedAt ?? '')
+            ? reference?.updatedAt
             : raw == null
             ? null
             : _extractRemoteUpdatedAt(raw);
-        if (raw == null ||
-            raw['dossierId'] != remoteId ||
+        if ((raw != null && raw['dossierId'] != remoteId) ||
             (context
-                ? !raw.containsKey('serverReference')
-                : version == null || DateTime.tryParse(version) == null)) {
+                ? raw == null || !raw.containsKey('serverReference')
+                : remoteExists &&
+                    (version == null || DateTime.tryParse(version) == null))) {
           throw StateError('Version distante de la fiche indisponible.');
         }
         final rows = await txn.query(
@@ -341,10 +345,15 @@ class DossierRepository {
           final values = <String, dynamic>{};
           final columns = <String, dynamic>{};
           for (final key in updates.keys) {
-            if (!fields.containsKey(key) || !raw.containsKey(key)) {
+            if (!fields.containsKey(key) ||
+                (remoteExists && !raw!.containsKey(key))) {
               throw StateError('Valeur distante absente pour $key.');
             }
-            final value = raw[key];
+            if (!remoteExists) {
+              values[key] = null;
+              continue;
+            }
+            final value = raw![key];
             if (context) {
               if (value is! Map) {
                 throw StateError('Contexte distant incomplet.');
@@ -375,7 +384,7 @@ class DossierRepository {
               entityType: type,
               entityLocalId: dossierId,
               payloadJson: payloadJson,
-              remoteUpdatedAt: version!,
+              remoteUpdatedAt: version,
               contextReferenceJson: context
                   ? jsonEncode(reference?.toJson())
                   : null,
@@ -384,7 +393,7 @@ class DossierRepository {
               remoteColumns: Map.unmodifiable(columns),
               localRowId: rows.single['local_id'] as String,
               table: type,
-              remoteExists: true,
+              remoteExists: remoteExists,
             ),
           );
         }
@@ -433,7 +442,7 @@ class DossierRepository {
         throw StateError('Une autre modification attend sur cette fiche.');
       }
       if (!review.remoteExists && !keepLocal) {
-        throw StateError('Aucun logement serveur ne peut etre restaure.');
+        throw StateError('Aucune fiche serveur ne peut etre restauree.');
       }
       final now = DateTime.now().toIso8601String();
       await txn.insert('sync_conflict_history', {

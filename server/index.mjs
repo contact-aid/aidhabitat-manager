@@ -8583,6 +8583,11 @@ const secondaryIdentity = (record, canonicalDossierId = field(record, 'dossier_i
 });
 const secondaryWriteConflict = (req, res, record) => {
   const guarded = Object.hasOwn(req.body || {}, 'concurrency');
+  if (guarded && req.body?.concurrency?.createIfAbsent === true &&
+      !conditionalSyncEnabled) {
+    res.status(503).json({ success: false, error: 'SYNC_CONDITIONAL_NOT_PREPARED' });
+    return true;
+  }
   const guard = req.body?.concurrency;
   const expected = req.body?.expectedUpdatedAt ?? req.get('If-Unmodified-Since');
   const expectedTime = typeof expected === 'string' && expected.trim() ? Date.parse(expected) : NaN;

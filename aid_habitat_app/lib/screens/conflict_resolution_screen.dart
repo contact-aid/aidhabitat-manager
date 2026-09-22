@@ -54,12 +54,13 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
         _reviews = reviews;
         _loading = false;
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error =
-            'Comparaison indisponible. Vos modifications restent sur cet appareil.';
+        _error = error is StateError
+            ? 'Comparaison indisponible : ${error.message} Vos modifications restent sur cet appareil.'
+            : 'Comparaison indisponible. Vos modifications restent sur cet appareil.';
       });
     }
   }
@@ -167,7 +168,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                 ? describeSyncConflict(
                     jsonDecode(review.payloadJson) as Map<String, dynamic>,
                   )
-                : 'Aucun logement n’existe encore sur le serveur. '
+                : 'Aucune fiche n’existe encore sur le serveur. '
                       'Vos saisies sont conservées sur cet appareil.',
           ),
           const SizedBox(height: 12),
@@ -191,7 +192,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                       final remote = _value(
                         review.remoteExists
                             ? 'Serveur'
-                            : 'Serveur — aucun logement',
+                            : 'Serveur — aucune fiche',
                         review.remoteValues[key],
                       );
                       return constraints.maxWidth < 600
@@ -228,7 +229,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                 label: Text(
                   review.remoteExists
                       ? 'Conserver mes changements'
-                      : 'Conserver mes changements et créer le logement',
+                      : 'Conserver mes changements et créer la fiche',
                 ),
               ),
               if (review.remoteExists)

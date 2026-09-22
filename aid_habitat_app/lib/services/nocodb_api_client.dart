@@ -744,6 +744,12 @@ class NocodbApiClient {
           )
           .timeout(_jsonBatchTimeout),
     );
+    if (response.statusCode == 503 &&
+        response.body.contains('CONTEXT_SYNC_NOT_PREPARED')) {
+      throw StateError(
+        'La synchronisation du contexte de vie n’est pas encore activée sur le serveur. La migration de la base doit être vérifiée avant activation.',
+      );
+    }
     if (response.statusCode != 200) {
       throw Exception('Context read failed (${response.statusCode})');
     }
