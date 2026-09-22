@@ -1,8 +1,8 @@
 # Relevé de visite — état du déploiement atomique au 22/09/2026
 
 Ce document complète `sync-context-atomic-2026-09-17.md`. Il décrit des
-constats vérifiés sur les bases réelles, mais n'autorise pas l'activation de la
-synchronisation conditionnelle en production.
+constats vérifiés sur les bases réelles et l'état effectivement observé des
+services de production.
 
 ## État du code
 
@@ -116,8 +116,34 @@ contrôle SQL dans la même transaction a confirmé zéro doublon et zéro
 `dossier_id` vide parmi les lignes actives des quatre tables.
 
 Le contrôle API final rapporte `schemaAndRevisionsReady: true` pour les sept
-tables. Les deux indicateurs de synchronisation restent néanmoins désactivés
-jusqu'au déploiement du code compatible et à la recette des clients.
+tables.
+
+## État réellement actif en production
+
+Une vérification directe dans Easypanel le 22/09/2026 a montré que les deux
+indicateurs étaient déjà actifs dans le conteneur public :
+
+- `AIDHABITAT_CONDITIONAL_SYNC=1` ;
+- `AIDHABITAT_UNIQUE_CHILDREN_READY=1`.
+
+Les domaines publics `api.aidhabitat.fr` et `app.aidhabitat.fr` sont rattachés
+aux services nommés respectivement `aidhabitat-api-staging` et
+`aidhabitat-web-staging`. Malgré leur nom, ce sont donc bien les services de
+production. Les deux sont épinglés sur les images immuables du commit
+`45d5a68d04cf10e4fad43d6b768f9f1972c878bf`.
+
+Ce commit contient tout le code applicatif de la série de correctifs, y compris
+la revue des conflits de contexte de vie et le protocole conditionnel. Les
+commits suivants jusqu'à la fusion `03a4e2e` ne modifient que la documentation
+et les outils de préparation de la base ; un nouveau déploiement applicatif
+n'est donc pas nécessaire pour les intégrer.
+
+Les contrôles publics `check-live-stack` et `check-data-sync-stability` passent
+avec zéro échec bloquant. La base, les révisions et les index sont compatibles
+avec les indicateurs actifs. En revanche, tout ancien client qui n'envoie pas
+la baseline et l'identifiant durable exigés reçoit volontairement une réponse
+HTTP 428 sans écriture. Il reste donc obligatoire de vérifier ou actualiser
+chaque iPad et chaque poste web avant de conclure la recette.
 
 `Diagnostic_sanitaires` comporte deux lignes, Id `23` et `24`, pour le même
 `dossier_id`. Elles divergent notamment sur les dimensions des portes de salle
@@ -160,12 +186,14 @@ ou réinstaller l'application pour faire disparaître une file locale.
    l'API NocoDB le 22/09/2026.
 4. ~~Créer les quatre index uniques SQL après un nouveau contrôle des
    doublons.~~ Terminé et relu dans `pg_indexes` le 22/09/2026.
-5. Déployer le serveur et les clients compatibles en staging avec les deux
-   indicateurs activés, puis réaliser le scénario physique à deux iPad décrit
-   dans `sync-context-atomic-2026-09-17.md`.
-6. Mettre à jour tous les clients et seulement ensuite répéter la migration et
-   activer `AIDHABITAT_CONDITIONAL_SYNC=1`, puis
-   `AIDHABITAT_UNIQUE_CHILDREN_READY=1`, en production.
-
-Tant que ces étapes ne sont pas terminées, les deux indicateurs de production
-doivent rester désactivés.
+5. ~~Déployer le serveur et le client web compatibles avec les deux indicateurs
+   actifs.~~ Les services publics exécutent le même commit compatible
+   `45d5a68` et les contrôles publics passent.
+6. Sur chacun des trois iPad et des cinq postes web, forcer le chargement de la
+   version courante sans vider les données locales, puis inventorier les
+   opérations encore en attente. Ne jamais effacer le cache ou réinstaller
+   avant d'avoir vidé ou exporté la file locale.
+7. Réaliser le scénario physique à deux iPad décrit dans
+   `sync-context-atomic-2026-09-17.md`, notamment deux modifications concurrentes
+   du contexte de vie et du diagnostic sanitaire, puis vérifier qu'une seule
+   version gagne et que l'autre appareil peut ouvrir la revue de conflit.
