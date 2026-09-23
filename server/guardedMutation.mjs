@@ -6,12 +6,13 @@ export const SYNC_REVISION_FIELD = 'app_sync_revision';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export class SyncMutationError extends Error {
-  constructor(status, code, observed = null) {
+  constructor(status, code, observed = null, details = null) {
     super(code);
     this.status = status;
     this.statusCode = status;
     this.code = code;
     this.observed = observed;
+    this.details = details;
   }
 }
 
@@ -39,7 +40,8 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
  * app_sync_revision and confirm content, never use an unconditional fallback.
  */
 export function createGuardedMutation({ readRecord, writer, readColumns }) {
-  return async ({ tableId, recordId, fields, baseFields, writeId, authorizeObserved }) => {
+  return async ({ tableId, recordId, fields, baseFields, writeId, authorizeObserved,
+    normalizeObserved }) => {
     if (!uuid.test(writeId ?? '') || typeof writeId !== 'string') {
       throw new SyncMutationError(428, 'SYNC_MUTATION_ID_REQUIRED');
     }
@@ -61,26 +63,37 @@ export function createGuardedMutation({ readRecord, writer, readColumns }) {
       if (authorizeObserved && !await authorizeObserved(observed)) {
         throw new SyncMutationError(403, 'SYNC_RECORD_FORBIDDEN');
       }
+      const comparisonObserved = normalizeObserved
+        ? await normalizeObserved(structuredClone(observed))
+        : observed;
       const revision = observed[SYNC_REVISION_FIELD];
       if (!uuid.test(revision ?? '')) {
         throw new SyncMutationError(503, 'SYNC_REVISION_NOT_PREPARED');
       }
       if (revision === writeId) {
-        const replayPlan = planDatabaseMutation({ fields: desired, baseFields: baseline, observed, equals });
+        const replayPlan = planDatabaseMutation({ fields: desired, baseFields: baseline,
+          observed: comparisonObserved, equals });
         if (!replayPlan.conflicts.length && !replayPlan.retainedFields.length && !Object.keys(replayPlan.patch).length) {
           return { applied: true, replay: true };
         }
-        throw new SyncMutationError(409, 'SYNC_WRITE_ID_MISMATCH', observed);
+        throw new SyncMutationError(409, 'SYNC_WRITE_ID_MISMATCH', observed, {
+          conflicts: replayPlan.conflicts, retainedFields: replayPlan.retainedFields, writeId,
+        });
       }
-      const plan = planDatabaseMutation({ fields: desired, baseFields: baseline, observed, equals });
+      const plan = planDatabaseMutation({ fields: desired, baseFields: baseline,
+        observed: comparisonObserved, equals });
       if (plan.conflicts.length) {
-        throw new SyncMutationError(409, 'SYNC_FIELD_CONFLICT', observed);
+        throw new SyncMutationError(409, 'SYNC_FIELD_CONFLICT', observed, {
+          conflicts: plan.conflicts, retainedFields: plan.retainedFields, writeId,
+        });
       }
       // The current client only consumes updatedAt from a PATCH response.
       // Acknowledging a local undo while keeping a different remote value
       // would mark that stale local value as synced until the next pull.
       if (plan.retainedFields.length) {
-        throw new SyncMutationError(409, 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW', observed);
+        throw new SyncMutationError(409, 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW', observed, {
+          conflicts: plan.conflicts, retainedFields: plan.retainedFields, writeId,
+        });
       }
       if (!Object.keys(plan.patch).length) return { applied: true, replay: true };
       const result = await writer({ tableId, recordId, expectedRevision: revision,

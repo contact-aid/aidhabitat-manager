@@ -1176,9 +1176,9 @@ export const buildLegacyBathroomInstances = (payload) => {
     sdbSolGlissant: Boolean(payload?.sdbSolGlissant),
     sdbMachineALaver: Boolean(payload?.sdbMachineALaver),
     sdbMachineALaverHauteur: payload?.sdbMachineALaverHauteur ?? null,
-    porteSdbLargeurSuffisante: Boolean(payload?.porteSdbLargeurSuffisante),
+    porteSdbLargeurSuffisante: payload?.porteSdbLargeurSuffisante ?? null,
     porteSdbDimension: payload?.porteSdbDimension ?? null,
-    porteSdbSensAdapte: Boolean(payload?.porteSdbSensAdapte),
+    porteSdbSensAdapte: payload?.porteSdbSensAdapte ?? null,
   }];
 };
 
@@ -1186,6 +1186,7 @@ export const buildLegacyWcInstances = (payload) => {
   const hasLegacyWcData = [
     payload?.wcCuvetteBonneHauteur,
     payload?.wcCuvetteTropBasse,
+    payload?.wcCuvetteTropHaute,
     payload?.wcCuvetteTropHaute,
     payload?.wcCuvetteHauteur,
     payload?.wcBarreRelevement,
@@ -1204,11 +1205,12 @@ export const buildLegacyWcInstances = (payload) => {
     wcCuvetteBonneHauteur: Boolean(payload?.wcCuvetteBonneHauteur),
     wcCuvetteTropBasse: Boolean(payload?.wcCuvetteTropBasse),
     wcCuvetteTropHaute: Boolean(payload?.wcCuvetteTropHaute),
+    wcCuvetteTropHaute: Boolean(payload?.wcCuvetteTropHaute),
     wcCuvetteHauteur: payload?.wcCuvetteHauteur ?? null,
     wcBarreRelevement: Boolean(payload?.wcBarreRelevement),
-    porteWcLargeurSuffisante: Boolean(payload?.porteWcLargeurSuffisante),
+    porteWcLargeurSuffisante: payload?.porteWcLargeurSuffisante ?? null,
     porteWcDimension: payload?.porteWcDimension ?? null,
-    porteWcSensAdapte: Boolean(payload?.porteWcSensAdapte),
+    porteWcSensAdapte: payload?.porteWcSensAdapte ?? null,
     observationEquipementsUtilisation: stringValue(payload?.observationEquipementsUtilisation),
   }];
 };
@@ -1576,7 +1578,7 @@ export const mapHousing = (housingRecord) => {
     yearHabitation: stringValue(field(housingRecord, 'annee_habitation')),
     surface: stringValue(field(housingRecord, 'surface_habitable')),
     levels: toNumber(field(housingRecord, 'nombre_niveaux')),
-    typology: refLabel(field(housingRecord, 'type_de_logement')) || 'Maison',
+    typology: refLabel(field(housingRecord, 'type_de_logement')),
     basement: toBool(field(housingRecord, 'sous_sol')),
     basementDesc: stringValue(field(housingRecord, 'description_sous_sol')),
     rdc: toBool(field(housingRecord, 'rdc')),
@@ -1681,7 +1683,7 @@ export const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
   familySituation: refLabel(field(beneficiaryRecord, 'situation_proprietaire')),
   occupationStatus: normalizeOccupation(refLabel(field(beneficiaryRecord, 'statut_occupation'))),
   numberPeople: toNumber(field(beneficiaryRecord, 'nombre_personnes')),
-  incomeCategory: stringValue(field(beneficiaryRecord, 'categorie_revenu_calculee')) || 'Modeste',
+  incomeCategory: stringValue(field(beneficiaryRecord, 'categorie_revenu_calculee')),
   fiscalRevenue: toNumber(field(beneficiaryRecord, 'revenu_fiscal_reference')),
   apa: Boolean(field(beneficiaryRecord, 'beneficiaire_apa')),
   invalidity: Boolean(field(beneficiaryRecord, 'reconnaissance_invalidite_mdph')),

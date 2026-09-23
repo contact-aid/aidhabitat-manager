@@ -1,19 +1,11 @@
 import { isDeepStrictEqual } from 'node:util';
+import { legacyDefaultFalseColumns } from './nocodbScalarValues.mjs';
 
 // These housing checkboxes are read as false when the legacy database is empty.
 // Nullable choices (notably acces_facile_rue) deliberately stay out of this set.
-export const defaultFalseHousingColumns = new Set([
-  'sous_sol', 'rdc', 'etage', 'second_etage', 'third_etage', 'garage',
-  'veranda', 'balcon', 'terrasse', 'jardin', 'chauffage',
-  'radiateurs_electrique', 'chaudiere_gaz', 'chaudiere_fioul',
-  'pompe_a_chaleur', 'chaudiere_collective', 'cheminee_pole_bois',
-  'poele_granules', 'autre_chauffage', 'volets_roulants_manuels_entier',
-  'volets_roulants_electriques_entier', 'volets_persiennes_entier',
-  'cheminement_escalier_exterieur', 'cheminement_escalier_interieur',
-  'cheminement_pente_douce', 'cheminement_plat', 'cheminement_quelques_marches',
-  'cheminement_par_arriere', 'cheminement_seuil_porte',
-  'difficultes_circulation_interieure',
-]);
+export const defaultFalseHousingColumns = new Set([...legacyDefaultFalseColumns]
+  .filter((key) => !['beneficiaire_apa', 'reconnaissance_invalidite_mdph',
+    'aide_a_domicile', 'beneficiaire_prepare'].includes(key)));
 
 export function mappedDatabaseValueEquals(key, observed, mapped) {
   if (isDeepStrictEqual(observed, mapped)) return true;

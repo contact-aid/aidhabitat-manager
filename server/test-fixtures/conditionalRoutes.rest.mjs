@@ -43,25 +43,35 @@ export function createRestMock({ referenceRows = {} } = {}) {
   initial[tables.ergos] = members;
   initial[tables.dependances] = [{ Id: 901, libelle: 'Canne' }];
   for (const [entity, records] of Object.entries(referenceRows)) initial[tables[entity]] = structuredClone(records);
+  initial[tables.types] = [{ Id: 801, libelle: 'Maison' }, { Id: 802, libelle: 'Appartement' }];
   initial[tables.dossier] = [{ Id: 101, uuid_source: dossierId, patient_id: patientId,
     beneficiaires_id: 201, ergo_id: 'Test Owner', status: 'A visiter',
     compte_anah: 'initial', nature_accompagnement: 'initial', beneficiaire_prepare: false,
     visit_date: null, app_sync_revision: revision, UpdatedAt: timestamp }];
   initial[tables.beneficiaire] = [{ Id: 201, prenom: 'Synthetic', nom: 'Patient',
     telephone: '0100000000', mail: 'initial@patient.test.invalid',
-    aide_a_domicile: false, dependance_particuliere_txt: 'Aucune',
+    occupants_json: null, date_naissance_monsieur: null, date_naissance_madame: null,
+    beneficiaire_apa: null, reconnaissance_invalidite_mdph: null, aide_a_domicile: false,
+    dependance_particuliere_txt: 'Aucune',
     dependances_particulieres_id: null,
     app_sync_revision: revision, CreatedAt: timestamp, UpdatedAt: timestamp }];
   initial[tables.logement] = [{ Id: 301, uuid_source: 'synthetic-housing',
     beneficiaire_id: patientId, beneficiaires_id: 201, commentaire: 'initial',
-    observation_accessibilite: 'initial', app_sync_revision: revision, UpdatedAt: timestamp }];
+    observation_accessibilite: 'initial', sous_sol: null, acces_facile_rue: null,
+    type_de_logement_id: null, type_de_logement: null,
+    app_sync_revision: revision, UpdatedAt: timestamp }];
   const schemas = {
     [tables.dossier]: columns({ compte_anah: 'SingleLineText', nature_accompagnement: 'SingleLineText',
       beneficiaire_prepare: 'Checkbox', visit_date: 'Date', status: 'SingleLineText' }),
-    [tables.beneficiaire]: columns({ telephone: 'PhoneNumber', mail: 'Email',
+    [tables.beneficiaire]: columns({ prenom: 'SingleLineText', nom: 'SingleLineText',
+      prenom_occupant_2: 'SingleLineText', nom_occupant_2: 'SingleLineText',
+      telephone: 'PhoneNumber', mail: 'Email', occupants_json: 'LongText',
+      date_naissance_monsieur: 'Date', date_naissance_madame: 'Date',
+      beneficiaire_apa: 'Checkbox', reconnaissance_invalidite_mdph: 'Checkbox',
       aide_a_domicile: 'Checkbox', dependance_particuliere_txt: 'LongText',
       dependances_particulieres_id: 'Number' }),
-    [tables.logement]: columns({ commentaire: 'LongText', observation_accessibilite: 'LongText' }),
+    [tables.logement]: columns({ commentaire: 'LongText', observation_accessibilite: 'LongText',
+      sous_sol: 'Checkbox', acces_facile_rue: 'Checkbox', type_de_logement_id: 'Number' }),
     [tables.mobile_note_pages]: columns(Object.fromEntries([
       'uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom',
       'beneficiaire_nom_complet', 'dossier_libelle', 'scope_type', 'scope_id', 'tab_key',

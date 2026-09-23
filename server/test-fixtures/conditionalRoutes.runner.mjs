@@ -187,6 +187,9 @@ try {
     })), 409);
     assert.equal(conflict.error, 'SYNC_FIELD_CONFLICT');
     assert.equal(conflict.conflict, true);
+    assert.deepEqual(conflict.conflictFields, [definition.dbKey]);
+    assert.deepEqual(conflict.retainedFields, []);
+    assert.match(conflict.writeId, /^[0-9a-f-]{36}$/);
     assert.equal(conflict.remoteData[definition.dbKey], definition.first);
     assert.equal(conflict.remoteData.app_sync_revision, body.concurrency.writeId);
     assert.equal(mock.patches().length, 1);
@@ -259,6 +262,15 @@ try {
   }
 
   if (entity === 'dossier') {
+    await check('legacy null beneficiaryPrepared compares as the GET false baseline', async () => {
+      mock.row(entity).beneficiaire_prepare = null;
+      const baseline = await read(clientA);
+      assert.equal(baseline.beneficiaryPrepared, false);
+      const body = mutation({ beneficiaryPrepared: true }, { beneficiaryPrepared: false });
+      expectStatus(await patch(clientA, body), 200);
+      assertGuard(mock.patches()[0], revision, body.concurrency.writeId, { beneficiaire_prepare: true });
+    });
+
     await check('Checkbox metadata compares stored string false with boolean baseline', async () => {
       mock.row(entity).beneficiaire_prepare = 'false';
       const body = mutation({ beneficiaryPrepared: true }, { beneficiaryPrepared: false });
@@ -266,6 +278,70 @@ try {
       assert.equal(mock.patches().length, 1);
       assertGuard(mock.patches()[0], revision, body.concurrency.writeId, { beneficiaire_prepare: true });
       assert.equal((await read(clientB)).beneficiaryPrepared, true);
+    });
+  }
+
+  if (entity === 'beneficiaire') {
+    await check('legacy scalar occupants accept a birth date and persist scalar plus JSON', async () => {
+      const baseline = await read(clientA);
+      assert.equal(mock.row(entity).occupants_json, null);
+      assert.equal(baseline.occupants.length, 1);
+      const occupants = structuredClone(baseline.occupants);
+      occupants[0].birthDate = '1948-04-12';
+      const body = mutation({ occupant1BirthDate: '1948-04-12', occupants }, {
+        occupant1BirthDate: baseline.occupant1BirthDate,
+        occupants: baseline.occupants,
+      });
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal(mock.row(entity).date_naissance_monsieur, '1948-04-12');
+      assert.equal(JSON.parse(mock.row(entity).occupants_json)[0].birthDate, '1948-04-12');
+      assert.equal((await read(clientB)).occupants[0].birthDate, '1948-04-12');
+    });
+
+    await check('a real concurrent occupants change still returns field-level 409', async () => {
+      const baseline = await read(clientA);
+      mock.row(entity).occupants_json = JSON.stringify([{ ...baseline.occupants[0], birthDate: '1930-01-01' }]);
+      mock.row(entity).app_sync_revision = randomUUID();
+      const occupants = structuredClone(baseline.occupants);
+      occupants[0].birthDate = '1948-04-12';
+      const conflict = expectStatus(await patch(clientA, mutation({
+        occupant1BirthDate: '1948-04-12', occupants,
+      }, { occupant1BirthDate: baseline.occupant1BirthDate, occupants: baseline.occupants })), 409);
+      assert(conflict.conflictFields.includes('occupants_json'));
+      assert.equal(mock.patches().length, 0);
+    });
+
+    await check('legacy null beneficiary checkbox accepts the exposed false baseline', async () => {
+      const baseline = await read(clientA);
+      assert.equal(baseline.homeHelp, false);
+      const body = mutation({ homeHelp: true }, { homeHelp: false });
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal(mock.row(entity).aide_a_domicile, true);
+    });
+  }
+
+  if (entity === 'logement') {
+    await check('legacy null housing checkbox accepts the exposed false baseline', async () => {
+      const baseline = await read(clientA);
+      assert.equal(baseline.basement, false);
+      const body = mutation({ basement: true }, { basement: false });
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal(mock.row(entity).sous_sol, true);
+    });
+
+    await check('an absent housing type remains empty and can be explicitly selected', async () => {
+      const baseline = await read(clientA);
+      assert.equal(baseline.typology, '');
+      const body = mutation({ typology: 'Appartement' }, { typology: '' });
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal(mock.row(entity).type_de_logement_id, 802);
+    });
+
+    await check('an unknown relation label fails explicitly without a write', async () => {
+      const result = await patch(clientA, mutation({ typology: 'Type historique inconnu' }, { typology: '' }));
+      assert.equal(result.status, 422, JSON.stringify(result.body));
+      assert.equal(result.body.error, 'SYNC_RELATION_UNRESOLVED');
+      assert.equal(mock.patches().length, 0);
     });
   }
 

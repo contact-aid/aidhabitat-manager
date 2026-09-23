@@ -1,5 +1,6 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import { toDatabaseDossierStatus } from '../nocodbScalarValues.mjs';
 import { requireAuth } from '../middleware/auth.mjs';
 import {
   getDossiersForApp,
@@ -161,7 +162,9 @@ router.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => 
       beneficiaire_prepare: Object.prototype.hasOwnProperty.call(updates, 'beneficiaryPrepared')
         ? Boolean(updates.beneficiaryPrepared)
         : undefined,
-      status: updates.status,
+      status: Object.prototype.hasOwnProperty.call(updates, 'status')
+        ? toDatabaseDossierStatus(updates.status)
+        : undefined,
       visit_date: nullableString(updates.visitDate),
       ergo_id: Object.prototype.hasOwnProperty.call(updates, 'ergoId')
         ? nullableString(await resolveRequestedErgoLabel(req.appUser, updates.ergoId))

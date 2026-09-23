@@ -137,6 +137,68 @@ async function run() {
         assert.equal(writes, 1);
       }
     }
+
+    const sanitaryTable = 'mdukulxcd18ae3o';
+    const sanitaryPath = `/api/diagnostic-sanitaires/${dossierId}`;
+    const legacySanitaryRow = () => ({
+      Id: 401, dossier_id: dossierId, uuid_source: 'legacy-sanitary',
+      app_sync_revision: randomUUID(), UpdatedAt: '2026-09-01T00:00:00Z',
+      sdb_instances_json: null, wc_instances_json: null,
+      sdb_niveau_pieces_vie: 'true', sdb_baignoire: 'true',
+      sdb_baignoire_hauteur: '54', sdb_bac_douche: 'false',
+      sdb_vasque_suspendue: 'false', sdb_vasque_colonne: 'false',
+      sdb_meuble_vasque: 'false', sdb_bidet: 'false', sdb_paroi_douche: 'false',
+      sdb_sol_glissant: 'false', sdb_machine_a_laver: 'false',
+      porte_sdb_largeur_suffisante: null, porte_sdb_dimension: null,
+      porte_sdb_sens_adapte: null,
+    });
+    rows.set(sanitaryTable, legacySanitaryRow());
+    const pulled = await request(sanitaryPath, undefined, token, 'GET');
+    assert.equal(pulled.status, 200, JSON.stringify(pulled));
+    assert.equal(pulled.body.sdbInstances[0].id, 'sdb-legacy');
+    assert.equal(pulled.body.sdbInstances[0].porteSdbLargeurSuffisante, null);
+    assert.equal(pulled.body.sdbInstances[0].porteSdbSensAdapte, null);
+    const edited = structuredClone(pulled.body.sdbInstances);
+    edited[0].sdbBaignoireHauteur = 60;
+    const legacyMutation = { sdbInstances: edited, concurrency: {
+      version: 1, writeId: randomUUID(), baseValues: { sdbInstances: pulled.body.sdbInstances },
+    } };
+    const writesBeforeLegacy = writes;
+    const legacySaved = await request(sanitaryPath, legacyMutation, token);
+    assert.equal(legacySaved.status, 200, JSON.stringify(legacySaved));
+    assert.equal(JSON.parse(rows.get(sanitaryTable).sdb_instances_json)[0].sdbBaignoireHauteur, 60);
+    assert.equal(writes, writesBeforeLegacy + 1);
+
+    rows.set(sanitaryTable, legacySanitaryRow());
+    const stalePull = await request(sanitaryPath, undefined, token, 'GET');
+    rows.get(sanitaryTable).sdb_instances_json = JSON.stringify([{
+      ...stalePull.body.sdbInstances[0], sdbBaignoireHauteur: 70,
+    }]);
+    rows.get(sanitaryTable).app_sync_revision = randomUUID();
+    const competing = structuredClone(stalePull.body.sdbInstances);
+    competing[0].sdbBaignoireHauteur = 65;
+    const writesBeforeConflict = writes;
+    const sanitaryConflict = await request(sanitaryPath, { sdbInstances: competing, concurrency: {
+      version: 1, writeId: randomUUID(), baseValues: { sdbInstances: stalePull.body.sdbInstances },
+    } }, token);
+    assert.equal(sanitaryConflict.status, 409, JSON.stringify(sanitaryConflict));
+    assert(sanitaryConflict.body.conflictFields.includes('sdb_instances_json'));
+    assert(sanitaryConflict.body.conflictFields.includes('sdb_baignoire_hauteur'));
+    assert.equal(writes, writesBeforeConflict);
+
+    rows.set(sanitaryTable, legacySanitaryRow());
+    const corruptBaseline = await request(sanitaryPath, undefined, token, 'GET');
+    rows.get(sanitaryTable).sdb_instances_json = '{invalid JSON';
+    const corruptWriteCount = writes;
+    const corruptResult = await request(sanitaryPath, {
+      sdbInstances: corruptBaseline.body.sdbInstances,
+      concurrency: { version: 1, writeId: randomUUID(),
+        baseValues: { sdbInstances: corruptBaseline.body.sdbInstances } },
+    }, token);
+    assert.equal(corruptResult.status, 409, JSON.stringify(corruptResult));
+    assert(corruptResult.body.conflictFields.includes('sdb_instances_json')
+      || corruptResult.body.retainedFields.includes('sdb_instances_json'));
+    assert.equal(writes, corruptWriteCount);
     assert.deepEqual(base.violations, []);
     console.log('ATOMIC_SECONDARY_PASS');
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
