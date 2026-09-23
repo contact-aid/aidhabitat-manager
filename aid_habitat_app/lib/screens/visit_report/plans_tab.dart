@@ -46,6 +46,7 @@ class _PlansTabState extends State<PlansTab> {
   /// Cache local des phases déjà fetched pour éviter un round-trip
   /// SQLite à chaque changement de page. Invalidé lors d'un setPhase.
   final Map<int, PlanPhase?> _phaseCache = {};
+  int? _newScenarioNeedingPreview;
 
   @override
   void initState() {
@@ -85,7 +86,10 @@ class _PlansTabState extends State<PlansTab> {
 
   void _goToPage(int page) {
     if (page < 0 || page >= _totalPages) return;
-    setState(() => _currentPage = page);
+    setState(() {
+      if (page != _currentPage) _newScenarioNeedingPreview = null;
+      _currentPage = page;
+    });
     _loadPhaseForCurrentPage();
   }
 
@@ -116,6 +120,7 @@ class _PlansTabState extends State<PlansTab> {
       _currentPage = newIndex;
       _currentPhase = PlanPhase.apres;
       _phaseCache[newIndex] = PlanPhase.apres;
+      _newScenarioNeedingPreview = newIndex;
     });
   }
 
@@ -231,7 +236,7 @@ class _PlansTabState extends State<PlansTab> {
               controller: _planCanvasController,
               tabKey: _kTabKey,
               pageNumber: _currentPage,
-              refreshPreviewOnLoad: _currentPhase == PlanPhase.apres,
+              refreshPreviewOnLoad: _newScenarioNeedingPreview == _currentPage,
               currentPage: _currentPage,
               totalPages: _totalPages,
               onPrevPage: () => _goToPage(_currentPage - 1),

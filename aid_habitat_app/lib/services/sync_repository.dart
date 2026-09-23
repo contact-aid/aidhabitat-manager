@@ -1094,6 +1094,50 @@ class SyncRepository {
       );
       if (currentPayload != expectedPayloadJson) return false;
       final payload = jsonDecode(currentPayload) as Map<String, dynamic>;
+      // A later autosave can overtake the ACK of our previous note write.
+      // If the server still has exactly that predecessor, this is not a
+      // cross-device conflict: advance the queued edit to our own revision.
+      if (entityType == 'note_page' &&
+          remoteData?['error'] == 'NOTE_PAGE_REVISION_CONFLICT') {
+        final observed = remoteData?['remoteData'];
+        final remoteRevision = observed is Map
+            ? (observed['app_sync_revision'] ?? observed['revision'])
+                ?.toString()
+            : null;
+        final predecessors = payload['predecessorWriteIds'];
+        if (remoteRevision != null &&
+            remoteRevision.isNotEmpty &&
+            predecessors is List &&
+            predecessors.contains(remoteRevision)) {
+          payload
+            ..['expectedRevision'] = remoteRevision
+            ..['predecessorWriteIds'] = <String>[];
+          await txn.update(
+            'sync_operations',
+            {
+              'status': SyncOperationStatus.pending.name,
+              'payload_json': await OfflineVault.instance.sealString(
+                jsonEncode(payload),
+              ),
+              'attempt_count': 0,
+              'last_error': null,
+              'updated_at': DateTime.now().toIso8601String(),
+            },
+            where: 'id = ? AND status = ?',
+            whereArgs: [operationId, SyncOperationStatus.running.name],
+          );
+          await txn.update(
+            'note_pages',
+            {
+              'remote_revision': remoteRevision,
+              'sync_state': SyncState.pendingSync.name,
+            },
+            where: 'local_id = ?',
+            whereArgs: [entityLocalId],
+          );
+          return false;
+        }
+      }
       payload['conflict'] = {
         'remote': remoteData,
         'detectedAt': DateTime.now().toIso8601String(),

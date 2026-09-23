@@ -272,6 +272,96 @@ void main() {
     },
   );
 
+  test('note 409 from our own preceding autosave retries without conflict', () async {
+    const previousWrite = '11111111-1111-4111-8111-111111111111';
+    const currentWrite = '22222222-2222-4222-8222-222222222222';
+    await db.insert('note_pages', {
+      'local_id': 'note-1',
+      'sync_state': 'pendingSync',
+    });
+    final payload = jsonEncode({
+      'patientLocalId': 'patient-1',
+      'tabKey': 'Plans',
+      'pageNumber': 0,
+      'drawingJson': 'room-and-door',
+      'expectedRevision': null,
+      'writeId': currentWrite,
+      'predecessorWriteIds': [previousWrite],
+    });
+    await insertOperation(
+      'note-op',
+      status: 'running',
+      entityType: 'note_page',
+      entityId: 'note-1',
+      operationType: 'upsert',
+      payload: payload,
+    );
+
+    expect(
+      await repository.markConflict(
+        operationId: 'note-op',
+        entityType: 'note_page',
+        entityLocalId: 'note-1',
+        error: 'Conflit de note',
+        expectedPayloadJson: payload,
+        remoteData: {
+          'error': 'NOTE_PAGE_REVISION_CONFLICT',
+          'remoteData': {'app_sync_revision': previousWrite},
+        },
+      ),
+      isFalse,
+    );
+    final queued = (await db.query('sync_operations')).single;
+    final rebased = jsonDecode(queued['payload_json'] as String) as Map;
+    expect(queued['status'], 'pending');
+    expect(rebased['drawingJson'], 'room-and-door');
+    expect(rebased['expectedRevision'], previousWrite);
+    expect(rebased['predecessorWriteIds'], isEmpty);
+    expect((await db.query('note_pages')).single['remote_revision'], previousWrite);
+  });
+
+  test('note 409 from an unrelated writer remains a conflict', () async {
+    const previousWrite = '11111111-1111-4111-8111-111111111111';
+    const otherWrite = '33333333-3333-4333-8333-333333333333';
+    await db.insert('note_pages', {
+      'local_id': 'note-1',
+      'sync_state': 'pendingSync',
+    });
+    final payload = jsonEncode({
+      'patientLocalId': 'patient-1',
+      'tabKey': 'Plans',
+      'pageNumber': 0,
+      'drawingJson': 'local',
+      'expectedRevision': null,
+      'writeId': '22222222-2222-4222-8222-222222222222',
+      'predecessorWriteIds': [previousWrite],
+    });
+    await insertOperation(
+      'note-op',
+      status: 'running',
+      entityType: 'note_page',
+      entityId: 'note-1',
+      operationType: 'upsert',
+      payload: payload,
+    );
+
+    expect(
+      await repository.markConflict(
+        operationId: 'note-op',
+        entityType: 'note_page',
+        entityLocalId: 'note-1',
+        error: 'Conflit de note',
+        expectedPayloadJson: payload,
+        remoteData: {
+          'error': 'NOTE_PAGE_REVISION_CONFLICT',
+          'remoteData': {'app_sync_revision': otherWrite},
+        },
+      ),
+      isTrue,
+    );
+    expect((await db.query('sync_operations')).single['status'], 'conflict');
+  });
+
   test('keeping a conflicted note is an explicit guarded requeue', () async {
     const oldRevision = '00000000-0000-4000-8000-000000000000';
     const observedRevision = '33333333-3333-4333-8333-333333333333';
@@ -319,6 +409,69 @@ void main() {
     expect(payload.containsKey('conflict'), isFalse);
     expect(payload['writeId'], isNot(writeId));
     expect((await db.query('note_pages')).single['sync_state'], 'pendingSync');
+  });
+
+  test('plan write-id conflict keeps the drawing until a fresh ACK', () async {
+    const oldWrite = '11111111-1111-4111-8111-111111111111';
+    const observedRevision = '22222222-2222-4222-8222-222222222222';
+    await db.insert('note_pages', {
+      'local_id': 'fictitious-plan',
+      'sync_state': 'conflict',
+      'remote_revision': oldWrite,
+    });
+    await insertOperation(
+      'fictitious-plan-op',
+      status: 'conflict',
+      entityType: 'note_page',
+      entityId: 'fictitious-plan',
+      operationType: 'upsert',
+      payload: jsonEncode({
+        'patientLocalId': 'fictitious-patient',
+        'tabKey': 'Plans',
+        'pageNumber': 0,
+        'drawingJson': 'TEST-PLAN-DRAWING-LOCAL',
+        'planPhase': 'avant',
+        'expectedRevision': oldWrite,
+        'writeId': oldWrite,
+        'conflict': {
+          'remote': {
+            'error': 'NOTE_PAGE_WRITE_ID_REUSED',
+            'remoteData': {'app_sync_revision': oldWrite},
+          },
+        },
+      }),
+    );
+
+    expect((await repository.fetchAllFailingOperations()).length, 1);
+    expect(
+      await repository.resolveNoteConflictKeepingLocal(
+        'fictitious-plan-op',
+        observedRevision: observedRevision,
+      ),
+      isTrue,
+    );
+    final pending = (await repository.fetchRunnableOperations()).single;
+    final payload = jsonDecode(pending.payloadJson) as Map<String, dynamic>;
+    expect(payload['drawingJson'], 'TEST-PLAN-DRAWING-LOCAL');
+    expect(payload['planPhase'], 'avant');
+    expect(payload['expectedRevision'], observedRevision);
+    expect(payload['writeId'], isNot(oldWrite));
+    expect(payload.containsKey('conflict'), isFalse);
+    expect(await repository.fetchAllFailingOperations(), isEmpty);
+    expect((await db.query('note_pages')).single['sync_state'], 'pendingSync');
+
+    expect(await repository.tryMarkRunning(pending), isTrue);
+    expect(
+      await repository.acknowledgeNotePageMutation(
+        pending,
+        revision: payload['writeId'] as String,
+        remotePath: '',
+        remoteUrl: '',
+      ),
+      isTrue,
+    );
+    expect((await db.query('sync_operations')).single['status'], 'completed');
+    expect((await db.query('note_pages')).single['sync_state'], 'synced');
   });
 
   test(
