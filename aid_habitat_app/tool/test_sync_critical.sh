@@ -48,6 +48,7 @@ bash "$script_dir/test_safely.sh" \
   test/services/visit_date_time_test.dart \
   test/screens/database_unavailable_screen_test.dart \
   test/screens/agent3_sync_ownership_review_screen_test.dart \
+  test/screens/dossier_note_read_only_test.dart \
   test/screens/visit_report/recommendations_gestures_test.dart \
   test/screens/document_preview_ink_test.dart \
   test/screens/document_preview_revision_test.dart \
