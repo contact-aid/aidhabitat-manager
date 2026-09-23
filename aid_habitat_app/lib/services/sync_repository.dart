@@ -1656,9 +1656,12 @@ class SyncRepository {
   }
 
   /// Explicit user choice: keep the complete local note and retry it against
-  /// the revision observed in the 409 response. This is never automatic for
-  /// a genuine cross-device conflict.
-  Future<bool> resolveNoteConflictKeepingLocal(String operationId) async {
+  /// either a freshly fetched revision or the revision observed in the 409
+  /// response. This is never automatic for a genuine cross-device conflict.
+  Future<bool> resolveNoteConflictKeepingLocal(
+    String operationId, {
+    String? observedRevision,
+  }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
       final rows = await txn.query(
@@ -1678,7 +1681,9 @@ class SyncRepository {
                 ),
               )
               as Map<String, dynamic>;
-      final revision = _noteConflictRevision(payload['conflict']);
+      final revision = observedRevision == null
+          ? _noteConflictRevision(payload['conflict'])
+          : _noteConflictRevision({'revision': observedRevision});
       if (revision == null) return false;
       payload
         ..remove('conflict')

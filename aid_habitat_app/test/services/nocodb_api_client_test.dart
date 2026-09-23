@@ -82,20 +82,17 @@ void main() {
       expect(updated, '2026-05-15T10:00:00Z');
     });
 
-    test(
-      '200 OK sans `updatedAt` reste non confirmé et réessayable',
-      () async {
-        final client = NocodbApiClient(
-          client: MockClient((_) async {
-            return http.Response('{"success":true,"data":{}}', 200);
-          }),
-        );
-        await expectLater(
-          client.updateDossier(dossierId: 'dos-123', updates: {'foo': 'bar'}),
-          throwsA(isA<TransientRemoteException>()),
-        );
-      },
-    );
+    test('200 OK sans `updatedAt` reste non confirmé et réessayable', () async {
+      final client = NocodbApiClient(
+        client: MockClient((_) async {
+          return http.Response('{"success":true,"data":{}}', 200);
+        }),
+      );
+      await expectLater(
+        client.updateDossier(dossierId: 'dos-123', updates: {'foo': 'bar'}),
+        throwsA(isA<TransientRemoteException>()),
+      );
+    });
 
     test(
       '409 Conflict → lève ConflictException (route vers markConflict)',
@@ -549,6 +546,7 @@ void main() {
           expect(request.url.queryParameters['pageNumber'], '0');
           expect(request.url.queryParameters['scopeType'], 'dossier_detail');
           expect(request.url.queryParameters['scopeId'], 'airtable:dossier-62');
+          expect(request.url.queryParameters['_syncRead'], isNotEmpty);
           return http.Response('{"success":true,"data":{"notePages":[]}}', 200);
         }),
       );
@@ -564,36 +562,39 @@ void main() {
   });
 
   group('protocoles CAS relevé de visite', () {
-    test('les préconisations envoient l’enveloppe versionnée intacte', () async {
-      const revision = '00000000-0000-4000-8000-000000000001';
-      const writeId = '00000000-0000-4000-8000-000000000002';
-      final envelope = <String, dynamic>{
-        'protocolVersion': 1,
-        'expectedRevision': revision,
-        'writeId': writeId,
-        'items': [
-          {'id': 'item-1', 'wikiItemId': 'wiki-1', 'note': 'A'},
-        ],
-      };
-      final client = NocodbApiClient(
-        client: MockClient((request) async {
-          expect(request.method, 'PUT');
-          expect(request.url.path, '/api/visit-recommendations/dossier-1');
-          expect(jsonDecode(request.body), envelope);
-          return http.Response(
-            '{"success":true,"data":{"revision":"$writeId","items":[]}}',
-            200,
-          );
-        }),
-      );
+    test(
+      'les préconisations envoient l’enveloppe versionnée intacte',
+      () async {
+        const revision = '00000000-0000-4000-8000-000000000001';
+        const writeId = '00000000-0000-4000-8000-000000000002';
+        final envelope = <String, dynamic>{
+          'protocolVersion': 1,
+          'expectedRevision': revision,
+          'writeId': writeId,
+          'items': [
+            {'id': 'item-1', 'wikiItemId': 'wiki-1', 'note': 'A'},
+          ],
+        };
+        final client = NocodbApiClient(
+          client: MockClient((request) async {
+            expect(request.method, 'PUT');
+            expect(request.url.path, '/api/visit-recommendations/dossier-1');
+            expect(jsonDecode(request.body), envelope);
+            return http.Response(
+              '{"success":true,"data":{"revision":"$writeId","items":[]}}',
+              200,
+            );
+          }),
+        );
 
-      final ack = await client.updateVisitRecommendations(
-        dossierId: 'dossier-1',
-        envelope: envelope,
-      );
+        final ack = await client.updateVisitRecommendations(
+          dossierId: 'dossier-1',
+          envelope: envelope,
+        );
 
-      expect(ack['revision'], writeId);
-    });
+        expect(ack['revision'], writeId);
+      },
+    );
 
     test('une note envoie sa référence et son identifiant de mutation', () async {
       const revision = '00000000-0000-4000-8000-000000000011';

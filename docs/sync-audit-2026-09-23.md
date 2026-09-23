@@ -10,8 +10,9 @@
   L'API et le manifeste Web ne sont donc pas traçables au même commit, même
   si aucun fichier serveur n'a changé entre ces deux révisions.
 - La file IndexedDB de la session Coralie et la base SQLite de l'iPad n'étaient
-  pas accessibles depuis la session d'audit isolée. Aucun état de file réel
-  n'a été modifié ou supposé.
+  pas accessibles depuis la session d'audit isolée. Le demandeur a ensuite
+  confirmé que toutes les données étaient fictives et a ouvert une session
+  Admin, ce qui a permis un essai réel sur une origine locale isolée.
 
 ## Diagnostic confirmé
 
@@ -40,6 +41,29 @@ Le commit `12efe33` retire cette écriture et ne fait plus qu'un
    appelait `_scheduleSave`. L'ouverture/reconstruction ne sauvegarde plus ;
    les lignes restent conservées localement jusqu'à une action ou migration
    explicite.
+
+## Défauts de transport révélés par l'essai réel
+
+Le premier vrai changement utilisateur a révélé un second défaut, distinct de
+l'écriture à l'ouverture : SQLite utilise un identifiant local synthétique
+`note_<patient>_<onglet>_<page>`, mais le client l'envoyait comme
+`notePageId` distant. L'adaptateur NocoDB cherchait alors cet identifiant dans
+`uuid_source`, ne trouvait pas la ligne existante et répondait
+`NOTE_PAGE_RECORD_MISSING`.
+
+La correction adresse désormais une note versionnée par sa clé canonique
+`patientId + scopeType + scopeId + tabKey + subTabKey + pageNumber`. Un
+`notePageId` local stable n'est envoyé que pour une création sans révision.
+
+Ce premier 409 historique ne contenait pas de révision distante ; l'ancien
+bouton « Conserver ma note locale » refusait donc avant tout appel HTTP. La
+résolution relit maintenant la note canonique sans cache, récupère sa révision
+courante, rebase explicitement l'opération puis déclenche le PUT gardé.
+
+Enfin, les lectures de notes portent un paramètre `_syncRead` unique et les
+routes GET serveur déclarent `Cache-Control: private, no-store, no-cache,
+must-revalidate` (plus `Pragma` et `Expires`). Une lecture de concurrence ne
+peut ainsi plus recevoir un `304` fondé sur un snapshot obsolète.
 
 ## Règle appliquée
 
@@ -74,18 +98,37 @@ serveur. Aucune purge globale ne doit être utilisée.
 - Deux clients, champs distincts : fusion sans faux conflit.
 - Anciennes mutations sans métadonnées : conservées et non rejouées en boucle.
 
+## Essai réel Admin contre l'API live
+
+Build local 34 servi sur `http://127.0.0.1:8088`, avec stockage navigateur
+isolé et API `https://api.aidhabitat.fr` :
+
+1. ouverture du dossier fictif ANDASSE Martine, attente puis navigation entre
+   « Note écrite » et « Note dessin » : GET ciblé uniquement, aucun PUT ;
+2. ajout volontaire du marqueur `TEST-SYNC-B34-20260923-A` : le conflit a
+   reproduit l'erreur d'identifiant distant décrite ci-dessus ;
+3. après correction, choix explicite « Conserver ma note locale » : relecture
+   canonique en 200, réémission gardée, disparition de la bannière et
+   « Aucun blocage dans la file locale » ;
+4. retour à la liste puis réouverture du dossier : marqueur relu, aucune
+   nouvelle écriture ni nouveau conflit.
+
+Seule cette note fictive a été modifiée par l'essai. Le conflit homologue de
+l'onglet de production déjà ouvert n'a pas été manipulé.
+
 Validations exécutées depuis `/tmp/aidhabitat-note-sync-test` :
 
 - `flutter analyze` : 0 problème ;
-- tests ciblés synchronisation : 98 réussis ;
-- `tool/test_sync_critical.sh` : 713 réussis ;
+- tests ciblés synchronisation : 106 réussis ;
+- `tool/test_sync_critical.sh` : 715 réussis ;
 - contrats Node : 12 réussis ;
 - tests serveur : 266 réussis.
 
-## Blocages avant fusion/déploiement
+## Restant avant fusion/déploiement
 
-Les critères de production ne sont pas encore démontrés : il manque deux
-clients authentifiés réellement isolés, l'accès à la file Coralie/iPad, le
-contrôle PostgreSQL/NocoDB avant/après et la vérification Easypanel de l'image
-effective. En conséquence, aucun push, merge, nettoyage de conflit ou
-déploiement n'a été effectué pendant cet audit.
+Le chemin ouverture → vraie saisie → conflit → rebase → ACK → relecture est
+maintenant démontré sur un client isolé contre l'API live. Il reste à valider
+un conflit réellement concurrent avec un second client/origine, puis à
+contrôler le SHA de l'image Easypanel après déploiement. La divergence de
+traçabilité actuelle (`de12ba3` Web contre `65464c1` API) doit aussi être
+résolue. Aucun push, merge ou déploiement n'a été effectué pendant cet audit.

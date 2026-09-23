@@ -2604,6 +2604,10 @@ class NocodbApiClient {
         'pageNumber': '$pageNumber',
         if (scopeType != null && scopeType.isNotEmpty) 'scopeType': scopeType,
         if (scopeId != null && scopeId.isNotEmpty) 'scopeId': scopeId,
+        // A note read is a concurrency baseline, not a cacheable asset.
+        // A browser-served 304 can otherwise leave SQLite on an older
+        // revision and make the user's very first edit conflict with itself.
+        '_syncRead': DateTime.now().microsecondsSinceEpoch.toString(),
       },
     );
     final response = await _client
@@ -2644,7 +2648,11 @@ class NocodbApiClient {
   ) async {
     if (!AppConfig.hasRemoteConfig) return const [];
 
-    final uri = Uri.parse('$_baseUrl/api/note-pages/$patientId');
+    final uri = Uri.parse('$_baseUrl/api/note-pages/$patientId').replace(
+      queryParameters: {
+        '_syncRead': DateTime.now().microsecondsSinceEpoch.toString(),
+      },
+    );
     final response = await _client
         .get(uri, headers: _headers)
         .timeout(_defaultTimeout);

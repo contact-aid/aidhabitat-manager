@@ -321,6 +321,59 @@ void main() {
     expect((await db.query('note_pages')).single['sync_state'], 'pendingSync');
   });
 
+  test(
+    'keeping a legacy missing-record conflict uses a freshly observed revision',
+    () async {
+      const observedRevision = '44444444-4444-4444-8444-444444444444';
+      await db.insert('note_pages', {
+        'local_id': 'note-legacy-conflict',
+        'sync_state': 'conflict',
+      });
+      await insertOperation(
+        'note-legacy-conflict-op',
+        status: 'conflict',
+        entityType: 'note_page',
+        entityId: 'note-legacy-conflict',
+        operationType: 'upsert',
+        payload: jsonEncode({
+          'patientLocalId': 'patient-1',
+          'tabKey': 'notes_rapides',
+          'pageNumber': 0,
+          'drawingJson': 'latest-local',
+          'expectedRevision': '00000000-0000-4000-8000-000000000000',
+          'writeId': '11111111-1111-4111-8111-111111111111',
+          'conflict': {
+            'remote': {'error': 'NOTE_PAGE_RECORD_MISSING'},
+          },
+        }),
+      );
+
+      expect(
+        await repository.resolveNoteConflictKeepingLocal(
+          'note-legacy-conflict-op',
+          observedRevision: observedRevision,
+        ),
+        isTrue,
+      );
+      final operation = (await db.query(
+        'sync_operations',
+        where: 'id = ?',
+        whereArgs: ['note-legacy-conflict-op'],
+      )).single;
+      final payload = jsonDecode(operation['payload_json'] as String) as Map;
+      expect(operation['status'], 'pending');
+      expect(payload['expectedRevision'], observedRevision);
+      expect(payload.containsKey('conflict'), isFalse);
+      final note = (await db.query(
+        'note_pages',
+        where: 'local_id = ?',
+        whereArgs: ['note-legacy-conflict'],
+      )).single;
+      expect(note['remote_revision'], observedRevision);
+      expect(note['sync_state'], 'pendingSync');
+    },
+  );
+
   Future<Map<String, Object?>> document() async => (await db.query(
     'documents',
     where: 'local_id = ?',

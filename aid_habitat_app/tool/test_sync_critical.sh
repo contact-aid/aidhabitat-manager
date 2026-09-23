@@ -34,6 +34,7 @@ bash "$script_dir/test_safely.sh" \
   test/services/sync_conflict_resolution_test.dart \
   test/services/sync_mutation_test.dart \
   test/services/note_read_only_hydration_test.dart \
+  test/services/note_sync_transport_test.dart \
   test/services/dossier_mutation_baseline_test.dart \
   test/services/dossier_pending_pull_test.dart \
   test/services/dossier_secondary_conflict_preservation_test.dart \

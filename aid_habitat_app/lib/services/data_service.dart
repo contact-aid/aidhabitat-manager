@@ -868,8 +868,30 @@ class DataService {
   Future<Map<String, dynamic>?> noteConflictDetails(String operationId) =>
       _syncRepository.noteConflictDetails(operationId);
 
-  Future<bool> resolveNoteConflictKeepingLocal(String operationId) =>
-      _syncRepository.resolveNoteConflictKeepingLocal(operationId);
+  Future<bool> resolveNoteConflictKeepingLocal(String operationId) async {
+    final details = await _syncRepository.noteConflictDetails(operationId);
+    if (details == null) return false;
+    final patientId = details['patientId']?.toString() ?? '';
+    final tabKey = details['tabKey']?.toString() ?? '';
+    if (patientId.isEmpty || tabKey.isEmpty) return false;
+    final pageRaw = details['pageNumber'];
+    final pageNumber = pageRaw is int
+        ? pageRaw
+        : int.tryParse(pageRaw?.toString() ?? '') ?? 0;
+    final remote = await _nocodbApiClient.fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: details['scopeType']?.toString(),
+      scopeId: details['scopeId']?.toString(),
+    );
+    final revision = remote?['revision']?.toString();
+    if (revision == null || revision.isEmpty) return false;
+    return _syncRepository.resolveNoteConflictKeepingLocal(
+      operationId,
+      observedRevision: revision,
+    );
+  }
 
   Future<bool> resolveNoteConflictUsingServer(String operationId) async {
     final details = await _syncRepository.noteConflictDetails(operationId);

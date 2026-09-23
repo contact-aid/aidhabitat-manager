@@ -8318,6 +8318,9 @@ app.get('/public/note-pages/:notePageId/preview', requireAuth, async (req, res, 
 
 app.get('/api/note-pages/:patientId', requireAuth, async (req, res, next) => {
   try {
+    res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     const access = await resolveBeneficiaryAccess(
       req.appUser,
       req.params.patientId,

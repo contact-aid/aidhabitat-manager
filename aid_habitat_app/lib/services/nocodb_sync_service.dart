@@ -1919,8 +1919,13 @@ class NocodbSyncService {
         'l’application. Ouvrez le dossier pour comparer les valeurs.',
       );
     }
+    final expectedRevision = payload['expectedRevision']?.toString();
     final notePage = await _apiClient.upsertNotePage(
-      notePageId: operation.entityLocalId,
+      // Local note ids (`note_<patient>_<tab>_<page>`) are not the remote
+      // `uuid_source`. Once a server revision is known, address the note by
+      // its canonical composite key so an existing remote row is updated
+      // instead of being reported missing on the first genuine edit.
+      notePageId: expectedRevision == null ? operation.entityLocalId : '',
       patientId: patientId,
       tabKey: tabKey,
       pageNumber: pageNumber,
@@ -1931,7 +1936,7 @@ class NocodbSyncService {
           ? planPhase
           : null,
       previewDataUrl: previewDataUrl,
-      expectedRevision: payload['expectedRevision']?.toString(),
+      expectedRevision: expectedRevision,
       writeId: writeId,
     );
 
