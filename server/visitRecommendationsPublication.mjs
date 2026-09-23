@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
 
 export const VISIT_RECOMMENDATIONS_PROTOCOL_VERSION = 1;
 export const VISIT_RECOMMENDATIONS_REVISION_FIELD = 'app_sync_revision';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const identifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const filterValuePattern = /^[A-Za-z0-9:_-]+$/;
 
 const isPlainObject = (value) => (
   value !== null
@@ -15,6 +17,13 @@ const isPlainObject = (value) => (
 const stringValue = (value) => value == null ? '' : String(value);
 
 const cloneJson = (value) => JSON.parse(JSON.stringify(value));
+const compressedItemsPrefix = 'GZIP:';
+
+export const encodeVisitRecommendationsSnapshotItems = (items) => {
+  const json = JSON.stringify(items);
+  if (json.length <= 80_000) return json;
+  return `${compressedItemsPrefix}${gzipSync(Buffer.from(json, 'utf8')).toString('base64')}`;
+};
 
 export class VisitRecommendationsPublicationError extends Error {
   constructor(status, code, { observed = null, details = null, cause } = {}) {
@@ -187,7 +196,11 @@ const normalizePublishedItems = async (items, resolveWikiItem) => {
     ...item,
     wikiItemId: stringValue(wikiItem.id).trim(),
     wikiTitle: stringValue(wikiItem.title).trim(),
-    wikiImageUrl: stringValue(wikiItem.imageUrl).trim(),
+    // The snapshot stores identities and user-authored content, not embedded
+    // library binaries. GET rehydrates the current authoritative image.
+    wikiImageUrl: /^data:/i.test(stringValue(wikiItem.imageUrl).trim())
+      ? ''
+      : stringValue(wikiItem.imageUrl).trim(),
     wikiTag: stringValue(wikiItem.tags?.[0] ?? wikiItem.tag).trim(),
     wikiDescription: stringValue(wikiItem.description),
   }));
@@ -318,7 +331,11 @@ export const createVisitRecommendationsPublisher = ({
 
 const parseSnapshotItems = (value) => {
   try {
-    const parsed = JSON.parse(stringValue(value));
+    const stored = stringValue(value);
+    const json = stored.startsWith(compressedItemsPrefix)
+      ? gunzipSync(Buffer.from(stored.slice(compressedItemsPrefix.length), 'base64')).toString('utf8')
+      : stored;
+    const parsed = JSON.parse(json);
     if (!Array.isArray(parsed)) throw new TypeError('items_json is not an array');
     return parsed;
   } catch (cause) {
@@ -352,7 +369,7 @@ const mapSnapshotRow = (row) => {
 
 const snapshotFields = (snapshot) => ({
   dossier_id: snapshot.dossierId,
-  items_json: JSON.stringify(snapshot.items),
+  items_json: encodeVisitRecommendationsSnapshotItems(snapshot.items),
   request_hash: snapshot.requestHash,
   [VISIT_RECOMMENDATIONS_REVISION_FIELD]: snapshot.revision,
   last_write_id: snapshot.lastWriteId,
@@ -377,8 +394,11 @@ export const createNocodbVisitRecommendationsSnapshotStore = ({
   }
 
   const read = async (dossierId) => {
+    if (!filterValuePattern.test(String(dossierId))) {
+      fail(400, 'VISIT_RECOMMENDATIONS_DOSSIER_ID_INVALID');
+    }
     const params = new URLSearchParams({
-      where: `(dossier_id,eq,${JSON.stringify(String(dossierId))})`,
+      where: `(dossier_id,eq,${String(dossierId)})`,
       limit: '2',
       fields: [
         'Id',

@@ -127,6 +127,22 @@ try {
     assert.equal(mock.patches().length, 0);
   });
 
+  if (entity === 'beneficiaire') {
+    await check('absence labels and nullable booleans are canonical baselines', async () => {
+      const body = mutation(
+        { dependenceTxt: 'Canne', homeHelp: true },
+        { dependenceTxt: 'Aucune', homeHelp: null },
+      );
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal(mock.patches().length, 1);
+      assertGuard(mock.patches()[0], revision, body.concurrency.writeId, {
+        aide_a_domicile: true,
+        dependance_particuliere_txt: 'Canne',
+        dependances_particulieres_id: 901,
+      });
+    });
+  }
+
   await check('unprepared record revision returns 503 without PATCH', async () => {
     delete mock.row(entity).app_sync_revision;
     const result = await patch(clientA, mutation({ [definition.key]: definition.first }, {

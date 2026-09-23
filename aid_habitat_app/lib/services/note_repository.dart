@@ -8,6 +8,7 @@ import '../models/visit_report_categories.dart';
 import 'local_database.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
+import 'sync_mutation.dart';
 
 /// Container plat pour un plan (page de l'onglet Plans) à embarquer
 /// **inline** dans la requête HTTP de génération PDF. Construit par
@@ -201,7 +202,7 @@ class NoteRepository {
     // (ConflictAlgorithm.replace remet la colonne à NULL par défaut.)
     final existing = await db.query(
       'note_pages',
-      columns: ['plan_phase'],
+      columns: ['plan_phase', 'remote_revision'],
       where: 'patient_local_id = ? AND tab_key = ? AND page_number = ?',
       whereArgs: [patientId, tabKey, pageNumber],
       limit: 1,
@@ -209,6 +210,11 @@ class NoteRepository {
     final preservedPhase = existing.isNotEmpty
         ? existing.first['plan_phase'] as String?
         : (tabKey == 'Plans' ? planPhaseToDb(PlanPhase.avant) : null);
+    final mutation = await _nextNoteMutation(
+      db,
+      operationId,
+      existing.isEmpty ? null : existing.first['remote_revision'] as String?,
+    );
 
     final drawingJsonAtRest = await OfflineVault.instance.sealString(
       drawingJson,
@@ -226,6 +232,9 @@ class NoteRepository {
       'drawing_remote_path': null,
       'drawing_remote_url': null,
       'plan_phase': preservedPhase,
+      'remote_revision': existing.isEmpty
+          ? null
+          : existing.first['remote_revision'],
       'updated_at': now,
       'sync_state': SyncState.pendingSync.name,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -244,6 +253,8 @@ class NoteRepository {
           'tabKey': tabKey,
           'pageNumber': pageNumber,
           'drawingJson': drawingJson,
+          'expectedRevision': mutation.expectedRevision,
+          'writeId': mutation.writeId,
           if (preservedPhase != null) 'planPhase': preservedPhase,
           // `previewDataUrl` rasterisé côté Flutter (PNG base64). Stocké
           // uniquement dans le payload de la sync_op (pas en SQLite
@@ -299,7 +310,7 @@ class NoteRepository {
     // lui parle que de la phase.
     final row = await db.query(
       'note_pages',
-      columns: ['drawing_json'],
+      columns: ['drawing_json', 'remote_revision'],
       where: 'patient_local_id = ? AND tab_key = ? AND page_number = ?',
       whereArgs: [patientId, tabKey, pageNumber],
       limit: 1,
@@ -309,6 +320,11 @@ class NoteRepository {
             row.first['drawing_json'] as String? ?? '',
           )
         : '';
+    final mutation = await _nextNoteMutation(
+      db,
+      operationId,
+      row.isEmpty ? null : row.first['remote_revision'] as String?,
+    );
 
     await db.insert('sync_operations', {
       'id': operationId,
@@ -321,6 +337,8 @@ class NoteRepository {
           'tabKey': tabKey,
           'pageNumber': pageNumber,
           'drawingJson': drawingJson,
+          'expectedRevision': mutation.expectedRevision,
+          'writeId': mutation.writeId,
           'planPhase': planPhaseToDb(phase),
         }),
       ),
@@ -433,6 +451,7 @@ class NoteRepository {
     String? updatedAt,
     String? planPhase,
     String? dossierId,
+    String? revision,
   }) async {
     final db = await _database.database;
     final existingRows = await db.query(
@@ -509,11 +528,47 @@ class NoteRepository {
       'drawing_remote_path': remotePath,
       'drawing_remote_url': remoteUrl,
       'plan_phase': mergedPlanPhase,
+      'remote_revision': revision,
       'updated_at': updatedAt ?? DateTime.now().toIso8601String(),
       'sync_state': SyncState.synced.name,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
 
     return true;
+  }
+
+  Future<({String? expectedRevision, String writeId})> _nextNoteMutation(
+    DatabaseExecutor db,
+    String operationId,
+    String? fallbackRevision,
+  ) async {
+    final rows = await db.query(
+      'sync_operations',
+      columns: const ['payload_json'],
+      where: 'id = ? AND status IN (?, ?, ?, ?)',
+      whereArgs: [
+        operationId,
+        SyncOperationStatus.pending.name,
+        SyncOperationStatus.running.name,
+        SyncOperationStatus.failed.name,
+        'conflict',
+      ],
+      limit: 1,
+    );
+    String? expectedRevision = fallbackRevision;
+    if (rows.isNotEmpty) {
+      try {
+        final raw = await OfflineVault.instance.openString(
+          rows.single['payload_json'] as String,
+        );
+        final payload = jsonDecode(raw) as Map<String, dynamic>;
+        if (payload.containsKey('expectedRevision')) {
+          expectedRevision = payload['expectedRevision']?.toString();
+        }
+      } catch (_) {
+        throw const FormatException('Mutation de note illisible');
+      }
+    }
+    return (expectedRevision: expectedRevision, writeId: newSyncWriteId());
   }
 
   /// Compare deux timestamps ISO-8601 (ex. `2026-05-07T14:30:00Z`)

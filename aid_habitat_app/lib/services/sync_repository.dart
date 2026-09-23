@@ -1177,6 +1177,7 @@ class SyncRepository {
     required String noteLocalId,
     required String remotePath,
     required String remoteUrl,
+    String? revision,
   }) async {
     final db = await _database.database;
     await db.update(
@@ -1184,10 +1185,29 @@ class SyncRepository {
       {
         'drawing_remote_path': remotePath,
         'drawing_remote_url': remoteUrl,
+        if (revision != null && revision.isNotEmpty)
+          'remote_revision': revision,
         'updated_at': DateTime.now().toIso8601String(),
       },
       where: 'local_id = ?',
       whereArgs: [noteLocalId],
+    );
+  }
+
+  Future<void> storeVisitRecommendationsRemoteRevision({
+    required String dossierId,
+    required String revision,
+  }) async {
+    final db = await _database.database;
+    await db.update(
+      'visit_recommendations',
+      {
+        'remote_revision': revision,
+        'remote_snapshot_exists': 1,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'dossier_local_id = ?',
+      whereArgs: [dossierId],
     );
   }
 

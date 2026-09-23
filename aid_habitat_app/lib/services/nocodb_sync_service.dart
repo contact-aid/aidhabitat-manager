@@ -1007,20 +1007,36 @@ class NocodbSyncService {
     if (dossierId == null || dossierId.isEmpty) {
       throw Exception('Payload visit recommendations incomplet');
     }
-    final items =
-        (payload['items'] as List?)
-            ?.whereType<Map>()
-            .map((e) => e.cast<String, dynamic>())
-            .toList() ??
-        const <Map<String, dynamic>>[];
+    final envelopeValue =
+        payload['envelope'] ??
+        (payload.containsKey('protocolVersion') ? payload : null);
+    if (envelopeValue is! Map) {
+      throw ConflictException(
+        'Cette préconisation a été mise en attente par une ancienne version '
+        'de l’application. Ouvrez le dossier pour comparer les valeurs.',
+      );
+    }
+    final envelope = envelopeValue.cast<String, dynamic>();
+    final items = (envelope['items'] as List?) ?? const [];
     // ignore: avoid_print
     print(
       '[sync] PUT /api/visit-recommendations/$dossierId '
       'count=${items.length}',
     );
-    await _apiClient.updateVisitRecommendations(
+    final remoteDossierId = await _resolveChildDossierId(dossierId);
+    final result = await _apiClient.updateVisitRecommendations(
+      dossierId: remoteDossierId,
+      envelope: envelope,
+    );
+    final revision = result['revision']?.toString();
+    if (revision == null || revision.isEmpty) {
+      throw TransientRemoteException(
+        'Publication des préconisations non confirmée.',
+      );
+    }
+    await _syncRepository.storeVisitRecommendationsRemoteRevision(
       dossierId: dossierId,
-      items: items,
+      revision: revision,
     );
   }
 
@@ -1884,7 +1900,15 @@ class NocodbSyncService {
     // 9/10 du rapport PDF. Optionnel — si absent, le serveur garde la
     // dernière valeur connue.
     final previewDataUrl = payload['previewDataUrl']?.toString();
+    final writeId = payload['writeId']?.toString();
+    if (writeId == null || writeId.isEmpty) {
+      throw ConflictException(
+        'Cette note a été mise en attente par une ancienne version de '
+        'l’application. Ouvrez le dossier pour comparer les valeurs.',
+      );
+    }
     final notePage = await _apiClient.upsertNotePage(
+      notePageId: operation.entityLocalId,
       patientId: patientId,
       tabKey: tabKey,
       pageNumber: pageNumber,
@@ -1895,12 +1919,15 @@ class NocodbSyncService {
           ? planPhase
           : null,
       previewDataUrl: previewDataUrl,
+      expectedRevision: payload['expectedRevision']?.toString(),
+      writeId: writeId,
     );
 
     await _syncRepository.storeNotePageRemoteData(
       noteLocalId: operation.entityLocalId,
       remotePath: notePage['remotePath']?.toString() ?? '',
       remoteUrl: notePage['remoteUrl']?.toString() ?? '',
+      revision: notePage['revision']?.toString(),
     );
   }
 }

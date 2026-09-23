@@ -9,6 +9,7 @@ const ALLOWED_OPERATIONS = [
     method: 'PATCH',
     path: /^\/api\/logements\/by-beneficiary\/[^/?#]+$/,
   },
+  { method: 'PUT', path: /^\/api\/contextes\/[^/?#]+$/ },
   { method: 'PUT', path: /^\/api\/mesures\/[^/?#]+$/ },
   { method: 'PUT', path: /^\/api\/observations\/[^/?#]+$/ },
   {

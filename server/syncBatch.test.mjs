@@ -35,6 +35,48 @@ test('validateSyncBatchPayload accepte uniquement les mutations légères', () =
   assert.equal(operations[0].method, 'PATCH');
 });
 
+test('validateSyncBatchPayload autorise la mise à jour du contexte de vie', () => {
+  const [operation] = validateSyncBatchPayload({
+    operations: [
+      {
+        id: 'context-1',
+        method: 'PUT',
+        path: '/api/contextes/dossier-1',
+        body: {
+          updates: { autonomy: { preparationRepas: true } },
+          concurrency: {
+            version: 1,
+            reference: { recordId: 26, revision: 'revision-1' },
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(operation.method, 'PUT');
+  assert.equal(operation.path, '/api/contextes/dossier-1');
+});
+
+test('toutes les mutations JSON du relevé de visite restent autorisées', () => {
+  const routes = [
+    ['PATCH', '/api/dossiers/dossier-1'],
+    ['PATCH', '/api/beneficiaires/patient-1'],
+    ['PATCH', '/api/logements/by-beneficiary/patient-1'],
+    ['PUT', '/api/contextes/dossier-1'],
+    ['PUT', '/api/mesures/dossier-1'],
+    ['PUT', '/api/observations/dossier-1'],
+    ['PUT', '/api/diagnostic-sanitaires/dossier-1'],
+  ];
+
+  for (const [method, path] of routes) {
+    const [operation] = validateSyncBatchPayload({
+      operations: [{ id: `${method}-${path}`, method, path, body: {} }],
+    });
+    assert.equal(operation.method, method);
+    assert.equal(operation.path, path);
+  }
+});
+
 test('validateSyncBatchPayload refuse fichiers, rapports et doublons', () => {
   assert.throws(
     () =>

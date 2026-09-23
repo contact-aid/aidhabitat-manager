@@ -61,6 +61,7 @@ const MOBILE_SCHEMA = [
       ['text_content', 'LongText'],
       ['drawing_json', 'LongText'],
       ['layout_kind', 'SingleLineText'],
+      ['app_sync_revision', 'SingleLineText'],
       ['updated_at', 'DateTime'],
     ],
   },
@@ -80,6 +81,20 @@ const MOBILE_SCHEMA = [
       ['wiki_tag', 'SingleLineText'],
       ['note', 'LongText'],
       ['created_at', 'DateTime'],
+      ['updated_at', 'DateTime'],
+    ],
+  },
+  {
+    // Publication atomique de la liste complète des préconisations. La table
+    // historique ci-dessus reste conservée pendant la transition/rollback.
+    tableName: process.env.NOCODB_VISIT_RECOMMENDATIONS_SNAPSHOT_TABLE_NAME
+      || 'mobile_visit_recommendation_snapshots',
+    fields: [
+      ['dossier_id', 'SingleLineText'],
+      ['items_json', 'LongText'],
+      ['request_hash', 'SingleLineText'],
+      ['app_sync_revision', 'SingleLineText'],
+      ['last_write_id', 'SingleLineText'],
       ['updated_at', 'DateTime'],
     ],
   },

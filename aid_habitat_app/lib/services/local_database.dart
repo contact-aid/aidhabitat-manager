@@ -32,7 +32,7 @@ class LocalDatabase {
   static final LocalDatabase instance = LocalDatabase._();
   static const _dbName = 'aid_habitat_offline.db';
   static const _debugFallbackDbName = 'aid_habitat_offline.debug_fallback.db';
-  static const _dbVersion = 25;
+  static const _dbVersion = 26;
 
   Database? _database;
   Future<Database>? _opening;
@@ -443,6 +443,21 @@ class LocalDatabase {
         'remote_reference_known',
         'INTEGER NOT NULL DEFAULT 0',
       );
+    }
+    if (oldVersion < 26) {
+      await _addColumnIfMissing(
+        db,
+        'visit_recommendations',
+        'remote_revision',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'visit_recommendations',
+        'remote_snapshot_exists',
+        'INTEGER NOT NULL DEFAULT 0',
+      );
+      await _addColumnIfMissing(db, 'note_pages', 'remote_revision', 'TEXT');
     }
   }
 
@@ -1115,6 +1130,8 @@ class LocalDatabase {
       organisation_id TEXT NOT NULL DEFAULT 'org_aidhabitat',
       dossier_local_id TEXT NOT NULL UNIQUE,
       items_json TEXT NOT NULL DEFAULT '[]',
+      remote_revision TEXT,
+      remote_snapshot_exists INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL,
       sync_state TEXT NOT NULL DEFAULT 'synced'
     )
@@ -1131,6 +1148,11 @@ class LocalDatabase {
     String definition,
   ) async {
     final columns = await db.rawQuery('PRAGMA table_info($table)');
+    // Some recovery/test databases contain only a subset of the production
+    // schema. An additive migration must not turn a missing optional table
+    // into an ALTER TABLE failure; the table will be created by its owning
+    // schema path when needed.
+    if (columns.isEmpty) return;
     final columnNames = columns.map((c) => c['name'] as String).toSet();
     if (!columnNames.contains(column)) {
       await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
@@ -1362,6 +1384,7 @@ class LocalDatabase {
         drawing_remote_path TEXT,
         drawing_remote_url TEXT,
         plan_phase TEXT,
+        remote_revision TEXT,
         updated_at TEXT NOT NULL,
         sync_state TEXT NOT NULL,
         UNIQUE(patient_local_id, tab_key, page_number)

@@ -21,7 +21,7 @@ import { createKeyedSerialExecutor } from './keyedSerialExecutor.mjs';
 import { registerContextRoutes } from './contextRoutes.mjs';
 import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
-import { createMobileSyncStore } from './mobileSyncStore.mjs';
+import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
 } from './resyncLegacyNames.mjs';
@@ -72,6 +72,11 @@ import {
   canAccessDossierAssignment,
   normalizeDossierAssignment,
 } from './dossierAssignments.mjs';
+import {
+  VisitRecommendationsPublicationError,
+  createNocodbVisitRecommendationsSnapshotStore,
+  createVisitRecommendationsPublisher,
+} from './visitRecommendationsPublication.mjs';
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
@@ -106,6 +111,8 @@ const NOTE_PAGES_STORE_URL = dataFileUrl('note-pages-store.json');
 const RETIREMENT_FUNDS_STORE_URL = dataFileUrl('retirement-funds.json');
 const VISIT_RECOMMENDATIONS_STORE_URL = dataFileUrl('visit-recommendations.json');
 const VISIT_RECOMMENDATIONS_TABLE_NAME = process.env.NOCODB_VISIT_RECOMMENDATIONS_TABLE_NAME || 'mobile_visit_recommendations';
+const VISIT_RECOMMENDATIONS_SNAPSHOT_TABLE_NAME = process.env.NOCODB_VISIT_RECOMMENDATIONS_SNAPSHOT_TABLE_NAME
+  || 'mobile_visit_recommendation_snapshots';
 const WIKI_LIBRARY_STORE_URL = dataFileUrl('wikiLibraryStatic.json');
 const BUNDLED_WIKI_LIBRARY_PATH = path.resolve(SERVER_DIR_PATH, '../data/wikiLibraryStatic.json');
 // Cache court partagé par les endpoints authentifiés et les sous-opérations
@@ -2687,6 +2694,7 @@ const createRecord = async (tableId, fields) => {
 };
 
 let visitRecommendationsTableIdCache = null;
+let visitRecommendationsSnapshotTableIdCache = null;
 
 const discoverTableIdByTitle = async (tableTitle) => {
   const payload = await callNocoTool('getTablesList');
@@ -2705,6 +2713,25 @@ const getVisitRecommendationsTableId = async () => {
     visitRecommendationsTableIdCache = tableId;
   }
   return tableId;
+};
+
+const getVisitRecommendationsSnapshotStore = async () => {
+  if (!visitRecommendationsSnapshotTableIdCache) {
+    visitRecommendationsSnapshotTableIdCache = await discoverTableIdByTitle(
+      VISIT_RECOMMENDATIONS_SNAPSHOT_TABLE_NAME,
+    );
+  }
+  if (!visitRecommendationsSnapshotTableIdCache) {
+    throw new VisitRecommendationsPublicationError(
+      503,
+      'VISIT_RECOMMENDATIONS_SNAPSHOT_NOT_PREPARED',
+    );
+  }
+  return createNocodbVisitRecommendationsSnapshotStore({
+    baseId: process.env.NOCODB_BASE_ID,
+    tableId: visitRecommendationsSnapshotTableIdCache,
+    request: requestConditionalNocodbRest,
+  });
 };
 
 const buildVisitRecommendationMetadata = async (dossierRecord) => {
@@ -3682,6 +3709,8 @@ const mapStoredNotePage = (notePage) => ({
   previewDataUrl: stringValue(notePage.previewDataUrl),
   previewUrl: absoluteUrl(`/public/note-pages/${encodeURIComponent(notePage.id)}/preview`),
   layoutKind: stringValue(notePage.layoutKind) || 'freeform',
+  planPhase: notePage.planPhase || null,
+  revision: notePage.revision || null,
   updatedAt: notePage.updatedAt,
   remotePath: `note-pages/${notePage.patientId}/${notePage.scopeType || 'legacy'}/${notePage.scopeId || notePage.dossierId || notePage.patientId}/${notePage.tabKey}/${stringValue(notePage.subTabKey) || 'general'}/${Number(notePage.pageNumber) || 0}`,
   remoteUrl: absoluteUrl(`/api/note-pages/${encodeURIComponent(notePage.patientId)}?scopeType=${encodeURIComponent(notePage.scopeType || 'legacy')}&scopeId=${encodeURIComponent(notePage.scopeId || notePage.dossierId || notePage.patientId)}&tabKey=${encodeURIComponent(notePage.tabKey)}&subTabKey=${encodeURIComponent(stringValue(notePage.subTabKey) || 'general')}&pageNumber=${Number(notePage.pageNumber) || 0}`),
@@ -4314,10 +4343,10 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
       return undefined;
     })(),
     revenu_fiscal_reference: has('fiscalRevenue') ? updates.fiscalRevenue : undefined,
-    beneficiaire_apa: has('apa') ? updates.apa : undefined,
-    reconnaissance_invalidite_mdph: has('invalidity') ? updates.invalidity : undefined,
+    beneficiaire_apa: has('apa') ? Boolean(updates.apa) : undefined,
+    reconnaissance_invalidite_mdph: has('invalidity') ? Boolean(updates.invalidity) : undefined,
     reconnaissance_invalidité_mdph_txt: has('invalidityTxt') ? nullableString(updates.invalidityTxt) : undefined,
-    aide_a_domicile: has('homeHelp') ? updates.homeHelp : undefined,
+    aide_a_domicile: has('homeHelp') ? Boolean(updates.homeHelp) : undefined,
     aide_a_domicile_txt: has('homeHelpTxt') ? nullableString(updates.homeHelpTxt) : undefined,
     dependance_particuliere_txt: has('dependenceTxt') ? nullableString(updates.dependenceTxt) : undefined,
     // Dépendance particulière : la table de réf NocoDB `dependances`
@@ -4327,7 +4356,7 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
     dependances_particulieres_id: (() => {
       if (!has('dependenceTxt')) return undefined;
       const v = updates.dependenceTxt;
-      if (v === '' || v == null) return null;
+      if (v === '' || v == null || ['aucun', 'aucune', 'non'].includes(normalizeLabelForMatch(v))) return null;
       if (dependenceMatch) return Number(dependenceMatch.id);
       console.warn(`[patient] dependenceTxt "${v}" ne matche aucune ref. dependances → no-op (fallback _txt préservé)`);
       return undefined;
@@ -8298,6 +8327,10 @@ app.put('/api/note-pages', requireAuth, async (req, res, next) => {
     const drawingJson = typeof req.body?.drawingJson === 'string' ? req.body.drawingJson : JSON.stringify(req.body?.drawingJson ?? '');
     const previewDataUrl = typeof req.body?.previewDataUrl === 'string' ? req.body.previewDataUrl : '';
     const layoutKind = stringValue(req.body?.layoutKind).trim() || 'freeform';
+    const expectedRevision = req.body?.expectedRevision == null
+      ? null
+      : stringValue(req.body.expectedRevision).trim();
+    const writeId = stringValue(req.body?.writeId).trim();
     // Phase d'un dessin Plans : 'avant' ou 'apres' (autres valeurs
     // → null). Permet au générateur de rapport PDF de placer le
     // dessin dans le bon emplacement (pages 9 vs 10 du template).
@@ -8361,6 +8394,8 @@ app.put('/api/note-pages', requireAuth, async (req, res, next) => {
       previewDataUrl,
       layoutKind,
       planPhase,
+      expectedRevision,
+      writeId,
       ...notePageContext,
     });
 
@@ -8370,6 +8405,14 @@ app.put('/api/note-pages', requireAuth, async (req, res, next) => {
       data: { notePage: mapStoredNotePage(notePage) },
     });
   } catch (error) {
+    if (error instanceof NotePageMutationError) {
+      res.status(error.status).json({
+        success: false,
+        error: error.code,
+        ...(error.observed ? { conflict: error.status === 409, remoteData: error.observed } : {}),
+      });
+      return;
+    }
     next(error);
   }
 });
@@ -9025,25 +9068,8 @@ app.get('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
     }
 
     const dossierId = field(dossierRecord, 'uuid_source');
-    const tableId = await getVisitRecommendationsTableId();
-    let items = [];
-
-    if (tableId) {
-      const records = await queryAll(tableId, {
-        fields: VISIT_RECOMMENDATION_FIELDS,
-        where: `(dossier_id,eq,${JSON.stringify(String(dossierId))})`,
-      });
-      items = records
-        .map(mapVisitRecommendationRecord)
-        .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
-    } else {
-      const store = await readVisitRecommendationsStore();
-      const payload = store.dossiers?.[dossierId];
-      items = asArray(payload?.items).map((item) => ({
-        ...item,
-        wikiImageUrl: absoluteUrl(item?.wikiImageUrl),
-      }));
-    }
+    const snapshot = await (await getVisitRecommendationsSnapshotStore()).read(dossierId);
+    let items = snapshot?.items || [];
 
     const wikiItems = await loadWikiLibrary();
     const wikiLookup = buildWikiRecommendationLookup(wikiItems);
@@ -9068,7 +9094,12 @@ app.get('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
     res.json({
       success: true,
       error: null,
-      data: { items },
+      data: {
+        items,
+        revision: snapshot?.revision ?? null,
+        snapshotExists: snapshot != null,
+        updatedAt: snapshot?.updatedAt ?? null,
+      },
     });
   } catch (error) {
     next(error);
@@ -9086,48 +9117,30 @@ app.put('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
     const wikiItems = await loadWikiLibrary();
     const wikiLookup = buildWikiRecommendationLookup(wikiItems);
     const dossierId = field(dossierRecord, 'uuid_source');
-    const rawItems = asArray(req.body?.items);
-
-    const normalizedItems = rawItems.map((item) => {
-      const normalized = normalizeVisitRecommendationItem(item, wikiLookup);
-      if (!normalized.wikiItemId || !wikiLookup.byId.has(normalized.wikiItemId)) {
-        throw new Error('Chaque préconisation doit être liée à une image de la bibliothèque');
-      }
-      return normalized;
-    });
-
-    const tableId = await getVisitRecommendationsTableId();
-
-    if (tableId) {
-      const metadata = await buildVisitRecommendationMetadata(dossierRecord);
-      await persistVisitRecommendationsInNocodb({
-        tableId,
-        dossierId,
-        metadata,
-        items: normalizedItems,
-      });
-    } else {
-      const store = await readVisitRecommendationsStore();
-      store.dossiers[dossierId] = {
-        updatedAt: new Date().toISOString(),
-        items: normalizedItems,
-      };
-      await writeVisitRecommendationsStore(store);
-    }
+    const result = await createVisitRecommendationsPublisher({
+      store: await getVisitRecommendationsSnapshotStore(),
+      resolveWikiItem: async (wikiItemId) => resolveRecommendationWikiItem(
+        { wikiItemId },
+        wikiLookup,
+      ),
+    })({ dossierId, envelope: req.body });
 
     res.json({
       success: true,
       error: null,
       data: {
-        items: normalizedItems.map((item) => ({
-          ...item,
-          wikiImageUrl: absoluteUrl(item.wikiImageUrl),
-        })),
+        ...result.snapshot,
+        replay: result.replay,
       },
     });
   } catch (error) {
-    if (error instanceof Error && error.message.includes('bibliothèque')) {
-      res.status(400).json({ success: false, error: error.message });
+    if (error instanceof VisitRecommendationsPublicationError) {
+      res.status(error.status).json({
+        success: false,
+        error: error.code,
+        ...(error.observed ? { conflict: error.status === 409, remoteData: error.observed } : {}),
+        ...(error.details ? { details: error.details } : {}),
+      });
       return;
     }
     next(error);

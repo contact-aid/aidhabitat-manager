@@ -2367,6 +2367,7 @@ export const mapStoredNotePage = (notePage) => ({
   // mobileSyncStore.notePages.fields. Le générateur de rapport PDF
   // distingue ainsi page 9 (avant travaux) et page 10 (après).
   planPhase: notePage.planPhase || null,
+  revision: notePage.revision || null,
   updatedAt: notePage.updatedAt,
   remotePath: `note-pages/${notePage.patientId}/${notePage.scopeType || 'legacy'}/${notePage.scopeId || notePage.dossierId || notePage.patientId}/${notePage.tabKey}/${stringValue(notePage.subTabKey) || 'general'}/${Number(notePage.pageNumber) || 0}`,
   remoteUrl: absoluteUrl(`/api/note-pages/${encodeURIComponent(notePage.patientId)}?scopeType=${encodeURIComponent(notePage.scopeType || 'legacy')}&scopeId=${encodeURIComponent(notePage.scopeId || notePage.dossierId || notePage.patientId)}&tabKey=${encodeURIComponent(notePage.tabKey)}&subTabKey=${encodeURIComponent(stringValue(notePage.subTabKey) || 'general')}&pageNumber=${Number(notePage.pageNumber) || 0}`),
@@ -2836,16 +2837,16 @@ export const mapBeneficiaryUpdatesToFields = (updates, references) => {
       return undefined;
     })(),
     revenu_fiscal_reference: has('fiscalRevenue') ? updates.fiscalRevenue : undefined,
-    beneficiaire_apa: has('apa') ? updates.apa : undefined,
-    reconnaissance_invalidite_mdph: has('invalidity') ? updates.invalidity : undefined,
+    beneficiaire_apa: has('apa') ? Boolean(updates.apa) : undefined,
+    reconnaissance_invalidite_mdph: has('invalidity') ? Boolean(updates.invalidity) : undefined,
     reconnaissance_invalidité_mdph_txt: has('invalidityTxt') ? nullableString(updates.invalidityTxt) : undefined,
-    aide_a_domicile: has('homeHelp') ? updates.homeHelp : undefined,
+    aide_a_domicile: has('homeHelp') ? Boolean(updates.homeHelp) : undefined,
     aide_a_domicile_txt: has('homeHelpTxt') ? nullableString(updates.homeHelpTxt) : undefined,
     dependance_particuliere_txt: has('dependenceTxt') ? nullableString(updates.dependenceTxt) : undefined,
     dependances_particulieres_id: (() => {
       if (!has('dependenceTxt')) return undefined;
       const v = updates.dependenceTxt;
-      if (v === '' || v == null) return null;
+      if (v === '' || v == null || ['aucun', 'aucune', 'non'].includes(normalizeLabelForMatch(v))) return null;
       if (dependenceMatch) return Number(dependenceMatch.id);
       console.warn(`[patient] dependenceTxt "${v}" ne matche aucune ref → no-op (fallback _txt préservé)`);
       return undefined;

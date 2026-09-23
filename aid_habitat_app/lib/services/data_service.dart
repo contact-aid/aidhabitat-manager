@@ -808,6 +808,7 @@ class DataService {
         // tel quel à mergeRemoteNotePage qui se charge du fallback
         // sur la valeur locale si la clé est absente.
         planPhase: remoteNote['planPhase']?.toString(),
+        revision: remoteNote['revision']?.toString(),
       );
     } catch (_) {
       return false;
@@ -854,6 +855,7 @@ class DataService {
           remoteUrl: remote['remoteUrl']?.toString(),
           updatedAt: remote['updatedAt']?.toString(),
           planPhase: remote['planPhase']?.toString(),
+          revision: remote['revision']?.toString(),
         );
         if (didMerge) merged += 1;
       }

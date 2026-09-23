@@ -562,4 +562,92 @@ void main() {
       );
     });
   });
+
+  group('protocoles CAS relevé de visite', () {
+    test('les préconisations envoient l’enveloppe versionnée intacte', () async {
+      const revision = '00000000-0000-4000-8000-000000000001';
+      const writeId = '00000000-0000-4000-8000-000000000002';
+      final envelope = <String, dynamic>{
+        'protocolVersion': 1,
+        'expectedRevision': revision,
+        'writeId': writeId,
+        'items': [
+          {'id': 'item-1', 'wikiItemId': 'wiki-1', 'note': 'A'},
+        ],
+      };
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'PUT');
+          expect(request.url.path, '/api/visit-recommendations/dossier-1');
+          expect(jsonDecode(request.body), envelope);
+          return http.Response(
+            '{"success":true,"data":{"revision":"$writeId","items":[]}}',
+            200,
+          );
+        }),
+      );
+
+      final ack = await client.updateVisitRecommendations(
+        dossierId: 'dossier-1',
+        envelope: envelope,
+      );
+
+      expect(ack['revision'], writeId);
+    });
+
+    test('une note envoie sa référence et son identifiant de mutation', () async {
+      const revision = '00000000-0000-4000-8000-000000000011';
+      const writeId = '00000000-0000-4000-8000-000000000012';
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'PUT');
+          expect(request.url.path, '/api/note-pages');
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['notePageId'], 'note-1');
+          expect(body['expectedRevision'], revision);
+          expect(body['writeId'], writeId);
+          return http.Response(
+            '{"success":true,"data":{"notePage":{"id":"note-1","revision":"$writeId"}}}',
+            200,
+          );
+        }),
+      );
+
+      final ack = await client.upsertNotePage(
+        notePageId: 'note-1',
+        patientId: 'patient-1',
+        tabKey: 'plans',
+        pageNumber: 0,
+        drawingJson: '{}',
+        expectedRevision: revision,
+        writeId: writeId,
+      );
+
+      expect(ack['revision'], writeId);
+    });
+
+    test('une version de note périmée devient un conflit explicite', () async {
+      final client = NocodbApiClient(
+        client: MockClient(
+          (_) async => http.Response(
+            '{"success":false,"error":"NOTE_PAGE_REVISION_CONFLICT","remoteData":{"revision":"00000000-0000-4000-8000-000000000099"}}',
+            409,
+          ),
+        ),
+      );
+
+      await expectLater(
+        client.upsertNotePage(
+          notePageId: 'note-1',
+          patientId: 'patient-1',
+          tabKey: 'plans',
+          pageNumber: 0,
+          drawingJson: '{}',
+          expectedRevision: '00000000-0000-4000-8000-000000000011',
+          writeId: '00000000-0000-4000-8000-000000000012',
+        ),
+        throwsA(isA<ConflictException>()),
+      );
+    });
+  });
 }

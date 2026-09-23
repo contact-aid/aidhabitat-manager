@@ -928,10 +928,16 @@ class NocodbApiClient {
 
   /// GET /api/visit-recommendations/:dossierId — returns the list of
   /// recommendation items persisted server-side for this dossier.
-  Future<List<Map<String, dynamic>>> fetchVisitRecommendationsPayload(
+  Future<Map<String, dynamic>> fetchVisitRecommendationsSnapshot(
     String dossierId,
   ) async {
-    if (!AppConfig.hasRemoteConfig) return const [];
+    if (!AppConfig.hasRemoteConfig) {
+      return const <String, dynamic>{
+        'items': <Map<String, dynamic>>[],
+        'revision': null,
+        'snapshotExists': false,
+      };
+    }
 
     final response = await _client
         .get(
@@ -946,13 +952,27 @@ class NocodbApiClient {
       );
     }
     final payload = jsonDecode(response.body);
-    if (payload is! Map<String, dynamic>) return const [];
+    if (payload is! Map<String, dynamic>) {
+      throw Exception('Unexpected visit recommendations payload');
+    }
     final data = (payload['data'] as Map?)?.cast<String, dynamic>() ?? const {};
     final items = (data['items'] as List?) ?? const [];
-    return items
-        .whereType<Map>()
-        .map((e) => e.cast<String, dynamic>())
-        .toList();
+    return <String, dynamic>{
+      ...data,
+      'items': items
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(),
+      'revision': data['revision']?.toString(),
+      'snapshotExists': data['snapshotExists'] == true,
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> fetchVisitRecommendationsPayload(
+    String dossierId,
+  ) async {
+    final snapshot = await fetchVisitRecommendationsSnapshot(dossierId);
+    return (snapshot['items'] as List).cast<Map<String, dynamic>>();
   }
 
   /// PUT /api/diagnostic-sanitaires/:dossierId — persists bathroom + WC
@@ -1048,9 +1068,9 @@ class NocodbApiClient {
   /// Vercel + un NocoDB un peu lent peut atteindre 15-25s. Le 20s du
   /// default produisait un "Load failed" prématuré côté iPad PWA
   /// (rapporté 2026-05-04).
-  Future<void> updateVisitRecommendations({
+  Future<Map<String, dynamic>> updateVisitRecommendations({
     required String dossierId,
-    required List<Map<String, dynamic>> items,
+    required Map<String, dynamic> envelope,
   }) async {
     if (!AppConfig.hasRemoteConfig) {
       throw Exception('Remote config missing');
@@ -1063,7 +1083,7 @@ class NocodbApiClient {
           .put(
             Uri.parse('$_baseUrl/api/visit-recommendations/$dossierId'),
             headers: _headers,
-            body: jsonEncode({'items': items}),
+            body: jsonEncode(envelope),
           )
           .timeout(const Duration(seconds: 60)),
     );
@@ -1082,6 +1102,14 @@ class NocodbApiClient {
         'Remote visit recommendations update failed (${response.statusCode}): ${response.body}',
       );
     }
+    final payload = jsonDecode(response.body);
+    final data = payload is Map ? payload['data'] : null;
+    if (data is! Map) {
+      throw TransientRemoteException(
+        'Remote visit recommendations write unconfirmed',
+      );
+    }
+    return data.cast<String, dynamic>();
   }
 
   /// Seuil au-delà duquel on bascule sur l'upload chunked (pour
@@ -1438,6 +1466,7 @@ class NocodbApiClient {
   }
 
   Future<Map<String, dynamic>> upsertNotePage({
+    required String notePageId,
     required String patientId,
     required String tabKey,
     required int pageNumber,
@@ -1448,6 +1477,8 @@ class NocodbApiClient {
     String layoutKind = 'freeform',
     String? planPhase,
     String? previewDataUrl,
+    required String? expectedRevision,
+    required String writeId,
   }) async {
     if (!AppConfig.hasRemoteConfig) {
       throw Exception('Remote config missing');
@@ -1460,6 +1491,7 @@ class NocodbApiClient {
             Uri.parse('$_baseUrl/api/note-pages'),
             headers: _headers,
             body: jsonEncode({
+              'notePageId': notePageId,
               'patientId': patientId,
               'scopeType': scopeType,
               // Fallback: patientId is a valid scopeId for dossier/visit
@@ -1479,11 +1511,23 @@ class NocodbApiClient {
               // pages 9/10 (plans avant/après).
               if (previewDataUrl != null && previewDataUrl.isNotEmpty)
                 'previewDataUrl': previewDataUrl,
+              'expectedRevision': expectedRevision,
+              'writeId': writeId,
             }),
           )
           .timeout(_uploadTimeout),
     );
 
+    if (response.statusCode == 409 || response.statusCode == 428) {
+      Map<String, dynamic>? remoteData;
+      try {
+        remoteData = jsonDecode(response.body) as Map<String, dynamic>;
+      } catch (_) {}
+      throw ConflictException(
+        'Conflit de note pour $tabKey, page $pageNumber',
+        remoteData: remoteData,
+      );
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Remote note sync failed (${response.statusCode})');
     }

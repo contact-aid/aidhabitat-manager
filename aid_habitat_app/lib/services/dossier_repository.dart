@@ -10,6 +10,7 @@ import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
 import 'context_sync_protocol.dart';
+import 'visit_recommendations_publication.dart';
 
 class SyncConflictReview {
   SyncConflictReview._({
@@ -312,7 +313,8 @@ class DossierRepository {
             (context
                 ? raw == null || !raw.containsKey('serverReference')
                 : remoteExists &&
-                    (version == null || DateTime.tryParse(version) == null))) {
+                      (version == null ||
+                          DateTime.tryParse(version) == null))) {
           throw StateError('Version distante de la fiche indisponible.');
         }
         final rows = await txn.query(
@@ -3670,22 +3672,20 @@ class DossierRepository {
         'sync_state': SyncState.pendingSync.name,
       };
 
-      // A partial library cache cannot authorize removal from a remote list.
-      // Keep remote links; only unresolved local drafts wait for identity remap.
-      final syncItems = items
-          .where((item) {
-            final id = item.wikiItemId.trim();
-            return id.isNotEmpty && !id.startsWith('local_draft_');
-          })
-          .map((e) => e.toJson())
-          .toList();
-
       final opId = 'visitrec_update_$dossierId';
       final row = existing.isEmpty ? null : existing.first;
-      final previous = await _readUnconfirmedMutation(
-        txn,
-        opId,
-        rootFields: const ['items'],
+      final queuedPublications = await txn.query(
+        'sync_operations',
+        columns: const ['id'],
+        where: 'id = ? AND status IN (?, ?, ?, ?)',
+        whereArgs: [
+          opId,
+          SyncOperationStatus.pending.name,
+          SyncOperationStatus.running.name,
+          SyncOperationStatus.failed.name,
+          'conflict',
+        ],
+        limit: 1,
       );
       // Keep observed linked items in the reference even if the current
       // library cache no longer contains them. Drafts were never published.
@@ -3697,6 +3697,14 @@ class DossierRepository {
                       (item['wikiItemId'] as String? ?? '').trim().isNotEmpty,
                 )
                 .toList();
+      final plan = planVisitRecommendationsPublication(
+        items: itemsJson,
+        hadPublishedItems: previousLinkedItems.isNotEmpty,
+        hasPendingPublication: queuedPublications.isNotEmpty,
+        remoteSnapshotExists: row?['remote_snapshot_exists'] == 1,
+        remoteRevision: row?['remote_revision'] as String?,
+        writeId: newSyncWriteId(),
+      );
       if (existing.isEmpty) {
         data['local_id'] = 'rec_${dossierId}_${_uuid()}';
         await txn.insert('visit_recommendations', data);
@@ -3709,24 +3717,58 @@ class DossierRepository {
         );
       }
 
-      if (syncItems.isNotEmpty ||
-          previous != null ||
-          previousLinkedItems.isNotEmpty) {
-        // PUT replaces the remote list. A draft-only edit must withdraw
-        // previously linked items, including an earlier in-flight intention.
-        // With no earlier intention or linked items, drafts stay local-only.
+      if (plan.shouldEnqueue) {
+        // Keep the established conflict/reference payload for review screens,
+        // while adding the atomic publication envelope consumed by the API.
         await _enqueueChildUpdate(
           txn,
           operationId: opId,
           entityType: 'visit_recommendations',
           dossierId: dossierId,
-          updates: {'items': syncItems},
+          updates: {'items': plan.publishedItems},
           baseValues: {
             if (row?['items_json'] != null) 'items': previousLinkedItems,
           },
           existingRow: row,
           rootFields: const ['items'],
           now: now,
+        );
+        final queued = await txn.query(
+          'sync_operations',
+          columns: const ['payload_json'],
+          where: 'id = ?',
+          whereArgs: [opId],
+          limit: 1,
+        );
+        if (queued.length != 1) {
+          throw StateError('Publication des préconisations introuvable');
+        }
+        final payload =
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    queued.single['payload_json'] as String,
+                  ),
+                )
+                as Map<String, dynamic>;
+        final guardValue = payload['concurrency'] ?? payload['localReference'];
+        final guard = (guardValue as Map?)?.cast<String, dynamic>();
+        final queuedWriteId = guard?['writeId']?.toString();
+        if (queuedWriteId == null || queuedWriteId.isEmpty) {
+          throw StateError('Identifiant de publication manquant');
+        }
+        payload['envelope'] = <String, dynamic>{
+          ...plan.envelope!,
+          'writeId': queuedWriteId,
+        };
+        await txn.update(
+          'sync_operations',
+          {
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+          },
+          where: 'id = ?',
+          whereArgs: [opId],
         );
       } else if (row?['sync_state'] == SyncState.conflict.name) {
         await txn.update(
@@ -4043,14 +4085,21 @@ class DossierRepository {
   /// local row is in `pendingSync` (uncommitted local edits).
   Future<bool> refreshVisitRecommendationsFromRemote(String dossierId) async {
     final NocodbApiClient api = NocodbApiClient();
-    final remoteItems = await api.fetchVisitRecommendationsPayload(dossierId);
-    return mergeRemoteVisitRecommendationsPayload(dossierId, remoteItems);
+    final snapshot = await api.fetchVisitRecommendationsSnapshot(dossierId);
+    return mergeRemoteVisitRecommendationsPayload(
+      dossierId,
+      (snapshot['items'] as List).cast<Map<String, dynamic>>(),
+      remoteRevision: snapshot['revision']?.toString(),
+      remoteSnapshotExists: snapshot['snapshotExists'] == true,
+    );
   }
 
   Future<bool> mergeRemoteVisitRecommendationsPayload(
     String dossierId,
-    List<Map<String, dynamic>> remoteItems,
-  ) async {
+    List<Map<String, dynamic>> remoteItems, {
+    String? remoteRevision,
+    bool remoteSnapshotExists = false,
+  }) async {
     final db = await _database.database;
     return db.transaction((db) async {
       final canMerge = await _canMergeRemoteChild(
@@ -4092,6 +4141,8 @@ class DossierRepository {
       final data = <String, dynamic>{
         'dossier_local_id': dossierId,
         'items_json': jsonEncode(merged),
+        'remote_revision': remoteRevision,
+        'remote_snapshot_exists': remoteSnapshotExists ? 1 : 0,
         'updated_at': now,
         // Si on a des drafts, on garde pendingSync pour que le prochain
         // refresh ne tente pas de les écraser. Sinon synced.

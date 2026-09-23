@@ -41,6 +41,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
     uuid_source: `synthetic-member-${Id}`, etablissements_id: 2, mot_de_passe: credential }));
   const initial = Object.fromEntries(Object.values(tables).map((id) => [id, []]));
   initial[tables.ergos] = members;
+  initial[tables.dependances] = [{ Id: 901, libelle: 'Canne' }];
   for (const [entity, records] of Object.entries(referenceRows)) initial[tables[entity]] = structuredClone(records);
   initial[tables.dossier] = [{ Id: 101, uuid_source: dossierId, patient_id: patientId,
     beneficiaires_id: 201, ergo_id: 'Test Owner', status: 'A visiter',
@@ -48,6 +49,8 @@ export function createRestMock({ referenceRows = {} } = {}) {
     visit_date: null, app_sync_revision: revision, UpdatedAt: timestamp }];
   initial[tables.beneficiaire] = [{ Id: 201, prenom: 'Synthetic', nom: 'Patient',
     telephone: '0100000000', mail: 'initial@patient.test.invalid',
+    aide_a_domicile: false, dependance_particuliere_txt: 'Aucune',
+    dependances_particulieres_id: null,
     app_sync_revision: revision, CreatedAt: timestamp, UpdatedAt: timestamp }];
   initial[tables.logement] = [{ Id: 301, uuid_source: 'synthetic-housing',
     beneficiaire_id: patientId, beneficiaires_id: 201, commentaire: 'initial',
@@ -55,7 +58,9 @@ export function createRestMock({ referenceRows = {} } = {}) {
   const schemas = {
     [tables.dossier]: columns({ compte_anah: 'SingleLineText', nature_accompagnement: 'SingleLineText',
       beneficiaire_prepare: 'Checkbox', visit_date: 'Date', status: 'SingleLineText' }),
-    [tables.beneficiaire]: columns({ telephone: 'PhoneNumber', mail: 'Email' }),
+    [tables.beneficiaire]: columns({ telephone: 'PhoneNumber', mail: 'Email',
+      aide_a_domicile: 'Checkbox', dependance_particuliere_txt: 'LongText',
+      dependances_particulieres_id: 'Number' }),
     [tables.logement]: columns({ commentaire: 'LongText', observation_accessibilite: 'LongText' }),
     [tables.mobile_note_pages]: columns(Object.fromEntries([
       'uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom',
