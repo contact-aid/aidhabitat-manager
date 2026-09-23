@@ -5,6 +5,16 @@
 
 set -euo pipefail
 
+release_target="all"
+if [ "${1:-}" = "--ios-only" ]; then
+  release_target="ios"
+  shift
+fi
+if [ "$#" -ne 0 ]; then
+  printf 'Usage: %s [--ios-only]\n' "$0" >&2
+  exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$APP_DIR"
@@ -91,10 +101,10 @@ if command -v xcodebuild >/dev/null 2>&1; then
   fi
 
   destinations="$(xcodebuild -showdestinations -project ios/Runner.xcodeproj -scheme Runner -configuration Release 2>&1 || true)"
-  if printf '%s' "$destinations" | grep -q 'Ineligible destinations'; then
-    fail "Xcode refuse la destination iOS. Ouvrir Xcode > Settings > Components et installer/reparer iOS."
-  else
+  if printf '%s' "$destinations" | grep -Eq 'platform:iOS[^}]*name:Any iOS Device|platform:iOS Simulator[^}]*name:iPad'; then
     ok "Destination iOS eligible pour le scheme Runner."
+  else
+    fail "Aucune destination iOS/iPad eligible pour le scheme Runner. Ouvrir Xcode > Settings > Components et installer/reparer iOS."
   fi
 else
   fail "xcodebuild introuvable."
@@ -112,7 +122,7 @@ else
   warn "DEVELOPMENT_TEAM non configure dans le projet iOS. Xcode pourra le renseigner via Signing & Capabilities."
 fi
 
-if rg -q 'TARGETED_DEVICE_FAMILY = "1,2"|TARGETED_DEVICE_FAMILY = 2' ios/Runner.xcodeproj/project.pbxproj; then
+if rg -q 'TARGETED_DEVICE_FAMILY = ("1,2"|"2"|2);' ios/Runner.xcodeproj/project.pbxproj; then
   ok "La cible iOS inclut bien l'iPad."
 else
   fail "La cible iOS n'inclut pas l'iPad."
@@ -142,73 +152,75 @@ else
   warn "Le scanner de documents natif n'est pas encore enregistre dans AppDelegate.swift."
 fi
 
-echo
-echo "Android / Play Store"
-echo "--------------------"
+if [ "$release_target" = "all" ]; then
+  echo
+  echo "Android / Play Store"
+  echo "--------------------"
 
-java_bin="${JAVA_HOME:-}/bin/java"
-if [ -n "${JAVA_HOME:-}" ] && [ -x "$java_bin" ]; then
-  java_output="$("$java_bin" -version 2>&1 || true)"
-else
-  java_output="$(java -version 2>&1 || true)"
-fi
-java_version="$(awk -F\" '/version/ {print $2; exit}' <<< "$java_output")"
-java_major="$(version_major "${java_version:-0}")"
-if [ "$java_major" = "1" ]; then
-  java_major="$(printf '%s' "$java_version" | cut -d. -f2)"
-fi
-if [ -n "$java_major" ] && [ "$java_major" -ge 17 ] && [ "$java_major" -le 24 ]; then
-  ok "Java $java_version compatible."
-else
-  fail "Java 17 ou 21 recommande. Version detectee: ${java_version:-inconnue}."
-fi
-
-android_sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-flutter_config_output="$(flutter config --list 2>/dev/null || true)"
-flutter_android_sdk="$(awk -F: '/android-sdk/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' <<< "$flutter_config_output")"
-if [ -z "$android_sdk" ]; then
-  android_sdk="$flutter_android_sdk"
-fi
-if [ -z "$android_sdk" ] && [ -d "/opt/homebrew/share/android-commandlinetools" ]; then
-  android_sdk="/opt/homebrew/share/android-commandlinetools"
-fi
-if [ -n "$android_sdk" ] && [ -d "$android_sdk/platforms/android-36" ]; then
-  ok "Android SDK 36 disponible ($android_sdk)."
-elif [ -n "$android_sdk" ] && [ -d "$android_sdk/platforms/android-35" ]; then
-  ok "Android SDK 35 disponible ($android_sdk)."
-else
-  fail "Android SDK 35/36 introuvable."
-fi
-
-if [ -f android/key.properties ]; then
-  missing_key_fields=0
-  for key in storeFile storePassword keyAlias keyPassword; do
-    if ! grep -q "^$key=" android/key.properties; then
-      missing_key_fields=$((missing_key_fields + 1))
-    fi
-  done
-  store_file="$(awk -F= '/^storeFile=/ {print $2; exit}' android/key.properties)"
-  if [ "$missing_key_fields" -eq 0 ] && [ -n "$store_file" ] && [ -f "$store_file" ]; then
-    ok "Signature Android release configuree."
+  java_bin="${JAVA_HOME:-}/bin/java"
+  if [ -n "${JAVA_HOME:-}" ] && [ -x "$java_bin" ]; then
+    java_output="$("$java_bin" -version 2>&1 || true)"
   else
-    fail "android/key.properties existe mais est incomplet ou storeFile est introuvable."
+    java_output="$(java -version 2>&1 || true)"
   fi
-else
-  fail "android/key.properties manquant: impossible de produire un AAB Play Store signe."
-fi
-
-if [ "$enough_disk" -eq 0 ]; then
-  warn "Check Gradle Android ignore tant que l'espace disque est insuffisant."
-else
-  if (
-    cd android
-    JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" \
-      PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH" \
-      ./gradlew -q :app:properties >/dev/null 2>&1
-  ); then
-    ok "Gradle Android repond correctement."
+  java_version="$(awk -F\" '/version/ {print $2; exit}' <<< "$java_output")"
+  java_major="$(version_major "${java_version:-0}")"
+  if [ "$java_major" = "1" ]; then
+    java_major="$(printf '%s' "$java_version" | cut -d. -f2)"
+  fi
+  if [ -n "$java_major" ] && [ "$java_major" -ge 17 ] && [ "$java_major" -le 24 ]; then
+    ok "Java $java_version compatible."
   else
-    fail "Gradle Android ne repond pas correctement."
+    fail "Java 17 ou 21 recommande. Version detectee: ${java_version:-inconnue}."
+  fi
+
+  android_sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+  flutter_config_output="$(flutter config --list 2>/dev/null || true)"
+  flutter_android_sdk="$(awk -F: '/android-sdk/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' <<< "$flutter_config_output")"
+  if [ -z "$android_sdk" ]; then
+    android_sdk="$flutter_android_sdk"
+  fi
+  if [ -z "$android_sdk" ] && [ -d "/opt/homebrew/share/android-commandlinetools" ]; then
+    android_sdk="/opt/homebrew/share/android-commandlinetools"
+  fi
+  if [ -n "$android_sdk" ] && [ -d "$android_sdk/platforms/android-36" ]; then
+    ok "Android SDK 36 disponible ($android_sdk)."
+  elif [ -n "$android_sdk" ] && [ -d "$android_sdk/platforms/android-35" ]; then
+    ok "Android SDK 35 disponible ($android_sdk)."
+  else
+    fail "Android SDK 35/36 introuvable."
+  fi
+
+  if [ -f android/key.properties ]; then
+    missing_key_fields=0
+    for key in storeFile storePassword keyAlias keyPassword; do
+      if ! grep -q "^$key=" android/key.properties; then
+        missing_key_fields=$((missing_key_fields + 1))
+      fi
+    done
+    store_file="$(awk -F= '/^storeFile=/ {print $2; exit}' android/key.properties)"
+    if [ "$missing_key_fields" -eq 0 ] && [ -n "$store_file" ] && [ -f "$store_file" ]; then
+      ok "Signature Android release configuree."
+    else
+      fail "android/key.properties existe mais est incomplet ou storeFile est introuvable."
+    fi
+  else
+    fail "android/key.properties manquant: impossible de produire un AAB Play Store signe."
+  fi
+
+  if [ "$enough_disk" -eq 0 ]; then
+    warn "Check Gradle Android ignore tant que l'espace disque est insuffisant."
+  else
+    if (
+      cd android
+      JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" \
+        PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH" \
+        ./gradlew -q :app:properties >/dev/null 2>&1
+    ); then
+      ok "Gradle Android repond correctement."
+    else
+      fail "Gradle Android ne repond pas correctement."
+    fi
   fi
 fi
 

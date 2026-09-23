@@ -188,6 +188,58 @@ Map<String, dynamic>? rebaseAcknowledgedMutation({
   };
 }
 
+/// Advances a queued note edit only after the server has acknowledged one of
+/// its own predecessors. Note revisions are UUIDs (rather than timestamps),
+/// so they cannot use [rebaseAcknowledgedMutation].
+///
+/// The identity fields must still describe the same note and the pending
+/// mutation must explicitly name the acknowledged write as a predecessor.
+/// This prevents a genuine edit from another device from being mistaken for
+/// a same-device autosave race.
+Map<String, dynamic>? rebaseAcknowledgedNoteMutation({
+  required Map<String, dynamic> sent,
+  required Map<String, dynamic> pending,
+  required String revision,
+}) {
+  final sentWriteId = sent['writeId'];
+  final pendingWriteId = pending['writeId'];
+  final predecessors = pending['predecessorWriteIds'];
+  final uuid = RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+    caseSensitive: false,
+  );
+  if (!uuid.hasMatch(revision) ||
+      sentWriteId is! String ||
+      pendingWriteId is! String ||
+      !uuid.hasMatch(sentWriteId) ||
+      !uuid.hasMatch(pendingWriteId) ||
+      sentWriteId == pendingWriteId ||
+      predecessors is! List ||
+      !predecessors.contains(sentWriteId) ||
+      pending.containsKey('conflict') ||
+      pending['expectedRevision'] != sent['expectedRevision']) {
+    return null;
+  }
+
+  const identityKeys = [
+    'patientLocalId',
+    'dossierId',
+    'scopeType',
+    'scopeId',
+    'tabKey',
+    'pageNumber',
+  ];
+  for (final key in identityKeys) {
+    if (sent[key] != pending[key]) return null;
+  }
+
+  return {
+    ...pending,
+    'expectedRevision': revision,
+    'predecessorWriteIds': <String>[],
+  };
+}
+
 class SyncMergePlan {
   const SyncMergePlan({required this.updates, required this.conflictingFields});
 

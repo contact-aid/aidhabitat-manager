@@ -378,6 +378,21 @@ class SyncRepository {
     acknowledgedRemoteEntityId: remoteEntityId,
   );
 
+  Future<bool> acknowledgeNotePageMutation(
+    SyncOperation operation, {
+    required String revision,
+    required String remotePath,
+    required String remoteUrl,
+  }) => _markCompleted(
+    operationId: operation.id,
+    entityType: operation.entityType,
+    entityLocalId: operation.entityLocalId,
+    expectedPayloadJson: operation.payloadJson,
+    acknowledgedVersion: revision,
+    acknowledgedRemotePath: remotePath,
+    acknowledgedRemoteUrl: remoteUrl,
+  );
+
   Future<bool> _markCompleted({
     required String operationId,
     required String entityType,
@@ -385,6 +400,8 @@ class SyncRepository {
     String? expectedPayloadJson,
     String? acknowledgedVersion,
     String? acknowledgedRemoteEntityId,
+    String? acknowledgedRemotePath,
+    String? acknowledgedRemoteUrl,
   }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
@@ -410,11 +427,20 @@ class SyncRepository {
                   (rows.single['status'] == 'running' &&
                       currentPayload == expectedPayloadJson)) &&
               acknowledgedVersion != null) {
-            final rebased = rebaseAcknowledgedMutation(
-              sent: retry is Map ? retry.cast<String, dynamic>() : expected,
-              pending: jsonDecode(currentPayload) as Map<String, dynamic>,
-              version: acknowledgedVersion,
-            );
+            final pending = jsonDecode(currentPayload) as Map<String, dynamic>;
+            final rebased = entityType == 'note_page'
+                ? rebaseAcknowledgedNoteMutation(
+                    sent: expected,
+                    pending: pending,
+                    revision: acknowledgedVersion,
+                  )
+                : rebaseAcknowledgedMutation(
+                    sent: retry is Map
+                        ? retry.cast<String, dynamic>()
+                        : expected,
+                    pending: pending,
+                    version: acknowledgedVersion,
+                  );
             if (rebased != null) {
               await txn.update(
                 'sync_operations',
@@ -434,6 +460,8 @@ class SyncRepository {
                 entityLocalId,
                 acknowledgedVersion,
                 remoteEntityId: acknowledgedRemoteEntityId,
+                remotePath: acknowledgedRemotePath,
+                remoteUrl: acknowledgedRemoteUrl,
               );
             }
           }
@@ -447,6 +475,8 @@ class SyncRepository {
           entityLocalId,
           acknowledgedVersion,
           remoteEntityId: acknowledgedRemoteEntityId,
+          remotePath: acknowledgedRemotePath,
+          remoteUrl: acknowledgedRemoteUrl,
         );
       }
       final updated = await txn.update(
@@ -505,12 +535,15 @@ class SyncRepository {
     String id,
     String version, {
     String? remoteEntityId,
+    String? remotePath,
+    String? remoteUrl,
   }) async {
     final table = switch (type) {
       'patient' => 'patients',
       'housing' => 'housings',
       'dossier' => 'dossiers',
       'contexte_de_vie' => 'contexte_de_vie',
+      'note_page' => 'note_pages',
       'mesures_anthropometriques' ||
       'observations_synthese' ||
       'diagnostic_sanitaires' => type,
@@ -520,6 +553,12 @@ class SyncRepository {
       table,
       type == 'contexte_de_vie'
           ? {'remote_reference_json': version, 'remote_reference_known': 1}
+          : type == 'note_page'
+          ? {
+              'remote_revision': version,
+              'drawing_remote_path': remotePath ?? '',
+              'drawing_remote_url': remoteUrl ?? '',
+            }
           : {
               'remote_updated_at': version,
               if (type == 'housing' && remoteEntityId != null)
@@ -1558,6 +1597,181 @@ class SyncRepository {
     return dossiers.length == 1 ? dossiers.single['local_id'] as String : null;
   }
 
+  Future<Map<String, dynamic>?> noteConflictDetails(String operationId) async {
+    final db = await _database.database;
+    final rows = await db.query(
+      'sync_operations',
+      columns: const ['entity_type', 'entity_local_id', 'payload_json'],
+      where: 'id = ? AND status = ?',
+      whereArgs: [operationId, 'conflict'],
+      limit: 1,
+    );
+    if (rows.length != 1 || rows.single['entity_type'] != 'note_page') {
+      return null;
+    }
+    try {
+      final payload =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  rows.single['payload_json'] as String,
+                ),
+              )
+              as Map<String, dynamic>;
+      final tabKey = payload['tabKey']?.toString() ?? '';
+      const visitReportTabs = {
+        'Bénéficiaire',
+        'Contexte de vie',
+        'Mesures',
+        'Accessibilité',
+        'Salle de bain',
+        'WC',
+        'Préconisations',
+      };
+      final scopeType = payload['scopeType']?.toString().isNotEmpty == true
+          ? payload['scopeType'].toString()
+          : tabKey == 'Plans'
+          ? 'visit_grid'
+          : visitReportTabs.contains(tabKey)
+          ? 'visit_report'
+          : 'dossier_detail';
+      final patientId = payload['patientLocalId']?.toString() ?? '';
+      final scopeId = payload['scopeId']?.toString().isNotEmpty == true
+          ? payload['scopeId'].toString()
+          : payload['dossierId']?.toString().isNotEmpty == true
+          ? payload['dossierId'].toString()
+          : patientId;
+      return {
+        'operationId': operationId,
+        'noteLocalId': rows.single['entity_local_id'],
+        'patientId': patientId,
+        'dossierId': payload['dossierId'],
+        'scopeType': scopeType,
+        'scopeId': scopeId,
+        'tabKey': tabKey,
+        'pageNumber': payload['pageNumber'] ?? 0,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Explicit user choice: keep the complete local note and retry it against
+  /// the revision observed in the 409 response. This is never automatic for
+  /// a genuine cross-device conflict.
+  Future<bool> resolveNoteConflictKeepingLocal(String operationId) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        columns: const ['entity_type', 'entity_local_id', 'payload_json'],
+        where: 'id = ? AND status = ?',
+        whereArgs: [operationId, 'conflict'],
+        limit: 1,
+      );
+      if (rows.length != 1 || rows.single['entity_type'] != 'note_page') {
+        return false;
+      }
+      final payload =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  rows.single['payload_json'] as String,
+                ),
+              )
+              as Map<String, dynamic>;
+      final revision = _noteConflictRevision(payload['conflict']);
+      if (revision == null) return false;
+      payload
+        ..remove('conflict')
+        ..['expectedRevision'] = revision
+        ..['writeId'] = newSyncWriteId()
+        ..['predecessorWriteIds'] = <String>[];
+      final updated = await txn.update(
+        'sync_operations',
+        {
+          'payload_json': await OfflineVault.instance.sealString(
+            jsonEncode(payload),
+          ),
+          'status': SyncOperationStatus.pending.name,
+          'attempt_count': 0,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND status = ?',
+        whereArgs: [operationId, 'conflict'],
+      );
+      if (updated != 1) return false;
+      await txn.update(
+        'note_pages',
+        {'remote_revision': revision, 'sync_state': SyncState.pendingSync.name},
+        where: 'local_id = ?',
+        whereArgs: [rows.single['entity_local_id']],
+      );
+      return true;
+    });
+  }
+
+  /// Explicit user choice: replace the conflicted local note with the server
+  /// snapshot already fetched by the caller, then retire the queued write.
+  Future<bool> resolveNoteConflictUsingServer(
+    String operationId,
+    Map<String, dynamic> remote,
+  ) async {
+    final details = await noteConflictDetails(operationId);
+    if (details == null ||
+        remote['patientId']?.toString() != details['patientId']?.toString() ||
+        remote['tabKey']?.toString() != details['tabKey']?.toString() ||
+        '${remote['pageNumber'] ?? 0}' != '${details['pageNumber'] ?? 0}' ||
+        remote['scopeType']?.toString() != details['scopeType']?.toString() ||
+        remote['scopeId']?.toString() != details['scopeId']?.toString()) {
+      return false;
+    }
+    final drawing = await OfflineVault.instance.sealString(
+      remote['drawingJson']?.toString() ?? '',
+    );
+    final hasText = remote.containsKey('textContent');
+    final text = hasText
+        ? await OfflineVault.instance.sealString(
+            remote['textContent']?.toString() ?? '',
+          )
+        : null;
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final operations = await txn.query(
+        'sync_operations',
+        columns: const ['entity_local_id'],
+        where: 'id = ? AND entity_type = ? AND status = ?',
+        whereArgs: [operationId, 'note_page', 'conflict'],
+        limit: 1,
+      );
+      if (operations.length != 1) return false;
+      final values = <String, Object?>{
+        'drawing_json': drawing,
+        if (hasText) 'text_content': text,
+        'drawing_remote_path': remote['remotePath']?.toString() ?? '',
+        'drawing_remote_url': remote['remoteUrl']?.toString() ?? '',
+        'remote_revision': remote['revision']?.toString(),
+        if (remote.containsKey('planPhase'))
+          'plan_phase': remote['planPhase']?.toString(),
+        'updated_at':
+            remote['updatedAt']?.toString() ?? DateTime.now().toIso8601String(),
+        'sync_state': SyncState.synced.name,
+      };
+      final changed = await txn.update(
+        'note_pages',
+        values,
+        where: 'local_id = ?',
+        whereArgs: [operations.single['entity_local_id']],
+      );
+      if (changed != 1) return false;
+      final removed = await txn.delete(
+        'sync_operations',
+        where: 'id = ? AND status = ?',
+        whereArgs: [operationId, 'conflict'],
+      );
+      return removed == 1;
+    });
+  }
+
   /// Réinitialise UNE op à `pending` (attempt_count=0, last_error=null).
   /// Renvoie le nombre de lignes modifiées (0 ou 1).
   Future<int> resetSingleOperationToPending(String operationId) async {
@@ -1573,6 +1787,33 @@ class SyncRepository {
       where: 'id = ? AND status = ?',
       whereArgs: [operationId, SyncOperationStatus.failed.name],
     );
+  }
+
+  String? _noteConflictRevision(Object? conflict) {
+    final uuid = RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+      caseSensitive: false,
+    );
+    String? search(Object? value) {
+      if (value is Map) {
+        for (final key in const ['revision', 'app_sync_revision']) {
+          final candidate = value[key]?.toString();
+          if (candidate != null && uuid.hasMatch(candidate)) return candidate;
+        }
+        for (final nested in value.values) {
+          final found = search(nested);
+          if (found != null) return found;
+        }
+      } else if (value is List) {
+        for (final nested in value) {
+          final found = search(nested);
+          if (found != null) return found;
+        }
+      }
+      return null;
+    }
+
+    return search(conflict);
   }
 
   /// Supprime UNE op de la file (utilisé par "Abandonner" sur une

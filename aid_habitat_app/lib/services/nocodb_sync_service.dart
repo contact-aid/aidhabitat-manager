@@ -475,6 +475,21 @@ class NocodbSyncService {
             version,
             remoteEntityId: remoteEntityId,
           );
+        } else if (operation.entityType == 'note_page') {
+          final notePage = await _processNotePageOperation(
+            operation,
+            jsonDecode(operation.payloadJson) as Map<String, dynamic>,
+          );
+          SyncSessionScope.current?.check();
+          final revision = notePage?['revision']?.toString();
+          acknowledged = revision == null || revision.isEmpty
+              ? await _syncRepository.markCompletedForPayload(operation)
+              : await _syncRepository.acknowledgeNotePageMutation(
+                  operation,
+                  revision: revision,
+                  remotePath: notePage?['remotePath']?.toString() ?? '',
+                  remoteUrl: notePage?['remoteUrl']?.toString() ?? '',
+                );
         } else {
           await _processOperation(operation);
           SyncSessionScope.current?.check();
@@ -621,9 +636,6 @@ class NocodbSyncService {
         return;
       case 'document':
         await _processDocumentOperation(operation, payload);
-        return;
-      case 'note_page':
-        await _processNotePageOperation(operation, payload);
         return;
       case 'contexte_de_vie':
         await _processContexteDeVieOperation(operation, payload);
@@ -1827,7 +1839,7 @@ class NocodbSyncService {
     );
   }
 
-  Future<void> _processNotePageOperation(
+  Future<Map<String, dynamic>?> _processNotePageOperation(
     SyncOperation operation,
     Map<String, dynamic> payload,
   ) async {
@@ -1889,7 +1901,7 @@ class NocodbSyncService {
         patientId.contains('-') && patientId.length > 20;
     if (!looksRemote) {
       // On ne fait rien — l'opération est considérée comme traitée.
-      return;
+      return null;
     }
 
     // Phase d'un dessin Plans (avant / apres / null) — saveDrawingJson
@@ -1923,12 +1935,7 @@ class NocodbSyncService {
       writeId: writeId,
     );
 
-    await _syncRepository.storeNotePageRemoteData(
-      noteLocalId: operation.entityLocalId,
-      remotePath: notePage['remotePath']?.toString() ?? '',
-      remoteUrl: notePage['remoteUrl']?.toString() ?? '',
-      revision: notePage['revision']?.toString(),
-    );
+    return notePage;
   }
 }
 
