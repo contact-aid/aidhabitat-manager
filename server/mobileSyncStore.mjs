@@ -4,6 +4,7 @@ import process from 'node:process';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 import { callNocoTool, requestConditionalNocodbRest } from './nocodbMcpClient.mjs';
+import { notePageReadFields } from './notePageFields.mjs';
 
 const syncRevisionField = 'app_sync_revision';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -118,6 +119,8 @@ const previewDataUrlForStorage = (previewDataUrl) => {
   return '';
 };
 
+// Every optional field written by upsertNotePage must be read back for its
+// post-write confirmation and stable writeId replay.
 export const MOBILE_SYNC_SCHEMA_SPEC = {
   documents: {
     tableName: TABLE_NAMES.documents,
@@ -950,14 +953,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
   };
 
   const getNotePageFields = async () => {
-    const fields = ['uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom', 'beneficiaire_nom_complet', 'dossier_libelle', 'scope_type', 'scope_id', 'tab_key', 'sub_tab_key', 'page_number', 'text_content', 'drawing_json', 'layout_kind', syncRevisionField, 'updated_at'];
-    if (await supportsNotePageField('preview_data_url')) {
-      fields.splice(fields.indexOf('layout_kind'), 0, 'preview_data_url');
-    }
-    if (await supportsNotePageField('preview_url')) {
-      fields.splice(fields.indexOf('layout_kind'), 0, 'preview_url');
-    }
-    return fields;
+    return notePageReadFields(await getNotePageFieldNames());
   };
 
   const notePageIdentityWhere = ({
