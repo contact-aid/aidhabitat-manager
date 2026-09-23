@@ -336,4 +336,78 @@ void main() {
     expect(plan.canApplyAutomatically, isFalse);
     expect(plan.updates, {'phone': '456'});
   });
+
+  test('a rapid successor note is rebased on its acknowledged write', () {
+    const first = '11111111-1111-4111-8111-111111111111';
+    const second = '22222222-2222-4222-8222-222222222222';
+    const before = '00000000-0000-4000-8000-000000000000';
+    const acknowledged = '33333333-3333-4333-8333-333333333333';
+    final sent = {
+      'patientLocalId': 'patient-1',
+      'dossierId': 'dossier-1',
+      'scopeType': 'visit_report',
+      'scopeId': 'dossier-1',
+      'tabKey': 'Contexte de vie-Médical',
+      'pageNumber': 0,
+      'drawingJson': 'first',
+      'expectedRevision': before,
+      'writeId': first,
+      'predecessorWriteIds': <String>[],
+    };
+    final pending = {
+      ...sent,
+      'drawingJson': 'latest',
+      'writeId': second,
+      'predecessorWriteIds': [first],
+    };
+
+    final rebased = rebaseAcknowledgedNoteMutation(
+      sent: sent,
+      pending: pending,
+      revision: acknowledged,
+    );
+
+    expect(rebased?['drawingJson'], 'latest');
+    expect(rebased?['writeId'], second);
+    expect(rebased?['expectedRevision'], acknowledged);
+    expect(rebased?['predecessorWriteIds'], isEmpty);
+  });
+
+  test('a note is never rebased without proof of same-device succession', () {
+    const first = '11111111-1111-4111-8111-111111111111';
+    const second = '22222222-2222-4222-8222-222222222222';
+    const acknowledged = '33333333-3333-4333-8333-333333333333';
+    final sent = {
+      'patientLocalId': 'patient-1',
+      'tabKey': 'Contexte de vie-Médical',
+      'pageNumber': 0,
+      'expectedRevision': null,
+      'writeId': first,
+    };
+    final unrelated = {
+      ...sent,
+      'writeId': second,
+      'predecessorWriteIds': <String>[],
+    };
+    expect(
+      rebaseAcknowledgedNoteMutation(
+        sent: sent,
+        pending: unrelated,
+        revision: acknowledged,
+      ),
+      isNull,
+    );
+    expect(
+      rebaseAcknowledgedNoteMutation(
+        sent: sent,
+        pending: {
+          ...unrelated,
+          'predecessorWriteIds': [first],
+          'conflict': {'remote': 'other-device'},
+        },
+        revision: acknowledged,
+      ),
+      isNull,
+    );
+  });
 }

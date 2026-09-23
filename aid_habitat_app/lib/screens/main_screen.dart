@@ -420,6 +420,61 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _reviewConflict(String operationId) async {
+    final note = await _dataService.noteConflictDetails(operationId);
+    if (note != null) {
+      if (!mounted) return;
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Conflit sur une note'),
+          content: Text(
+            'La note « ${note['tabKey'] ?? 'sans titre'} », page '
+            '${note['pageNumber'] ?? 0}, existe en deux versions. '
+            'Choisissez celle à conserver.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Annuler'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop('server'),
+              child: const Text('Prendre la note du serveur'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop('local'),
+              child: const Text('Conserver ma note locale'),
+            ),
+          ],
+        ),
+      );
+      if (choice == null || !mounted) return;
+      final resolved = choice == 'local'
+          ? await _dataService.resolveNoteConflictKeepingLocal(operationId)
+          : await _dataService.resolveNoteConflictUsingServer(operationId);
+      if (!mounted) return;
+      if (resolved) {
+        _syncEngine.requestSync();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              choice == 'local'
+                  ? 'Note locale conservée et remise en synchronisation.'
+                  : 'Note du serveur restaurée sur cet appareil.',
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Résolution impossible pour le moment. La note locale est conservée.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
     final dossierId = await _syncEngine.conflictDossierId(operationId);
     final dossier = dossierId == null
         ? null

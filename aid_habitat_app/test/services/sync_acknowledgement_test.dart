@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -43,6 +45,13 @@ void main() {
     await db.execute('ALTER TABLE housings ADD COLUMN remote_housing_id TEXT');
     await db.execute('ALTER TABLE note_pages ADD COLUMN dossier_local_id TEXT');
     await db.execute('ALTER TABLE note_pages ADD COLUMN patient_local_id TEXT');
+    await db.execute('ALTER TABLE note_pages ADD COLUMN remote_revision TEXT');
+    await db.execute(
+      'ALTER TABLE note_pages ADD COLUMN drawing_remote_path TEXT',
+    );
+    await db.execute(
+      'ALTER TABLE note_pages ADD COLUMN drawing_remote_url TEXT',
+    );
     await db.execute(
       'CREATE TABLE dossiers (local_id TEXT PRIMARY KEY, '
       'housing_local_id TEXT, patient_local_id TEXT, sync_state TEXT, remote_updated_at TEXT)',
@@ -187,6 +196,129 @@ void main() {
     expect(housing['remote_housing_id'], 'housing-remote');
     expect(housing['remote_updated_at'], '2026-09-10T10:00:00.000Z');
     expect(housing['sync_state'], 'synced');
+  });
+
+  test(
+    'note ACK rebases a rapid successor without losing its content',
+    () async {
+      const oldRevision = '00000000-0000-4000-8000-000000000000';
+      const firstWrite = '11111111-1111-4111-8111-111111111111';
+      const secondWrite = '22222222-2222-4222-8222-222222222222';
+      const acknowledged = '33333333-3333-4333-8333-333333333333';
+      await db.insert('note_pages', {
+        'local_id': 'note-1',
+        'sync_state': 'pendingSync',
+        'remote_revision': oldRevision,
+      });
+      final sent = {
+        'patientLocalId': 'patient-1',
+        'tabKey': 'Contexte de vie-Médical',
+        'pageNumber': 0,
+        'drawingJson': 'first',
+        'expectedRevision': oldRevision,
+        'writeId': firstWrite,
+        'predecessorWriteIds': <String>[],
+      };
+      final pending = {
+        ...sent,
+        'drawingJson': 'latest',
+        'writeId': secondWrite,
+        'predecessorWriteIds': [firstWrite],
+      };
+      await insertOperation(
+        'note-op',
+        status: 'pending',
+        entityType: 'note_page',
+        entityId: 'note-1',
+        operationType: 'upsert',
+        payload: jsonEncode(pending),
+      );
+      final operation = SyncOperation(
+        id: 'note-op',
+        entityType: 'note_page',
+        entityLocalId: 'note-1',
+        operationType: 'upsert',
+        payloadJson: jsonEncode(sent),
+        status: SyncOperationStatus.running,
+        attemptCount: 0,
+        createdAt: DateTime.parse(timestamp),
+        updatedAt: DateTime.parse(timestamp),
+      );
+
+      expect(
+        await repository.acknowledgeNotePageMutation(
+          operation,
+          revision: acknowledged,
+          remotePath: 'remote/path',
+          remoteUrl: 'https://example.test/note',
+        ),
+        isFalse,
+      );
+
+      final queued = (await db.query(
+        'sync_operations',
+        where: 'id = ?',
+        whereArgs: ['note-op'],
+      )).single;
+      final payload = jsonDecode(queued['payload_json'] as String) as Map;
+      expect(queued['status'], 'pending');
+      expect(payload['drawingJson'], 'latest');
+      expect(payload['writeId'], secondWrite);
+      expect(payload['expectedRevision'], acknowledged);
+      final note = (await db.query('note_pages')).single;
+      expect(note['remote_revision'], acknowledged);
+      expect(note['drawing_remote_path'], 'remote/path');
+      expect(note['sync_state'], 'pendingSync');
+    },
+  );
+
+  test('keeping a conflicted note is an explicit guarded requeue', () async {
+    const oldRevision = '00000000-0000-4000-8000-000000000000';
+    const observedRevision = '33333333-3333-4333-8333-333333333333';
+    const writeId = '11111111-1111-4111-8111-111111111111';
+    await db.insert('note_pages', {
+      'local_id': 'note-1',
+      'sync_state': 'conflict',
+      'remote_revision': oldRevision,
+    });
+    await insertOperation(
+      'note-conflict',
+      status: 'conflict',
+      entityType: 'note_page',
+      entityId: 'note-1',
+      operationType: 'upsert',
+      payload: jsonEncode({
+        'patientLocalId': 'patient-1',
+        'tabKey': 'Contexte de vie-Médical',
+        'pageNumber': 0,
+        'drawingJson': 'latest-local',
+        'expectedRevision': oldRevision,
+        'writeId': writeId,
+        'conflict': {
+          'remote': {
+            'error': 'NOTE_PAGE_REVISION_CONFLICT',
+            'remoteData': {'app_sync_revision': observedRevision},
+          },
+        },
+      }),
+    );
+
+    expect(
+      await repository.resolveNoteConflictKeepingLocal('note-conflict'),
+      isTrue,
+    );
+    final operation = (await db.query(
+      'sync_operations',
+      where: 'id = ?',
+      whereArgs: ['note-conflict'],
+    )).single;
+    final payload = jsonDecode(operation['payload_json'] as String) as Map;
+    expect(operation['status'], 'pending');
+    expect(payload['drawingJson'], 'latest-local');
+    expect(payload['expectedRevision'], observedRevision);
+    expect(payload.containsKey('conflict'), isFalse);
+    expect(payload['writeId'], isNot(writeId));
+    expect((await db.query('note_pages')).single['sync_state'], 'pendingSync');
   });
 
   Future<Map<String, Object?>> document() async => (await db.query(

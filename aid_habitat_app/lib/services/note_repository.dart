@@ -255,6 +255,7 @@ class NoteRepository {
           'drawingJson': drawingJson,
           'expectedRevision': mutation.expectedRevision,
           'writeId': mutation.writeId,
+          'predecessorWriteIds': mutation.predecessorWriteIds,
           if (preservedPhase != null) 'planPhase': preservedPhase,
           // `previewDataUrl` rasterisé côté Flutter (PNG base64). Stocké
           // uniquement dans le payload de la sync_op (pas en SQLite
@@ -339,6 +340,7 @@ class NoteRepository {
           'drawingJson': drawingJson,
           'expectedRevision': mutation.expectedRevision,
           'writeId': mutation.writeId,
+          'predecessorWriteIds': mutation.predecessorWriteIds,
           'planPhase': planPhaseToDb(phase),
         }),
       ),
@@ -536,7 +538,14 @@ class NoteRepository {
     return true;
   }
 
-  Future<({String? expectedRevision, String writeId})> _nextNoteMutation(
+  Future<
+    ({
+      String? expectedRevision,
+      String writeId,
+      List<String> predecessorWriteIds,
+    })
+  >
+  _nextNoteMutation(
     DatabaseExecutor db,
     String operationId,
     String? fallbackRevision,
@@ -555,6 +564,7 @@ class NoteRepository {
       limit: 1,
     );
     String? expectedRevision = fallbackRevision;
+    final predecessorWriteIds = <String>[];
     if (rows.isNotEmpty) {
       try {
         final raw = await OfflineVault.instance.openString(
@@ -564,11 +574,25 @@ class NoteRepository {
         if (payload.containsKey('expectedRevision')) {
           expectedRevision = payload['expectedRevision']?.toString();
         }
+        final previousWriteId = payload['writeId']?.toString();
+        if (previousWriteId != null && previousWriteId.isNotEmpty) {
+          predecessorWriteIds.add(previousWriteId);
+        }
+        final previousPredecessors = payload['predecessorWriteIds'];
+        if (previousPredecessors is List) {
+          predecessorWriteIds.addAll(
+            previousPredecessors.map((value) => value.toString()),
+          );
+        }
       } catch (_) {
         throw const FormatException('Mutation de note illisible');
       }
     }
-    return (expectedRevision: expectedRevision, writeId: newSyncWriteId());
+    return (
+      expectedRevision: expectedRevision,
+      writeId: newSyncWriteId(),
+      predecessorWriteIds: predecessorWriteIds.toSet().take(256).toList(),
+    );
   }
 
   /// Compare deux timestamps ISO-8601 (ex. `2026-05-07T14:30:00Z`)
