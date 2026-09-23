@@ -122,6 +122,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   // propres coches dans Médicale/Autonomie.
   int _medicalOccupantIndex = 0;
   final Map<int, Set<int>> _medicalFlagNumbersByOccupant = <int, Set<int>>{};
+  int _medicalFlagsUserEditRevision = 0;
 
   Set<int> get _currentMedicalFlagNumbers => Set<int>.unmodifiable(
     _medicalFlagNumbersByOccupant[_medicalOccupantIndex] ?? const <int>{},
@@ -520,6 +521,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       tabKey: tabKey,
       pageNumber: 0,
       drawingJson: merged,
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
 
@@ -535,7 +537,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     } else {
       next.remove(flagNumber);
     }
-    setState(() => _medicalFlagNumbersByOccupant[_medicalOccupantIndex] = next);
+    setState(() {
+      _medicalFlagNumbersByOccupant[_medicalOccupantIndex] = next;
+      _medicalFlagsUserEditRevision += 1;
+    });
   }
 
   /// Appelé par NotesWidget (via `onMedicalFlagsChanged`) lorsqu'il
@@ -1132,6 +1137,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                             medicalFlagsScopeKey: isMedical
                                 ? 'occupant_$_medicalOccupantIndex'
                                 : null,
+                            medicalFlagsUserEditRevision:
+                                _medicalFlagsUserEditRevision,
                             onMedicalFlagsChanged: isMedical
                                 ? _handleMedicalFlagsFromNotes
                                 : null,

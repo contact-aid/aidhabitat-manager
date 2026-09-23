@@ -12,6 +12,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/pencil_interaction_service.dart';
 import 'confirmation_dialog.dart';
@@ -763,6 +764,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
       pageNumber: pageNumber,
       drawingJson: payload,
       previewDataUrl: previewDataUrl,
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
 

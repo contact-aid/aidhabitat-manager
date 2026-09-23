@@ -102,6 +102,7 @@ class _PlansTabState extends State<PlansTab> {
       tabKey: _kTabKey,
       pageNumber: newIndex,
       drawingJson: sourceJson,
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
     await _dataService.setNotePlanPhase(
       patientId: widget.dossier.patient.id,
@@ -176,6 +177,7 @@ class _PlansTabState extends State<PlansTab> {
         tabKey: _kTabKey,
         pageNumber: i,
         drawingJson: next ?? '',
+        mutationOrigin: SyncMutationOrigin.userEdit,
       );
       await _dataService.setNotePlanPhase(
         patientId: widget.dossier.patient.id,
@@ -190,6 +192,7 @@ class _PlansTabState extends State<PlansTab> {
       tabKey: _kTabKey,
       pageNumber: _totalPages - 1,
       drawingJson: '',
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
     await _dataService.setNotePlanPhase(
       patientId: widget.dossier.patient.id,

@@ -191,6 +191,7 @@ class NoteRepository {
     String? dossierId,
     String? scopeType,
     String? scopeId,
+    required SyncMutationOrigin mutationOrigin,
   }) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
@@ -256,6 +257,7 @@ class NoteRepository {
           'expectedRevision': mutation.expectedRevision,
           'writeId': mutation.writeId,
           'predecessorWriteIds': mutation.predecessorWriteIds,
+          'mutationOrigin': mutationOrigin.wireName,
           if (preservedPhase != null) 'planPhase': preservedPhase,
           // `previewDataUrl` rasterisé côté Flutter (PNG base64). Stocké
           // uniquement dans le payload de la sync_op (pas en SQLite
@@ -342,6 +344,7 @@ class NoteRepository {
           'writeId': mutation.writeId,
           'predecessorWriteIds': mutation.predecessorWriteIds,
           'planPhase': planPhaseToDb(phase),
+          'mutationOrigin': SyncMutationOrigin.userEdit.wireName,
         }),
       ),
       'status': SyncOperationStatus.pending.name,

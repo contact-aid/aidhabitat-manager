@@ -165,14 +165,17 @@ class _RecommendationsTabState extends State<RecommendationsTab>
     final visibleItems = hydratedItems
         .where(_hasSelectedLibraryItem)
         .toList(growable: false);
-    final removedEmptyItems = visibleItems.length != hydratedItems.length;
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
       _items = visibleItems;
       _wikiItems = localWiki;
       _loaded = true;
     });
-    if (removedEmptyItems) _scheduleSave();
+    // Hydration is read-only. Historical empty drafts remain preserved in
+    // SQLite and are merely hidden from the grid. Removing them is a data
+    // migration and must never be disguised as an autosave triggered by
+    // opening/rebuilding the tab. A future cleanup, if needed, must be an
+    // explicit user action or a separately audited migration.
   }
 
   bool _hasSelectedLibraryItem(VisitRecommendationItem item) {

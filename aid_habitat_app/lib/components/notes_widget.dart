@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/ai_rewrite_service.dart';
 import '../services/pencil_interaction_service.dart';
@@ -198,6 +199,7 @@ class NotesWidget extends StatefulWidget {
     this.leadingNavWidget,
     this.medicalFlags,
     this.medicalFlagsScopeKey,
+    this.medicalFlagsUserEditRevision = 0,
     this.onMedicalFlagsChanged,
     this.stackedCards = false,
     this.stackedTextFraction,
@@ -353,6 +355,11 @@ class NotesWidget extends StatefulWidget {
   /// ne partagent pas les mêmes coches médicales.
   final String? medicalFlagsScopeKey;
 
+  /// Jeton incrémenté uniquement par un geste utilisateur qui modifie les
+  /// flags. Une nouvelle valeur de [medicalFlags] issue d'une hydratation,
+  /// d'un changement de page/occupant ou d'un pull ne doit pas être republiée.
+  final int medicalFlagsUserEditRevision;
+
   /// Callback émis lorsque la page active change ou après chargement
   /// initial — transmet les flags médicaux stockés pour cette page.
   /// Le parent l'utilise pour rafraîchir l'état des cases à cocher
@@ -430,6 +437,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       dossierId: widget.dossierId,
       scopeType: widget.scopeType,
       scopeId: widget.scopeId,
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
 
@@ -701,6 +709,8 @@ class _NotesWidgetState extends State<NotesWidget> {
     // Désormais : flags GLOBAUX (mêmes valeurs sur toutes les pages),
     // donc le switch ne change rien à l'état des cases parent.
     if (!medicalScopeChanged &&
+        oldWidget.medicalFlagsUserEditRevision !=
+            widget.medicalFlagsUserEditRevision &&
         widget.medicalFlags != null &&
         !_setIntEquals(
           widget.medicalFlags!,
@@ -2037,7 +2047,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       _isVoiceDictating = false;
       _currentPage = page;
       if (!widget.sharedText) {
-        _textController.text = _pageTexts[page] ?? '';
+        _setControllerSilently(_pageTexts[page] ?? '');
       }
       _activeStroke = null;
       _isDirty = false;
@@ -2142,7 +2152,7 @@ class _NotesWidgetState extends State<NotesWidget> {
         ..addAll(nextScopedFlags);
       _totalPages -= 1;
       if (_currentPage >= _totalPages) _currentPage = _totalPages - 1;
-      _textController.text = _pageTexts[_currentPage] ?? '';
+      _setControllerSilently(_pageTexts[_currentPage] ?? '');
       _undoStack.clear();
       _redoStack.clear();
       _isDirty = false;

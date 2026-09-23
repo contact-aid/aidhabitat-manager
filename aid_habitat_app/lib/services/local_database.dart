@@ -19,6 +19,7 @@ import 'package:sqflite/sqflite.dart';
 // au niveau applicatif via `OfflineVault`.
 import 'package:sqflite_sqlcipher/sqflite.dart' as sqlcipher;
 
+import '../models/types.dart';
 import 'offline_vault.dart';
 import 'secure_session_storage.dart';
 import 'sync_operation_ownership.dart';
@@ -706,6 +707,7 @@ class LocalDatabase {
             'floor': false,
             'levels': 0,
           },
+          'mutationOrigin': SyncMutationOrigin.dataMigration.wireName,
         }),
         'status': 'pending',
         'attempt_count': 0,

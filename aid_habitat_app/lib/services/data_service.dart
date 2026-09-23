@@ -901,6 +901,7 @@ class DataService {
     String? dossierId,
     String? scopeType,
     String? scopeId,
+    required SyncMutationOrigin mutationOrigin,
   }) async {
     await _noteRepository.saveDrawingJson(
       patientId: patientId,
@@ -911,6 +912,7 @@ class DataService {
       dossierId: dossierId,
       scopeType: scopeType,
       scopeId: scopeId,
+      mutationOrigin: mutationOrigin,
     );
   }
 

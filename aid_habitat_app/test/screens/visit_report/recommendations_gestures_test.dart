@@ -10,26 +10,58 @@ class _Dossier extends Fake implements Dossier {
 }
 
 class _Repository extends Fake implements DossierRepository {
+  _Repository({this.items});
+
+  final List<VisitRecommendationItem>? items;
+  int saveCalls = 0;
+
   @override
   Future<List<VisitRecommendationItem>> fetchVisitRecommendations(
     String id,
-  ) async => [
-    const VisitRecommendationItem(
-      id: 'one',
-      wikiTitle: 'Synthetic',
-      note: 'First line\nSecond line\nThird line\nFourth line',
-    ),
-  ];
+  ) async =>
+      items ??
+      [
+        const VisitRecommendationItem(
+          id: 'one',
+          wikiTitle: 'Synthetic',
+          note: 'First line\nSecond line\nThird line\nFourth line',
+        ),
+      ];
 
   @override
   Future<void> saveVisitRecommendations(
     String id,
     List<VisitRecommendationItem> items, {
     bool forceSync = false,
-  }) async {}
+  }) async {
+    saveCalls += 1;
+  }
 }
 
 void main() {
+  testWidgets('opening and hydrating recommendations never saves', (
+    tester,
+  ) async {
+    final repository = _Repository(
+      items: const [
+        VisitRecommendationItem(id: 'historical-empty-draft'),
+        VisitRecommendationItem(id: 'visible', wikiTitle: 'Existing item'),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RecommendationsTab(dossier: _Dossier(), repository: repository),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('Existing item'), findsOneWidget);
+    expect(repository.saveCalls, 0);
+  });
+
   testWidgets(
     'description stays two lines and drag is confined to the image and tab',
     (tester) async {

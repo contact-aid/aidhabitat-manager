@@ -24,6 +24,19 @@ enum SyncState { localOnly, pendingSync, syncing, synced, syncError, conflict }
 
 enum SyncOperationStatus { pending, running, completed, failed, conflict }
 
+/// Provenance explicite d'une mutation locale. Les opérations historiques
+/// qui ne portent pas ce champ restent volontairement d'origine inconnue et
+/// ne doivent jamais être supprimées automatiquement.
+enum SyncMutationOrigin {
+  userEdit('user_edit'),
+  dataMigration('data_migration'),
+  conflictResolution('conflict_resolution');
+
+  const SyncMutationOrigin(this.wireName);
+
+  final String wireName;
+}
+
 enum LocalUserRole { admin, ergo, technician }
 
 const kAutonomyItemNames = [
