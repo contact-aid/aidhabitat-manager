@@ -4,6 +4,7 @@ import test from 'node:test';
 import { createGuardedMutation, SyncMutationError } from './guardedMutation.mjs';
 import { ConditionalWriteUncertainError } from './nocodbConditionalWrite.mjs';
 import { inspectLegacyRecovery } from './legacySyncRecovery.mjs';
+import { toDatabaseDossierStatus } from './nocodbScalarValues.mjs';
 
 // Characterization of existing release blockers, not an integration test.
 // Never import index.mjs: its warmup can contact configured remote services.
@@ -39,6 +40,7 @@ function fixture(enabled = true) {
     conditionalSyncEnabled: enabled,
     TABLES: { dossiers: 'synthetic_table' },
     SyncMutationError,
+    toDatabaseDossierStatus,
     inspectLegacyRecovery,
     unwrapRecordFields: (row) => row.fields,
     ConditionalWriteUncertainError,

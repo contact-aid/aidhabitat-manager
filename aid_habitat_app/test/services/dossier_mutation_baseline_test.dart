@@ -31,6 +31,17 @@ void main() {
           'firstName': 'Original',
           'lastName': 'Synthetic',
           'phone': '123',
+          'birthDate': '',
+          'occupants': [
+            {
+              'firstName': 'Original',
+              'lastName': 'Synthetic',
+              'birthDate': '',
+              'apa': false,
+              'invalidity': false,
+              'homeHelp': false,
+            },
+          ],
           'updatedAt': _version,
         },
         'housing': {'surface': 80, 'updatedAt': _version},
@@ -64,6 +75,43 @@ void main() {
     expect(op['concurrency']['expectedUpdatedAt'], _version);
     expect((await db.query('patients')).single['first_name'], 'Local');
   });
+
+  test(
+    'occupant birth date and durable mutation share the original synthetic baseline',
+    () async {
+      final rows = await db.query('patients');
+      final originalOccupants = jsonDecode(
+        rows.single['occupants_json'] as String,
+      ) as List<dynamic>;
+      final editedOccupants = List<Map<String, dynamic>>.from(
+        originalOccupants.map(
+          (value) => Map<String, dynamic>.from(value as Map),
+        ),
+      );
+      editedOccupants.first['birthDate'] = '1948-04-12';
+
+      await repository.updatePatient('patient-1', {
+        'birth_date': '1948-04-12',
+        'occupants_json': jsonEncode(editedOccupants),
+      });
+
+      final op = await operation('patient');
+      expect(op['updates']['occupant1BirthDate'], '1948-04-12');
+      expect(op['updates']['occupants'][0]['birthDate'], '1948-04-12');
+      expect(op['concurrency']['baseValues']['occupant1BirthDate'], '');
+      expect(
+        op['concurrency']['baseValues']['occupants'],
+        originalOccupants,
+      );
+      expect((await db.query('sync_operations')).single['status'], 'pending');
+      final persisted = (await db.query('patients')).single;
+      expect(persisted['birth_date'], '1948-04-12');
+      expect(
+        (jsonDecode(persisted['occupants_json'] as String) as List).first['birthDate'],
+        '1948-04-12',
+      );
+    },
+  );
 
   test(
     'an intervening same-field pull preserves the draft as a conflict',

@@ -15,7 +15,7 @@ import multer from 'multer';
 import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureConditionalSyncTables } from './nocodbMcpClient.mjs';
 import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
-import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
+import { createDatabaseValueComparator, toDatabaseDossierStatus } from './nocodbScalarValues.mjs';
 import { inspectLegacyRecovery, mappedDatabaseValueEquals } from './legacySyncRecovery.mjs';
 import { createKeyedSerialExecutor } from './keyedSerialExecutor.mjs';
 import { registerContextRoutes } from './contextRoutes.mjs';
@@ -512,7 +512,8 @@ const guardedMutation = conditionalWriter ? createGuardedMutation({
   },
 }) : null;
 
-async function applyConditionalSync(req, res, { tableId, record, fields, mapBaseline }) {
+async function applyConditionalSync(req, res, { tableId, record, fields, mapBaseline,
+  normalizeObserved }) {
   if (!guardedMutation) return false;
   try {
     const guard = req.body?.concurrency;
@@ -522,6 +523,7 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
     }
     await guardedMutation({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
+      normalizeObserved,
       authorizeObserved: tableId === TABLES.dossiers
         ? (row) => canAccessDossierRecord(req.appUser, { id: String(record.id), fields: row })
         : undefined,
@@ -534,11 +536,22 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
     }
     if (!(error instanceof SyncMutationError)) throw error;
     const observed = error.observed;
+    if (error.status === 409) {
+      console.warn('[sync-conflict]', {
+        code: error.code,
+        conflictFields: error.details?.conflicts ?? [],
+        retainedFields: error.details?.retainedFields ?? [],
+        writeId: error.details?.writeId ?? req.body?.concurrency?.writeId ?? null,
+      });
+    }
     res.status(error.status).json({ success: false, error: error.code,
       ...(error.status === 409 ? { conflict: true,
         remoteUpdatedAt: observed ? getRecordUpdatedAt({ fields: observed }) : null,
         remoteData: observed,
-      } : {}),
+        conflictFields: error.details?.conflicts ?? [],
+        retainedFields: error.details?.retainedFields ?? [],
+        writeId: error.details?.writeId ?? req.body?.concurrency?.writeId ?? null,
+      } : (error.details ? { details: error.details } : {})),
     });
     return true;
   }
@@ -1894,9 +1907,9 @@ const buildLegacyBathroomInstances = (payload) => {
     sdbSolGlissant: Boolean(payload?.sdbSolGlissant),
     sdbMachineALaver: Boolean(payload?.sdbMachineALaver),
     sdbMachineALaverHauteur: payload?.sdbMachineALaverHauteur ?? null,
-    porteSdbLargeurSuffisante: Boolean(payload?.porteSdbLargeurSuffisante),
+    porteSdbLargeurSuffisante: payload?.porteSdbLargeurSuffisante ?? null,
     porteSdbDimension: payload?.porteSdbDimension ?? null,
-    porteSdbSensAdapte: Boolean(payload?.porteSdbSensAdapte),
+    porteSdbSensAdapte: payload?.porteSdbSensAdapte ?? null,
   }];
 };
 
@@ -1904,6 +1917,7 @@ const buildLegacyWcInstances = (payload) => {
   const hasLegacyWcData = [
     payload?.wcCuvetteBonneHauteur,
     payload?.wcCuvetteTropBasse,
+    payload?.wcCuvetteTropHaute,
     payload?.wcCuvetteHauteur,
     payload?.wcBarreRelevement,
     payload?.porteWcLargeurSuffisante,
@@ -1920,11 +1934,12 @@ const buildLegacyWcInstances = (payload) => {
     levelLabel: payload?.wcNiveau ? 'RDC' : '1er étage',
     wcCuvetteBonneHauteur: Boolean(payload?.wcCuvetteBonneHauteur),
     wcCuvetteTropBasse: Boolean(payload?.wcCuvetteTropBasse),
+    wcCuvetteTropHaute: Boolean(payload?.wcCuvetteTropHaute),
     wcCuvetteHauteur: payload?.wcCuvetteHauteur ?? null,
     wcBarreRelevement: Boolean(payload?.wcBarreRelevement),
-    porteWcLargeurSuffisante: Boolean(payload?.porteWcLargeurSuffisante),
+    porteWcLargeurSuffisante: payload?.porteWcLargeurSuffisante ?? null,
     porteWcDimension: payload?.porteWcDimension ?? null,
-    porteWcSensAdapte: Boolean(payload?.porteWcSensAdapte),
+    porteWcSensAdapte: payload?.porteWcSensAdapte ?? null,
     observationEquipementsUtilisation: stringValue(payload?.observationEquipementsUtilisation),
   }];
 };
@@ -2371,7 +2386,9 @@ const mapHousing = (housingRecord) => {
     yearHabitation: stringValue(field(housingRecord, 'annee_habitation')),
     surface: stringValue(field(housingRecord, 'surface_habitable')),
     levels: toNumber(field(housingRecord, 'nombre_niveaux')),
-    typology: refLabel(field(housingRecord, 'type_de_logement')) || 'Maison',
+    // A UI default is not a concurrency baseline. The Flutter form may still
+    // suggest Maison, but an absent relation remains absent on the wire.
+    typology: refLabel(field(housingRecord, 'type_de_logement')),
     basement: toBool(field(housingRecord, 'sous_sol')),
     basementDesc: stringValue(field(housingRecord, 'description_sous_sol')),
     rdc: toBool(field(housingRecord, 'rdc')),
@@ -2516,7 +2533,8 @@ const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
   familySituation: refLabel(field(beneficiaryRecord, 'situation_proprietaire')),
   occupationStatus: normalizeOccupation(refLabel(field(beneficiaryRecord, 'statut_occupation'))),
   numberPeople: toNumber(field(beneficiaryRecord, 'nombre_personnes')),
-  incomeCategory: stringValue(field(beneficiaryRecord, 'categorie_revenu_calculee')) || 'Modeste',
+  // This is derived data; do not manufacture a stored baseline.
+  incomeCategory: stringValue(field(beneficiaryRecord, 'categorie_revenu_calculee')),
   fiscalRevenue: toNumber(field(beneficiaryRecord, 'revenu_fiscal_reference')),
   apa: Boolean(field(beneficiaryRecord, 'beneficiaire_apa')),
   invalidity: Boolean(field(beneficiaryRecord, 'reconnaissance_invalidite_mdph')),
@@ -7306,22 +7324,26 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
     }
 
     const fields = mapBeneficiaryUpdatesToFields(updates, references);
+    const comparisonFields = (record) => {
+      const source = unwrapRecordFields(record);
+      const rawOccupants = source?.occupants_json;
+      const usesScalarOccupants = rawOccupants == null || rawOccupants === ''
+        || (typeof rawOccupants === 'string' && /^\[\s*\]$/.test(rawOccupants.trim()));
+      if (!usesScalarOccupants) return source;
+      const mappedRecord = { fields: source };
+      return {
+        ...source,
+        occupants_json: mapBeneficiaryUpdatesToFields({
+          occupants: mapPatient(mappedRecord, patientId).occupants,
+        }, references).occupants_json,
+      };
+    };
     if (!conditionalSyncEnabled) {
       // GET derives occupants from scalar columns until the first JSON write.
       // Compare that same representation, not a null storage implementation detail.
-      const rawOccupants = field(beneficiaryRecord, 'occupants_json');
-      const usesScalarOccupants = rawOccupants == null || rawOccupants === ''
-        || (typeof rawOccupants === 'string' && /^\[\s*\]$/.test(rawOccupants.trim()));
-      const comparisonRecord = usesScalarOccupants ? {
-        ...beneficiaryRecord,
-        fields: {
-          ...unwrapRecordFields(beneficiaryRecord),
-          occupants_json: mapBeneficiaryUpdatesToFields({
-            occupants: mapPatient(beneficiaryRecord, patientId).occupants,
-          }, references).occupants_json,
-        },
-      } : beneficiaryRecord;
-      if (recoverLegacySync(req, res, comparisonRecord, fields,
+      if (recoverLegacySync(req, res, {
+        ...beneficiaryRecord, fields: comparisonFields(beneficiaryRecord),
+      }, fields,
         mapBeneficiaryUpdatesToFields(updates.concurrency?.baseValues || {}, references))) return;
       if (sendConflictIfStale(req, res, beneficiaryRecord)) return;
     }
@@ -7330,6 +7352,7 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       if (await applyConditionalSync(req, res, {
         tableId: TABLES.beneficiaires, record: beneficiaryRecord, fields,
         mapBaseline: (base) => mapBeneficiaryUpdatesToFields(base, references),
+        normalizeObserved: comparisonFields,
       })) return;
     } else {
       await updateRecord(TABLES.beneficiaires, beneficiaryRecord.id, fields);
@@ -7433,7 +7456,9 @@ app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
       beneficiaire_prepare: Object.prototype.hasOwnProperty.call(updates, 'beneficiaryPrepared')
         ? Boolean(updates.beneficiaryPrepared)
         : undefined,
-      status: updates.status,
+      status: Object.prototype.hasOwnProperty.call(updates, 'status')
+        ? toDatabaseDossierStatus(updates.status)
+        : undefined,
       visit_date: nullableString(updates.visitDate),
       ergo_id: Object.prototype.hasOwnProperty.call(updates, 'ergoId')
         ? nullableString(await resolveRequestedErgoLabel(req.appUser, updates.ergoId))
@@ -7532,6 +7557,14 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
     const typeLogement = findByLabel(typeLogements, updates.typology);
     const porteGarage = findByLabel(porteGarageRefs, updates.motorisationPorteGarage);
     const portail = findByLabel(portailRefs, updates.motorisationPortail);
+    const relationId = (key, value, match) => {
+      if (!Object.prototype.hasOwnProperty.call(updates, key)) return undefined;
+      if (value == null || String(value).trim() === '') return null;
+      if (match) return Number(match.id);
+      throw new SyncMutationError(422, 'SYNC_RELATION_UNRESOLVED', null, {
+        relationField: key,
+      });
+    };
 
     return sanitizeUndefined({
       uuid_source: existingHousing ? undefined : creationId,
@@ -7602,9 +7635,10 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
           updates.roomsBreakdown && typeof updates.roomsBreakdown === 'object'
               ? JSON.stringify(updates.roomsBreakdown)
               : undefined,
-      type_de_logement_id: typeLogement ? Number(typeLogement.id) : undefined,
-      porte_de_garage_id: porteGarage ? Number(porteGarage.id) : undefined,
-      portail_id1: portail ? Number(portail.id) : undefined,
+      type_de_logement_id: relationId('typology', updates.typology, typeLogement),
+      porte_de_garage_id: relationId('motorisationPorteGarage',
+        updates.motorisationPorteGarage, porteGarage),
+      portail_id1: relationId('motorisationPortail', updates.motorisationPortail, portail),
     });
     };
     const fields = mapHousingFields(updates);
@@ -8696,7 +8730,8 @@ const saveSecondaryRecord = async (tableId, projection, existing, fields) => {
   return secondaryIdentity(rows[0]);
 };
 
-async function saveConditionalSecondary(req, res, tableId, projection, existing, fields, mapBaseline) {
+async function saveConditionalSecondary(req, res, tableId, projection, existing, fields, mapBaseline,
+  normalizeObserved) {
   if (!conditionalSyncEnabled) return false;
   if (!existing) {
     if (!conditionalCreatesReady) throw new SyncMutationError(503, 'SYNC_SECONDARY_CREATION_NOT_PREPARED');
@@ -8725,12 +8760,80 @@ async function saveConditionalSecondary(req, res, tableId, projection, existing,
   const domainFields = (values) => Object.fromEntries(Object.entries(values)
     .filter(([key, value]) => value !== undefined && !['dossier_id', 'dossiers_id', 'updated_at', 'created_at'].includes(key)));
   if (await applyConditionalSync(req, res, { tableId, record: existing,
-    fields: domainFields(fields), mapBaseline: (base) => domainFields(mapBaseline(base)) })) return true;
+    fields: domainFields(fields), mapBaseline: (base) => domainFields(mapBaseline(base)),
+    normalizeObserved })) return true;
   const rows = await queryAll(tableId, { fields: projection, where: `(Id,eq,${Number(existing.id)})` });
   if (rows.length !== 1 || !secondaryUpdatedAt(rows[0])) throw new SyncMutationError(503, 'SYNC_WRITE_UNCONFIRMED');
   res.json({ success: true, error: null, data: secondaryIdentity(rows[0]) });
   return true;
 }
+
+// The sanitary GET contract reconstructs structured room arrays for legacy
+// rows. Conditional comparison must observe that same canonical value while
+// leaving the actual row and the guarded write untouched.
+const canonicalSanitaryComparisonFields = (record) => {
+  const source = unwrapRecordFields(record);
+  const value = (key) => source?.[key];
+  const storedArray = (key) => {
+    const raw = stringValue(value(key)).trim();
+    if (!raw) return { synthesize: true, value: [] };
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return { synthesize: false, value: null };
+      return { synthesize: parsed.length === 0, value: parsed };
+    } catch {
+      // A corrupt non-empty value is not a legacy empty representation.
+      // Preserve it so the planner fails closed with a real conflict.
+      return { synthesize: false, value: null };
+    }
+  };
+  const sdbStored = storedArray('sdb_instances_json');
+  const wcStored = storedArray('wc_instances_json');
+  const sdbInstances = sdbStored.synthesize ? buildLegacyBathroomInstances({
+    sdbNiveauPiecesVie: toBool(value('sdb_niveau_pieces_vie')),
+    sdbBaignoire: toBool(value('sdb_baignoire')),
+    sdbBaignoireHauteur: toNumber(value('sdb_baignoire_hauteur')),
+    sdbBacDouche: toBool(value('sdb_bac_douche')),
+    sdbBacDoucheHauteur: toNumber(value('sdb_bac_douche_hauteur')),
+    sdbVasqueSuspendue: toBool(value('sdb_vasque_suspendue')),
+    sdbVasqueSuspendueHauteur: toNumber(value('sdb_vasque_suspendue_hauteur')),
+    sdbVasqueColonne: toBool(value('sdb_vasque_colonne')),
+    sdbVasqueColonneHauteur: toNumber(value('sdb_vasque_colonne_hauteur')),
+    sdbMeubleVasque: toBool(value('sdb_meuble_vasque')),
+    sdbMeubleVasqueHauteur: toNumber(value('sdb_meuble_vasque_hauteur')),
+    sdbBidet: toBool(value('sdb_bidet')),
+    sdbBidetHauteur: toNumber(value('sdb_bidet_hauteur')),
+    sdbParoiDouche: toBool(value('sdb_paroi_douche')),
+    sdbParoiDoucheHauteur: toNumber(value('sdb_paroi_douche_hauteur')),
+    sdbSolGlissant: toBool(value('sdb_sol_glissant')),
+    sdbMachineALaver: toBool(value('sdb_machine_a_laver')),
+    sdbMachineALaverHauteur: toNumber(value('sdb_machine_a_laver_hauteur')),
+    porteSdbLargeurSuffisante: toBoolOrNull(value('porte_sdb_largeur_suffisante')),
+    porteSdbDimension: toNumber(value('porte_sdb_dimension')),
+    porteSdbSensAdapte: toBoolOrNull(value('porte_sdb_sens_adapte')),
+  }) : sdbStored.value;
+  const wcInstances = wcStored.synthesize ? buildLegacyWcInstances({
+    wcNiveau: toBool(value('wc_niveau')),
+    wcCuvetteBonneHauteur: toBool(value('wc_cuvette_bonne_hauteur')),
+    wcCuvetteTropBasse: toBool(value('wc_cuvette_trop_basse')),
+    wcCuvetteTropHaute: toBool(value('wc_cuvette_trop_haute')),
+    wcCuvetteHauteur: toNumber(value('wc_cuvette_hauteur')),
+    wcBarreRelevement: toBool(value('wc_barre_relevement')),
+    porteWcLargeurSuffisante: toBoolOrNull(value('porte_wc_largeur_suffisante')),
+    porteWcDimension: toNumber(value('porte_wc_dimension')),
+    porteWcSensAdapte: toBoolOrNull(value('porte_wc_sens_adapte')),
+    observationEquipementsUtilisation: stringValue(value('observation_equipements_utilisation')),
+  }) : wcStored.value;
+  return {
+    ...source,
+    sdb_instances_json: Array.isArray(sdbInstances)
+      ? (sdbInstances.length > 0 ? JSON.stringify(sdbInstances) : null)
+      : value('sdb_instances_json'),
+    wc_instances_json: Array.isArray(wcInstances)
+      ? (wcInstances.length > 0 ? JSON.stringify(wcInstances) : null)
+      : value('wc_instances_json'),
+  };
+};
 
 app.get('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, next) => {
   try {
@@ -8905,8 +9008,26 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
       return fields;
     };
     const fields = mapFields(payload);
+    const normalizeSanitaryObserved = (record) => {
+      const canonical = canonicalSanitaryComparisonFields(record);
+      const validArray = (raw) => {
+        if (raw == null || raw === '') return [];
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : undefined;
+        } catch { return undefined; }
+      };
+      const sdbInstances = validArray(canonical.sdb_instances_json);
+      const wcInstances = validArray(canonical.wc_instances_json);
+      const structured = {
+        ...(sdbInstances === undefined ? {} : { sdbInstances }),
+        ...(wcInstances === undefined ? {} : { wcInstances }),
+      };
+      return { ...canonical, ...mapFields(structured) };
+    };
     if (await saveConditionalSecondary(req, res, TABLES.diagnosticSanitaires,
-      FIELD_SETS.diagnosticSanitaires, existing, fields, mapFields)) return;
+      FIELD_SETS.diagnosticSanitaires, existing, fields, mapFields,
+      normalizeSanitaryObserved)) return;
     if (recoverSecondarySync(req, res, existing, fields,
       { sdbInstances: 'sdb_instances_json', wcInstances: 'wc_instances_json' })) return;
     if (secondaryWriteConflict(req, res, existing)) return;
