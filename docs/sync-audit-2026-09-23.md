@@ -687,3 +687,57 @@ ne l'utilise. Avant toute publication, la cible Easypanel et le mécanisme de
 bascule de `app.aidhabitat.fr` doivent donc être confirmés ; publier un tag
 `latest` ou appeler le webhook staging sans cette preuve ne validerait pas un
 déploiement contrôlé de production.
+
+### Résultat du commit client et arrêt avant déploiement
+
+Après `git diff --cached --check`, `git diff --cached --name-status` et revue
+du diff, le commit `1fcb1e05c1d66f3ac40d204f278b66c464a6efb9`
+(`Keep existing plan loads read-only and guard note ACK retry`) a été créé et
+poussé sur `origin/codex/prevent-note-write-on-open`. Il contient exactement
+les trois fichiers Dart de production retenus, les deux fichiers de tests
+retenus et ce journal. `lib/screens/documents_screen.dart` et
+`docs/TEST-ADMIN-PARCOURS-20260923.txt` sont toujours locaux et hors commit.
+
+Un second checkout propre, détaché sur ce SHA, a exécuté `flutter pub get`
+puis `flutter test --no-pub --reporter compact` : **955/955 réussis**, sans la
+modification Documents. La CI [Build Flutter Web, run
+35885697549](https://github.com/contact-aid/aidhabitat-manager/actions/runs/35885697549)
+a également réussi sur ce SHA : job natif macOS et job bundle web tous deux
+verts. `npm run release:ci-check -- --branch codex/prevent-note-write-on-open
+--sha 1fcb1e05c1d66f3ac40d204f278b66c464a6efb9` est OK. L'artefact
+CI `aidhabitat-web-1fcb1e05c1d66f3ac40d204f278b66c464a6efb9` a été
+téléchargé et contrôlé avec
+`node tools/check-web-release.mjs --dir /private/tmp/aidhabitat-web-ci-1fcb1e0
+--expected-build-number 34 --expected-git-sha
+1fcb1e05c1d66f3ac40d204f278b66c464a6efb9` : **20 contrôles OK**.
+Son `release.json` annonce `1.0.0+34`, API
+`https://api.aidhabitat.fr`, SHA client ci-dessus et empreinte
+`main.dart.js` `5cae56b41852474fc08de18743b4d11d10ea0d61c53eb719a4f5678bcf9cc3f2`.
+
+Le déploiement web **n'a pas été déclenché**. Le workflow de production
+`build-deploy-web.yml` est désactivé. Le workflow actif ne peut déclencher que
+le secret `EASYPANEL_WEB_STAGING_DEPLOY_URL` avec un tag `staging` ; aucun
+mécanisme actif ne relie le secret production `EASYPANEL_WEB_WEBHOOK` à un
+déploiement. Les domaines `app.aidhabitat.fr` et
+`apps-aidhabitat-web-staging.z5avx1.easypanel.host` renvoient actuellement le
+même manifeste build 33, la même empreinte et le même ETag. Cela ne prouve ni
+que le webhook staging est isolé, ni qu'il pointe vers le service voulu.
+Déclencher ce webhook ou publier `latest` serait contourner l'exigence de
+cible contrôlée et de retour arrière vérifiable. Il faut une voie de
+déploiement production documentée et vérifiée dans Easypanel pour reprendre.
+
+Le contrôle final de `https://app.aidhabitat.fr/release.json` renvoie toujours
+`de12ba34565647263ec2ee495c6a1355d5bf62a1`, `1.0.0+33`.
+**Aucune vérification après déploiement du candidat n'est possible** : ouverture
+de l'interface, persistance après rechargement et réponse API d'un nouveau
+parcours Plans restent non testées pour le build 34. Les preuves antérieures
+sur le dossier fictif Anne-Gaëlle concernent le client local, pas le web
+public. ANDASSE et les dossiers réels n'ont fait l'objet d'aucune nouvelle
+écriture. Aucun build ni publication TestFlight.
+
+**Bilan : pas prêt pour la recette utilisateur sur app.aidhabitat.fr.** Le
+correctif est commité, poussé, testé et empaqueté par la CI, mais le site
+public sert encore l'ancien build. La prochaine action requiert une
+confirmation technique de la cible et du mécanisme de déploiement Easypanel,
+puis le déploiement de l'image construite depuis le SHA testé et la recette
+web demandée.
