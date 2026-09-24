@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assignedAdaptationFormula, createAirtableAdaptationReader, projectAirtableDossier } from './airtableAdaptation.mjs';
+import { assignedAdaptationFormula, createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 
 const id = (char) => `rec${char.repeat(14)}`;
 const row = (recordId, fields) => ({ id: recordId, fields });
@@ -85,6 +85,7 @@ test('projection only contains authorized dossier identity and scheduling fields
   });
   assert.equal(result.quickNote, 'Note fictive');
   assert.equal(result.airtableRecordId, id('a'));
+  assert.equal(result.airtableClientRecordId, id('x'));
   assert.equal(result.airtableDossierLabel, 'FICTIF-2026');
   assert.equal(result.epciLabel, 'EPCI fictif');
   assert.equal(result.incomeCategoryLabel, 'Très modeste');
@@ -96,4 +97,33 @@ test('an absent Airtable record identity cannot be guessed from a patient name',
     dossier: row('', { 'Dossier ID': '', Prénom: 'Camille' }),
     client: row(id('x'), { Prénom: 'Camille' }),
   }), /Identifiant Airtable/);
+});
+
+test('an exact stored link or unique legacy client ID selects a fictitious dossier', () => {
+  const records = [
+    { airtableRecordId: id('a'), airtableClientRecordId: id('x') },
+    { airtableRecordId: id('b'), airtableClientRecordId: id('y') },
+  ];
+  assert.deepEqual(resolveAirtableLinks(records, [
+    { fields: { uuid_source: 'fictif-a', airtable_record_id: id('a'), patient_id: 'other' } },
+    { fields: { uuid_source: 'fictif-b', patient_id: id('y') } },
+  ]).map((result) => [result.nocodbDossierId, result.linkSource]), [
+    ['fictif-a', 'stored'], ['fictif-b', 'legacy_client_id'],
+  ]);
+});
+
+test('ambiguous or name-only matches never select a dossier', () => {
+  const records = [{ airtableRecordId: id('a'), airtableClientRecordId: id('x'),
+    beneficiary: { nom: 'Exemple' } }];
+  assert.equal(resolveAirtableLinks(records, [
+    { fields: { uuid_source: 'fictif-a', patient_id: id('x') } },
+    { fields: { uuid_source: 'fictif-b', patient_id: id('x') } },
+  ])[0].nocodbDossierId, null);
+  assert.equal(resolveAirtableLinks(records, [
+    { fields: { uuid_source: 'fictif-c', nom: 'Exemple' } },
+  ])[0].nocodbDossierId, null);
+  assert.equal(resolveAirtableLinks(records, [
+    { fields: { uuid_source: 'fictif-d', airtable_record_id: id('a') } },
+    { fields: { uuid_source: 'fictif-e', airtable_record_id: id('a') } },
+  ])[0].nocodbDossierId, null);
 });
