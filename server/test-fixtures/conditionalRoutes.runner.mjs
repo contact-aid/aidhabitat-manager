@@ -128,6 +128,19 @@ try {
   });
 
   if (entity === 'beneficiaire') {
+    await check('Flutter Concubinage maps to the En concubinage reference', async () => {
+      mock.row(entity).situation_proprietaire_id1 = 601;
+      const body = mutation(
+        { familySituation: 'Concubinage' },
+        { familySituation: 'Célibataire' },
+      );
+      expectStatus(await patch(clientA, body), 200);
+      assertGuard(mock.patches()[0], revision, body.concurrency.writeId, {
+        situation_proprietaire_id1: 602,
+      });
+      assert.equal(mock.row(entity).situation_proprietaire_id1, 602);
+    });
+
     await check('absence labels and nullable booleans are canonical baselines', async () => {
       const body = mutation(
         { dependenceTxt: 'Canne', homeHelp: true },

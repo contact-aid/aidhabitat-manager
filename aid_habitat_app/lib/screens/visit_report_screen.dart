@@ -80,6 +80,7 @@ class VisitReportScreen extends StatefulWidget {
   final int conflictRefreshToken;
   final int housingConflictRefreshToken;
   final int contextConflictRefreshToken;
+  final int patientConflictRefreshToken;
   final VoidCallback onBack;
   final ValueChanged<String>? onContextChanged;
 
@@ -89,6 +90,7 @@ class VisitReportScreen extends StatefulWidget {
     this.conflictRefreshToken = 0,
     this.housingConflictRefreshToken = 0,
     this.contextConflictRefreshToken = 0,
+    this.patientConflictRefreshToken = 0,
     required this.onBack,
     this.onContextChanged,
   });
@@ -117,6 +119,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
       // The conflict reviewer may have replaced local rows with server data.
       // Refresh the parent snapshot as well as the stateful open tabs.
+      _dossier = widget.dossier;
       // ignore: discarded_futures
       _refreshDossier();
     }
@@ -2733,6 +2736,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           'Bénéficiaire',
           BeneficiaryTab(
             dossier: _dossier,
+            conflictRefreshToken: widget.patientConflictRefreshToken,
             repository: _repository,
             onPatientChanged: _refreshDossier,
             initialSubSection: _activeSubsectionByTab['Bénéficiaire'] ?? 0,

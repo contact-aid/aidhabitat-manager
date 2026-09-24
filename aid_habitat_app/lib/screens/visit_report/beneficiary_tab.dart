@@ -30,6 +30,7 @@ import 'retirement_fund_selection.dart' as retirement_fund_selection;
 class BeneficiaryTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final int conflictRefreshToken;
 
   /// Called after each successful save so the parent can re-fetch the
   /// dossier and propagate fresh patient fields (name, city, …) to the
@@ -50,6 +51,7 @@ class BeneficiaryTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.conflictRefreshToken = 0,
     this.onPatientChanged,
     this.onSubSectionChanged,
     this.initialSubSection = 0,
@@ -424,6 +426,15 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   @override
   void didUpdateWidget(covariant BeneficiaryTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // A reviewed patient conflict has replaced the local row. The form's
+      // saved snapshot and observation baseline must follow that decision.
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      _saveRetryTimer?.cancel();
+      _saveRetryTimer = null;
+      _loadFromDossier();
+    }
     // Quand le parent change `initialSubSection` (ex. navigation
     // depuis la popup « Champs manquants »), bascule la sous-section
     // courante. Doit fonctionner même si l'onglet a déjà été visité,

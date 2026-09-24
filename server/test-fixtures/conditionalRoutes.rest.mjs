@@ -42,6 +42,10 @@ export function createRestMock({ referenceRows = {} } = {}) {
   const initial = Object.fromEntries(Object.values(tables).map((id) => [id, []]));
   initial[tables.ergos] = members;
   initial[tables.dependances] = [{ Id: 901, libelle: 'Canne' }];
+  initial[tables.situations] = [
+    { Id: 601, libelle: 'Célibataire' },
+    { Id: 602, libelle: 'En concubinage' },
+  ];
   for (const [entity, records] of Object.entries(referenceRows)) initial[tables[entity]] = structuredClone(records);
   initial[tables.types] = [{ Id: 801, libelle: 'Maison' }, { Id: 802, libelle: 'Appartement' }];
   initial[tables.dossier] = [{ Id: 101, uuid_source: dossierId, patient_id: patientId,
@@ -54,6 +58,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
     beneficiaire_apa: null, reconnaissance_invalidite_mdph: null, aide_a_domicile: false,
     dependance_particuliere_txt: 'Aucune',
     dependances_particulieres_id: null,
+    situation_proprietaire_id1: null,
     app_sync_revision: revision, CreatedAt: timestamp, UpdatedAt: timestamp }];
   initial[tables.logement] = [{ Id: 301, uuid_source: 'synthetic-housing',
     beneficiaire_id: patientId, beneficiaires_id: 201, commentaire: 'initial',
@@ -69,7 +74,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
       date_naissance_monsieur: 'Date', date_naissance_madame: 'Date',
       beneficiaire_apa: 'Checkbox', reconnaissance_invalidite_mdph: 'Checkbox',
       aide_a_domicile: 'Checkbox', dependance_particuliere_txt: 'LongText',
-      dependances_particulieres_id: 'Number' }),
+      dependances_particulieres_id: 'Number', situation_proprietaire_id1: 'Number' }),
     [tables.logement]: columns({ commentaire: 'LongText', observation_accessibilite: 'LongText',
       sous_sol: 'Checkbox', acces_facile_rue: 'Checkbox', type_de_logement_id: 'Number' }),
     [tables.mobile_note_pages]: columns(Object.fromEntries([

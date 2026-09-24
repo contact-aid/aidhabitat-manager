@@ -81,6 +81,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _conflictRefreshToken = 0;
   int _housingConflictRefreshToken = 0;
   int _contextConflictRefreshToken = 0;
+  int _patientConflictRefreshToken = 0;
   // True dès que l'utilisateur a cliqué sur Anah au moins une fois — la
   // WebView est alors maintenue vivante (Offstage) pour préserver la session.
   bool _anahEverVisited = false;
@@ -519,6 +520,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         if (reviewedEntities.contains('contexte_de_vie')) {
           _contextConflictRefreshToken += 1;
         }
+        if (reviewedEntities.contains('patient')) {
+          _patientConflictRefreshToken += 1;
+        }
       });
     }
     _handleSyncNow();
@@ -937,6 +941,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         conflictRefreshToken: _conflictRefreshToken,
         housingConflictRefreshToken: _housingConflictRefreshToken,
         contextConflictRefreshToken: _contextConflictRefreshToken,
+        patientConflictRefreshToken: _patientConflictRefreshToken,
         onContextChanged: (section) {
           if (!mounted || section == _activeVisitSection) return;
           setState(() => _activeVisitSection = section);

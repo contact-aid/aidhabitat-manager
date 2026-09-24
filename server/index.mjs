@@ -4208,7 +4208,12 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
   const trustedPersonEmailValue = hasTrustedPerson && Object.prototype.hasOwnProperty.call(trustedPersonPayload, 'email')
     ? trustedPersonPayload?.email
     : (has('trustedEmail') ? updates.trustedEmail : undefined);
-  const situationMatch = findByLabel(references.situations, updates.familySituation);
+  // Flutter labels the pill "Concubinage" while the NocoDB reference is
+  // "En concubinage". Resolve that known alias before mapping both the
+  // desired patch and its baseline through this same function.
+  const situationLabel = normalizeLabelForMatch(updates.familySituation) === 'concubinage'
+    ? 'En concubinage' : updates.familySituation;
+  const situationMatch = findByLabel(references.situations, situationLabel);
   const normalizedOccupation = normalizeLabelForMatch(updates.occupationStatus);
   const occupationMatch = findByLabel(references.statuts, updates.occupationStatus === 'Usufruitier' ? 'Usufruitier(e)' : updates.occupationStatus)
     || (normalizedOccupation.startsWith('usufruitier')
