@@ -17,6 +17,7 @@ import '../../components/soft_transitions.dart';
 class AccessibilityTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final int conflictRefreshToken;
   final VoidCallback? onHousingChanged;
   final AccessibilityTabController? controller;
 
@@ -37,6 +38,7 @@ class AccessibilityTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.conflictRefreshToken = 0,
     this.onHousingChanged,
     this.controller,
     this.initialSubSection,
@@ -364,6 +366,16 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   @override
   void didUpdateWidget(covariant AccessibilityTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // A server choice updates SQLite, not this tab's cached room lists.
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      _hasPendingSave = false;
+      _dirtyHousingKeys.clear();
+      _loaded = false;
+      // ignore: discarded_futures
+      _load();
+    }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller?._detach(_flushPendingSave);
       widget.controller?._attach(_flushPendingSave, _openLevelsAndAddLevel);
@@ -438,7 +450,11 @@ class _AccessibilityTabState extends State<AccessibilityTab>
       _levelRooms[cfg.field] = _parseRooms(
         row?[cfg.roomsField] as String? ?? '[]',
       );
-      _customRoomCtrls[cfg.field] = TextEditingController();
+      final controller = _customRoomCtrls.putIfAbsent(
+        cfg.field,
+        () => TextEditingController(),
+      );
+      controller.clear();
     }
     _orderedLevels = _kLevelConfigs
         .where((c) => (row?[c.field] as int? ?? 0) == 1)

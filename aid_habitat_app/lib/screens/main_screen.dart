@@ -78,6 +78,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _isOffline = false;
   String? _lastSyncError;
   String _activeVisitSection = '';
+  int _conflictRefreshToken = 0;
+  int _housingConflictRefreshToken = 0;
+  int _contextConflictRefreshToken = 0;
   // True dès que l'utilisateur a cliqué sur Anah au moins une fois — la
   // WebView est alors maintenue vivante (Offstage) pour préserver la session.
   bool _anahEverVisited = false;
@@ -490,15 +493,35 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
       return;
     }
+    final reviewedEntities = <String>{};
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (ctx) => ConflictResolutionScreen(
           localDossier: dossier,
           onResolved: () => Navigator.of(ctx).pop(),
+          onReviewApplied: reviewedEntities.add,
         ),
       ),
     );
-    if (mounted) _handleSyncNow();
+    if (!mounted) return;
+    if (reviewedEntities.isNotEmpty) {
+      final selected = _selectedDossier;
+      final fresh = selected == null
+          ? null
+          : await _dataService.fetchDossierById(selected.id);
+      if (!mounted) return;
+      setState(() {
+        if (fresh != null) _selectedDossier = fresh;
+        _conflictRefreshToken += 1;
+        if (reviewedEntities.contains('housing')) {
+          _housingConflictRefreshToken += 1;
+        }
+        if (reviewedEntities.contains('contexte_de_vie')) {
+          _contextConflictRefreshToken += 1;
+        }
+      });
+    }
+    _handleSyncNow();
   }
 
   @override
@@ -911,6 +934,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (_activeView == 'visit_report' && _selectedDossier != null) {
       return VisitReportScreen(
         dossier: _selectedDossier!,
+        conflictRefreshToken: _conflictRefreshToken,
+        housingConflictRefreshToken: _housingConflictRefreshToken,
+        contextConflictRefreshToken: _contextConflictRefreshToken,
         onContextChanged: (section) {
           if (!mounted || section == _activeVisitSection) return;
           setState(() => _activeVisitSection = section);

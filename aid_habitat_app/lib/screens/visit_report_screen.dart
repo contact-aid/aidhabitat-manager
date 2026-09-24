@@ -77,12 +77,18 @@ bool get _supportsNativeDetachedNoteWindows {
 
 class VisitReportScreen extends StatefulWidget {
   final Dossier dossier;
+  final int conflictRefreshToken;
+  final int housingConflictRefreshToken;
+  final int contextConflictRefreshToken;
   final VoidCallback onBack;
   final ValueChanged<String>? onContextChanged;
 
   const VisitReportScreen({
     super.key,
     required this.dossier,
+    this.conflictRefreshToken = 0,
+    this.housingConflictRefreshToken = 0,
+    this.contextConflictRefreshToken = 0,
     required this.onBack,
     this.onContextChanged,
   });
@@ -104,6 +110,18 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   final WcTabController _wcController = WcTabController();
   final SummaryTabController _summaryController = SummaryTabController();
   late Dossier _dossier;
+
+  @override
+  void didUpdateWidget(covariant VisitReportScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // The conflict reviewer may have replaced local rows with server data.
+      // Refresh the parent snapshot as well as the stateful open tabs.
+      // ignore: discarded_futures
+      _refreshDossier();
+    }
+  }
+
   int _housingVersion = 0;
   // Maps (patientId::tabKey) -> secondary OS windowId, so when the user
   // types in the in-app NotesWidget we can forward the change to the
@@ -1999,20 +2017,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
         ),
       );
     }
-    // Type d'accompagnement (Diag ergo / MPA ergo / MPA complet) doit
-    // être renseigné — demande utilisateur 2026-05-04 : « tout doit
-    // avoir un type d'accompagnement ». Sans ça, la cellule AMO du PDF
-    // tombe sur "/" alors que le dossier méritait un montant.
-    if (_dossier.natureAccompagnement.trim().isEmpty) {
-      missing.add(
-        _MissingField(
-          label:
-              'Admin — type d\'accompagnement (Diag ergo / MPA ergo / MPA complet)',
-          tabIndex: tab,
-          subSectionIndex: 3,
-        ),
-      );
-    }
   }
 
   Future<void> _checkAccessibilite(List<_MissingField> missing) async {
@@ -2739,6 +2743,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           'Contexte de vie',
           ContextTab(
             dossier: _dossier,
+            conflictRefreshToken: widget.contextConflictRefreshToken,
             repository: _repository,
             onMedicalFlagToggled: _handleMedicalFlagToggle,
             // Les cases Pathologie / Suivi / Sensoriel reflètent la PAGE
@@ -2766,6 +2771,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           'Accessibilité',
           AccessibilityTab(
             dossier: _dossier,
+            conflictRefreshToken: widget.housingConflictRefreshToken,
             repository: _repository,
             controller: _accessibilityController,
             onHousingChanged: _notifyHousingChanged,

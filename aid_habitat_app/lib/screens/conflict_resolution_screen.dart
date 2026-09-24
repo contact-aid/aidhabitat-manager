@@ -13,12 +13,14 @@ class ConflictResolutionScreen extends StatefulWidget {
     super.key,
     required this.localDossier,
     required this.onResolved,
+    this.onReviewApplied,
     this.loadReviews,
     this.resolveReview,
   });
 
   final Dossier localDossier;
   final VoidCallback onResolved;
+  final ValueChanged<String>? onReviewApplied;
   final Future<List<SyncConflictReview>> Function()? loadReviews;
   final Future<void> Function(SyncConflictReview, bool)? resolveReview;
 
@@ -85,6 +87,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
         _reviews.remove(review);
         _resolving = false;
       });
+      widget.onReviewApplied?.call(review.entityType);
       if (_reviews.isEmpty) widget.onResolved();
     } catch (_) {
       if (!mounted) return;

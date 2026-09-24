@@ -21,6 +21,7 @@ import '../../components/two_threshold_swipe.dart';
 class ContextTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final int conflictRefreshToken;
 
   /// Called when the user toggles a numbered medical flag (1 = Pathologie,
   /// 2 = Suivi médical, 3 = Sensoriel). `checked` is the new state. Le
@@ -61,6 +62,7 @@ class ContextTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.conflictRefreshToken = 0,
     this.onMedicalFlagToggled,
     this.currentMedicalFlags,
     this.onSubSectionChanged,
@@ -103,6 +105,15 @@ class _ContextTabState extends State<ContextTab>
   @override
   void didUpdateWidget(covariant ContextTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // A reviewed conflict can replace the local row while this tab stays
+      // mounted behind the review screen. Drop its stale in-memory form.
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      _loaded = false;
+      // ignore: discarded_futures
+      _load();
+    }
     // Sync de la sous-section quand le parent change
     // `initialSubSection` programmatiquement — ex. navigation depuis
     // la popup « Champs manquants » du flow de génération PDF.
