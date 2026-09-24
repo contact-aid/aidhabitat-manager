@@ -511,7 +511,7 @@ class _ScenarioChip extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              fontSize: 14,
+              fontSize: 16,
               fontWeight: FontWeight.w800,
               color: fg,
             ),

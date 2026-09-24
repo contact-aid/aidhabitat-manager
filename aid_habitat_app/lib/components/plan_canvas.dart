@@ -1377,7 +1377,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
         child: Text(
           '${widget.currentPage! + 1}/${widget.totalPages}',
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 16,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.4,
             color: _kToolbarIcon,
@@ -1473,7 +1473,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
                 label,
                 style: const TextStyle(
                   color: _kToolbarActiveText,
-                  fontSize: 12,
+                  fontSize: 16,
                   fontWeight: FontWeight.w700,
                 ),
               ),

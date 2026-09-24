@@ -8,6 +8,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../components/beneficiary_header.dart';
 import '../components/beneficiary_palettes.dart';
 import '../components/brand_colors.dart';
+import '../components/cta_text_style.dart';
 import '../components/commune_field_group.dart';
 import '../components/form_widgets.dart';
 import '../components/notes_widget.dart';
@@ -378,48 +379,67 @@ class _DossierScreenState extends State<DossierScreen> {
             _buildHeader(context),
             const SizedBox(height: 32),
             Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 5,
-                    child: Column(
-                      children: [
-                        _buildQuickActions(context),
-                        if (widget.dossier.syncState == SyncState.conflict) ...[
-                          const SizedBox(height: 12),
+              child: LayoutBuilder(
+                builder: (context, constraints) => constraints.maxWidth < 700
+                    ? ListView(
+                        children: [
+                          _buildQuickActions(context),
+                          const SizedBox(height: 24),
                           SizedBox(
-                            width: double.infinity,
-                            child: _QuickActionButton(
-                              icon: LucideIcons.gitMerge,
-                              label: 'Résoudre le conflit',
-                              subLabel:
-                                  'Comparer les versions et choisir laquelle garder',
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => ConflictResolutionScreen(
-                                      localDossier: widget.dossier,
-                                      onResolved: () {
-                                        Navigator.pop(context);
-                                        widget.onBack();
+                            height: constraints.maxHeight < 650
+                                ? 650
+                                : constraints.maxHeight,
+                            child: _buildInfoCard(),
+                          ),
+                          const SizedBox(height: 24),
+                          SizedBox(height: 420, child: _buildNotesColumn()),
+                        ],
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 5,
+                            child: Column(
+                              children: [
+                                _buildQuickActions(context),
+                                if (widget.dossier.syncState ==
+                                    SyncState.conflict) ...[
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: _QuickActionButton(
+                                      icon: LucideIcons.gitMerge,
+                                      label: 'Résoudre le conflit',
+                                      subLabel:
+                                          'Comparer les versions et choisir laquelle garder',
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                ConflictResolutionScreen(
+                                                  localDossier: widget.dossier,
+                                                  onResolved: () {
+                                                    Navigator.pop(context);
+                                                    widget.onBack();
+                                                  },
+                                                ),
+                                          ),
+                                        );
                                       },
                                     ),
                                   ),
-                                );
-                              },
+                                ],
+                                const SizedBox(height: 24),
+                                Expanded(child: _buildInfoCard()),
+                              ],
                             ),
                           ),
+                          const SizedBox(width: 24),
+                          Expanded(flex: 7, child: _buildNotesColumn()),
                         ],
-                        const SizedBox(height: 24),
-                        Expanded(child: _buildInfoCard()),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 24),
-                  Expanded(flex: 7, child: _buildNotesColumn()),
-                ],
+                      ),
               ),
             ),
           ],
@@ -484,7 +504,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       'Date de visite',
                       style: GoogleFonts.nunito(
-                        fontSize: 11,
+                        fontSize: 16,
                         fontWeight: FontWeight.w700,
                         color: const Color(0xFF8A7A95),
                         height: 1,
@@ -494,7 +514,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       label,
                       style: GoogleFonts.nunito(
-                        fontSize: 14,
+                        fontSize: 16,
                         fontWeight: FontWeight.w700,
                         color: const Color(0xFF2B323A),
                         height: 1,
@@ -1016,7 +1036,7 @@ class _DossierScreenState extends State<DossierScreen> {
                         Text(
                           'Communauté de communes',
                           style: GoogleFonts.nunito(
-                            fontSize: 14,
+                            fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: kBrandPurple,
                             letterSpacing: 0.2,
@@ -1042,7 +1062,7 @@ class _DossierScreenState extends State<DossierScreen> {
                           const Text(
                             '—',
                             style: TextStyle(
-                              fontSize: 14,
+                              fontSize: 16,
                               // Bumpé w400 → w500 (uniformisation 2026-05-13).
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF8A939D),
@@ -1066,8 +1086,8 @@ class _DossierScreenState extends State<DossierScreen> {
                                 label: 'Nom',
                                 value: _lastName,
                                 labelColor: kBrandPurple,
-                                labelSize: 14,
-                                valueSize: 14,
+                                labelSize: 16,
+                                valueSize: 16,
                                 onFocused: onFocused,
                                 onChanged: (v) {
                                   _lastName = v;
@@ -1083,8 +1103,8 @@ class _DossierScreenState extends State<DossierScreen> {
                                 label: 'Prénom',
                                 value: _firstName,
                                 labelColor: kBrandPurple,
-                                labelSize: 14,
-                                valueSize: 14,
+                                labelSize: 16,
+                                valueSize: 16,
                                 onFocused: onFocused,
                                 onChanged: (v) {
                                   _firstName = v;
@@ -1112,8 +1132,8 @@ class _DossierScreenState extends State<DossierScreen> {
                                 value: _fiscalRevenue,
                                 unit: '€',
                                 labelColor: kBrandPurple,
-                                labelSize: 14,
-                                valueSize: 14,
+                                labelSize: 16,
+                                valueSize: 16,
                                 onFocused: onFocused,
                                 onChanged: (v) {
                                   _fiscalRevenue = v;
@@ -1133,8 +1153,8 @@ class _DossierScreenState extends State<DossierScreen> {
                           label: 'Adresse',
                           value: _address,
                           labelColor: kBrandPurple,
-                          labelSize: 14,
-                          valueSize: 14,
+                          labelSize: 16,
+                          valueSize: 16,
                           onFocused: onFocused,
                           onChanged: (v) {
                             _address = v;
@@ -1155,8 +1175,8 @@ class _DossierScreenState extends State<DossierScreen> {
                           showZipField: true,
                           zipLabel: 'Code postal',
                           labelColor: kBrandPurple,
-                          labelSize: 14,
-                          valueSize: 14,
+                          labelSize: 16,
+                          valueSize: 16,
                           onFocused: onFocused,
                           onChanged: (update) {
                             setState(() {
@@ -1177,7 +1197,7 @@ class _DossierScreenState extends State<DossierScreen> {
                         Text(
                           'Communauté de communes',
                           style: GoogleFonts.nunito(
-                            fontSize: 14,
+                            fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: kBrandPurple,
                             letterSpacing: 0.2,
@@ -1192,7 +1212,7 @@ class _DossierScreenState extends State<DossierScreen> {
                           const Text(
                             '—',
                             style: TextStyle(
-                              fontSize: 14,
+                              fontSize: 16,
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF8A939D),
                             ),
@@ -1302,7 +1322,7 @@ class _DossierScreenState extends State<DossierScreen> {
           // relevé de visite (demande utilisateur 2026-05-13).
           style: GoogleFonts.nunito(
             fontWeight: FontWeight.w600,
-            fontSize: 14,
+            fontSize: 16,
             color: kBrandPurple,
           ),
         ),
@@ -1329,7 +1349,7 @@ class _DossierScreenState extends State<DossierScreen> {
                         // aligné sur l'épaisseur des autres valeurs
                         // du bloc Bénéficiaire (demande user 2026-05-13).
                         style: GoogleFonts.nunito(
-                          fontSize: 14,
+                          fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1424,7 +1444,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       items[index].label,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 16,
                         fontWeight: FontWeight.w800,
                         color: color,
                       ),
@@ -1479,7 +1499,7 @@ class _PlainField extends StatelessWidget {
           // (14 px) pour équilibrer la lecture du bloc Bénéficiaire en
           // preview — demande utilisateur.
           style: GoogleFonts.nunito(
-            fontSize: 14,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
             color: kBrandPurple,
             letterSpacing: 0.2,
@@ -1493,7 +1513,7 @@ class _PlainField extends StatelessWidget {
           maxLines: multiline ? null : 1,
           overflow: multiline ? TextOverflow.visible : TextOverflow.ellipsis,
           style: GoogleFonts.nunito(
-            fontSize: 14,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
             color: const Color(0xFF0E1116),
             height: multiline ? 1.4 : 1.2,
@@ -1557,14 +1577,7 @@ class _QuickActionButton extends StatelessWidget {
               child: Icon(icon, color: kBrandPurple),
             ),
             const SizedBox(height: 16),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
+            Text(label, style: kCtaTextStyle.copyWith(color: Colors.black87)),
             const SizedBox(height: 4),
             Text(
               subLabel,
@@ -1572,7 +1585,7 @@ class _QuickActionButton extends StatelessWidget {
               // pour rester lisible avec l'épaisseur générale du
               // dossier (demande user 2026-05-13).
               style: const TextStyle(
-                fontSize: 12,
+                fontSize: 16,
                 fontWeight: FontWeight.w700,
                 color: Colors.grey,
               ),

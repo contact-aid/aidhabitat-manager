@@ -28,6 +28,7 @@ import '../services/report_generation_service.dart';
 import '../services/sync_engine.dart';
 import '../components/beneficiary_header.dart';
 import '../components/brand_colors.dart';
+import '../components/cta_text_style.dart';
 import '../components/notes_widget.dart';
 import '../components/soft_transitions.dart';
 import 'visit_report/beneficiary_tab.dart';
@@ -634,7 +635,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                         child: Text(
                           'Note — $sourceTab',
                           style: const TextStyle(
-                            fontSize: 14,
+                            fontSize: 16,
                             fontWeight: FontWeight.w700,
                             color: Color(0xFF2B323A),
                           ),
@@ -657,7 +658,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                       expands: true,
                       autofocus: true,
                       textAlignVertical: TextAlignVertical.top,
-                      style: const TextStyle(fontSize: 14, height: 1.5),
+                      style: const TextStyle(fontSize: 16, height: 1.5),
                       decoration: const InputDecoration(
                         border: InputBorder.none,
                         hintText: 'Écrivez votre note…',
@@ -1318,14 +1319,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 else
                   Text(
                     'Générer',
-                    // Refonte 2026-05-13 : Nunito w600 (légèrement réduit
-                    // depuis w700 sur demande utilisateur).
-                    style: GoogleFonts.nunito(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
-                      color: Colors.white,
-                    ),
+                    style: kCtaTextStyle.copyWith(color: Colors.white),
                   ),
               ],
             ),
@@ -2419,7 +2413,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   'remplies. Tu peux générer le rapport quand même '
                   '(les champs vides seront laissés blancs dans le PDF) '
                   'ou compléter d\'abord :',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF5C6670)),
+                  style: TextStyle(fontSize: 16, color: Color(0xFF5C6670)),
                 ),
                 const SizedBox(height: 12),
                 Flexible(
@@ -2448,7 +2442,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                                     child: Text(
                                       m.label,
                                       style: const TextStyle(
-                                        fontSize: 13,
+                                        fontSize: 16,
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
@@ -2689,15 +2683,19 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       builder: (context, constraints) {
         final isStacked = constraints.maxWidth < _kStackedLayoutBreakpoint;
         if (isStacked) {
-          // Empilement : form en haut, note en dessous. Pas de hauteur fixe
-          // sur la note — l'utilisateur scrolle si besoin. La form garde
-          // sa hauteur naturelle.
+          // The form contains Expanded children and needs a bounded height.
+          // Its own sections scroll inside the available space.
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              formCard,
+              Expanded(child: formCard),
               const SizedBox(height: 16),
-              SizedBox(height: 280, child: notesPanel),
+              SizedBox(
+                height: constraints.maxHeight < 600
+                    ? constraints.maxHeight * 0.3
+                    : 280,
+                child: notesPanel,
+              ),
             ],
           );
         }

@@ -1269,7 +1269,7 @@ class _PhotoSectionDropWrapperState extends State<_PhotoSectionDropWrapper> {
                           style: TextStyle(
                             color: Color(0xFF554265),
                             fontWeight: FontWeight.w700,
-                            fontSize: 13,
+                            fontSize: 16,
                           ),
                         ),
                       ],

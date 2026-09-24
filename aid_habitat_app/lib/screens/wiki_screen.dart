@@ -536,7 +536,7 @@ class _WikiScreenState extends State<WikiScreen> {
                         'Ajouter un élément',
                         style: GoogleFonts.nunito(
                           color: Colors.white,
-                          fontSize: 14,
+                          fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -949,7 +949,7 @@ class _WikiItemDialogState extends State<_WikiItemDialog> {
                                                             TextAlignVertical
                                                                 .top,
                                                         style: const TextStyle(
-                                                          fontSize: 14,
+                                                          fontSize: 16,
                                                           color: Color(
                                                             0xFF5C6670,
                                                           ),
@@ -990,7 +990,7 @@ class _WikiItemDialogState extends State<_WikiItemDialog> {
                                             'Enregistrer',
                                             style: TextStyle(
                                               fontWeight: FontWeight.w700,
-                                              fontSize: 14,
+                                              fontSize: 16,
                                             ),
                                           ),
                                         ),
@@ -1065,7 +1065,7 @@ class _FormLabel extends StatelessWidget {
     return Text(
       text.toUpperCase(),
       style: const TextStyle(
-        fontSize: 11,
+        fontSize: 16,
         fontWeight: FontWeight.w700,
         color: Color(0xFF8A939D),
         letterSpacing: 1.2,
@@ -1467,7 +1467,7 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
                                 child: Text(
                                   'Descriptions',
                                   style: const TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 16,
                                     fontWeight: FontWeight.w700,
                                     color: kBrandPurple,
                                   ),
@@ -1654,7 +1654,7 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
                 const SizedBox(height: 4),
                 Text(
                   '.${_pickedImageExt.toUpperCase()}',
-                  style: TextStyle(color: Color(0xFF2B323A), fontSize: 12),
+                  style: TextStyle(color: Color(0xFF2B323A), fontSize: 16),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -1726,7 +1726,7 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
                 style: const TextStyle(
                   color: Color(0xFF8A939D),
                   fontWeight: FontWeight.w600,
-                  fontSize: 13,
+                  fontSize: 16,
                 ),
               ),
             ),
@@ -1971,7 +1971,7 @@ class _WikiCardState extends State<_WikiCard> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(
-          fontSize: 11,
+          fontSize: 16,
           fontWeight: FontWeight.w700,
           color: Color(0xFF5C6670),
         ),
@@ -2083,7 +2083,7 @@ class _WikiCardState extends State<_WikiCard> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 10,
+                          fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF8A939D),
                           letterSpacing: 1.2,
@@ -2171,7 +2171,7 @@ class _WikiLabeledField extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 16,
             fontWeight: FontWeight.w700,
             color: kBrandPurple,
           ),
@@ -2274,7 +2274,7 @@ class _WikiTagDropdown extends StatelessWidget {
         Text(
           label!,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 16,
             fontWeight: FontWeight.w700,
             color: kBrandPurple,
           ),

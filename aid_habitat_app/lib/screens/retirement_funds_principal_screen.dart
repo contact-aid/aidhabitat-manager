@@ -239,7 +239,7 @@ class _RetirementFundsPrincipalScreenState
                         'Ajouter une caisse de retraite',
                         style: GoogleFonts.nunito(
                           color: Colors.white,
-                          fontSize: 14,
+                          fontSize: 16,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -504,7 +504,7 @@ class _PrincipalFundCardState extends State<_PrincipalFundCard> {
                                     fund.phone,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 16,
                                       fontWeight: FontWeight.w700,
                                       color: Color(0xFF5C6670),
                                     ),
@@ -518,7 +518,7 @@ class _PrincipalFundCardState extends State<_PrincipalFundCard> {
                         const Text(
                           'Téléphone non renseigné',
                           style: TextStyle(
-                            fontSize: 11,
+                            fontSize: 16,
                             color: Color(0xFF8A939D),
                             fontStyle: FontStyle.italic,
                           ),
@@ -825,7 +825,7 @@ class _PrincipalFundDialog extends StatelessWidget {
                       const Text(
                         'Contact',
                         style: TextStyle(
-                          fontSize: 14,
+                          fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF0E1116),
                           letterSpacing: -0.2,
@@ -880,7 +880,7 @@ class _PrincipalFundDialog extends StatelessWidget {
                                     const Text(
                                       'Appeler',
                                       style: TextStyle(
-                                        fontSize: 14,
+                                        fontSize: 16,
                                         fontWeight: FontWeight.w700,
                                         color: Colors.white,
                                         letterSpacing: 0.2,
@@ -894,7 +894,7 @@ class _PrincipalFundDialog extends StatelessWidget {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 16,
                                         fontWeight: FontWeight.w600,
                                         color: Colors.white.withValues(
                                           alpha: 0.85,
@@ -1070,7 +1070,7 @@ class _NewPrincipalFundDialogState extends State<_NewPrincipalFundDialog> {
                   _errorMessage!,
                   style: const TextStyle(
                     color: Color(0xFFB91C1C),
-                    fontSize: 13,
+                    fontSize: 16,
                   ),
                 ),
               ],
@@ -1134,7 +1134,7 @@ class _PrincipalLabeledField extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 16,
             fontWeight: FontWeight.w700,
             color: kBrandPurple,
           ),

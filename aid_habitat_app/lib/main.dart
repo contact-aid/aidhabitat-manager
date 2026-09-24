@@ -11,6 +11,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:sqflite/sqflite.dart' show databaseFactory;
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'components/brand_colors.dart';
+import 'components/cta_text_style.dart';
 import 'components/soft_transitions.dart';
 import 'models/types.dart';
 import 'screens/login_screen.dart';
@@ -325,6 +326,18 @@ class MyApp extends StatelessWidget {
         // toutes les variantes (body/label/title), puis on surcharge
         // display/headline pour utiliser Nunito.
         textTheme: _buildAppTextTheme(),
+        textButtonTheme: const TextButtonThemeData(
+          style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
+        ),
+        filledButtonTheme: const FilledButtonThemeData(
+          style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
+        ),
+        elevatedButtonTheme: const ElevatedButtonThemeData(
+          style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
+        ),
+        outlinedButtonTheme: const OutlinedButtonThemeData(
+          style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
+        ),
         cardTheme: CardThemeData(
           color: Colors.white,
           elevation: 0,
@@ -790,7 +803,7 @@ TextTheme _buildAppTextTheme() {
     );
   }
 
-  return quicksand.copyWith(
+  final readable = quicksand.copyWith(
     displayLarge: nunito(quicksand.displayLarge),
     displayMedium: nunito(quicksand.displayMedium),
     displaySmall: nunito(quicksand.displaySmall),
@@ -800,5 +813,14 @@ TextTheme _buildAppTextTheme() {
     // titleLarge garde Quicksand (utilisé partout pour AppBar / cards).
     // bodyLarge / bodyMedium / bodySmall : Quicksand 500.
     // labelLarge / labelMedium / labelSmall : Quicksand 600.
+  );
+  // Material's bodySmall and labelSmall defaults are below 16 logical pixels.
+  return readable.copyWith(
+    bodySmall: readable.bodySmall?.copyWith(fontSize: 16),
+    bodyMedium: readable.bodyMedium?.copyWith(fontSize: 16),
+    labelSmall: readable.labelSmall?.copyWith(fontSize: 16),
+    labelMedium: readable.labelMedium?.copyWith(fontSize: 16),
+    labelLarge: readable.labelLarge?.copyWith(fontSize: 16),
+    titleSmall: readable.titleSmall?.copyWith(fontSize: 16),
   );
 }

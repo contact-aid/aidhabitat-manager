@@ -397,7 +397,7 @@ class _NoteWindowScreenState extends State<NoteWindowScreen>
                       child: Text(
                         widget.title,
                         style: const TextStyle(
-                          fontSize: 13,
+                          fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF2B323A),
                         ),
@@ -420,7 +420,7 @@ class _NoteWindowScreenState extends State<NoteWindowScreen>
                         expands: true,
                         autofocus: true,
                         textAlignVertical: TextAlignVertical.top,
-                        style: const TextStyle(fontSize: 14, height: 1.5),
+                        style: const TextStyle(fontSize: 16, height: 1.5),
                         autocorrect: false,
                         enableSuggestions: false,
                         spellCheckConfiguration:
@@ -555,7 +555,7 @@ class NoteWindowDrawingScreen extends StatelessWidget {
                   child: Text(
                     '$title · lecture seule',
                     style: const TextStyle(
-                      fontSize: 13,
+                      fontSize: 16,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF2B323A),
                     ),
@@ -755,7 +755,7 @@ class _DrawingCanvasNoteState extends State<_DrawingCanvasNote> {
                                 _error!,
                                 textAlign: TextAlign.center,
                                 style: const TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 16,
                                   color: Color(0xFFB4232F),
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -766,7 +766,7 @@ class _DrawingCanvasNoteState extends State<_DrawingCanvasNote> {
                               child: Text(
                                 'Aucun dessin sur cette page.',
                                 style: TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 16,
                                   color: Color(0xFF8A939D),
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -815,7 +815,7 @@ class _DrawingCanvasNoteState extends State<_DrawingCanvasNote> {
             Text(
               '${_currentPage + 1}/$_totalPages',
               style: const TextStyle(
-                fontSize: 12,
+                fontSize: 16,
                 fontWeight: FontWeight.w800,
                 color: Color(0xFF2B323A),
               ),

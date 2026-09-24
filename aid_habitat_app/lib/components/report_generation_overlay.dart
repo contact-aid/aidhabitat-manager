@@ -171,7 +171,7 @@ class _ReportGenerationOverlayState extends State<ReportGenerationOverlay> {
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
-                          fontSize: 13,
+                          fontSize: 16,
                         ),
                       ),
                     ],

@@ -1542,7 +1542,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
                           style: TextStyle(
                             color: kBrandDarkPurple,
                             fontWeight: FontWeight.w700,
-                            fontSize: 14,
+                            fontSize: 16,
                           ),
                         ),
                       ],
@@ -1675,7 +1675,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
               style: const TextStyle(
                 fontWeight: FontWeight.w700,
                 color: kBrandDarkPurple,
-                fontSize: 15,
+                fontSize: 16,
               ),
             ),
             const Spacer(),
@@ -2208,14 +2208,14 @@ class _AddDocumentTileState extends State<_AddDocumentTile> {
               Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
                   fontWeight: FontWeight.w700,
                   color: Color(0xFF0E1116),
                 ),
               ),
               Text(
                 subtitle,
-                style: TextStyle(fontSize: 11, color: Color(0xFF5C6670)),
+                style: TextStyle(fontSize: 16, color: Color(0xFF5C6670)),
               ),
             ],
           ),
@@ -2352,7 +2352,7 @@ class _CompactToolbarButton extends StatelessWidget {
                 label,
                 style: TextStyle(
                   color: color,
-                  fontSize: 14,
+                  fontSize: 16,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -2413,13 +2413,13 @@ class _EmptyState extends StatelessWidget {
             hasFilter
                 ? 'Aucun document ne correspond aux filtres.'
                 : 'Aucun document pour ce dossier.',
-            style: TextStyle(color: Color(0xFF2B323A), fontSize: 14),
+            style: TextStyle(color: Color(0xFF2B323A), fontSize: 16),
           ),
           if (!hasFilter) ...[
             const SizedBox(height: 8),
             Text(
               'Utilisez les boutons ci-dessus pour ajouter un document.',
-              style: TextStyle(color: Color(0xFF5C6670), fontSize: 12),
+              style: TextStyle(color: Color(0xFF5C6670), fontSize: 16),
             ),
           ],
         ],
@@ -2522,7 +2522,7 @@ class _UploadModalState extends State<_UploadModal> {
                     child: Text(
                       tag,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: active ? Colors.white : kBrandDarkPurple,
                       ),
@@ -3255,7 +3255,7 @@ class _PreviewScreenState extends State<DocumentPreview> {
                       '• Modifié',
                       style: TextStyle(
                         color: Colors.amber.shade200,
-                        fontSize: 11,
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -3475,7 +3475,7 @@ class _PreviewScreenState extends State<DocumentPreview> {
                   const SizedBox(height: 8),
                   Text(
                     'Prévisualisation non disponible pour ce format.',
-                    style: TextStyle(color: Color(0xFF8A939D), fontSize: 13),
+                    style: TextStyle(color: Color(0xFF8A939D), fontSize: 16),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
@@ -3991,7 +3991,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
           padding: const EdgeInsets.all(32),
           child: Text(
             _error!,
-            style: const TextStyle(color: Colors.white70, fontSize: 14),
+            style: const TextStyle(color: Colors.white70, fontSize: 16),
             textAlign: TextAlign.center,
           ),
         ),
@@ -4044,7 +4044,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
                 const SizedBox(width: 12),
                 Text(
                   '$_currentPage / $_totalPages',
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
                 ),
                 const SizedBox(width: 12),
                 IconButton(
@@ -4251,7 +4251,7 @@ class _RemotePdfAnnotatorWrapperState
                 const SizedBox(height: 16),
                 Text(
                   _error!,
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  style: const TextStyle(color: Colors.white70, fontSize: 16),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
@@ -4680,7 +4680,7 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
                         '$_currentPage / $_totalPages',
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
-                          fontSize: 13,
+                          fontSize: 16,
                         ),
                       ),
                     ),

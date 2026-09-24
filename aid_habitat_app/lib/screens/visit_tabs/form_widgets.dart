@@ -17,7 +17,7 @@ class VSectionHeader extends StatelessWidget {
       child: Text(
         title,
         style: const TextStyle(
-          fontSize: 15,
+          fontSize: 16,
           fontWeight: FontWeight.w700,
           color: kBrandDarkPurple,
         ),
@@ -59,7 +59,7 @@ class VSubSectionBar extends StatelessWidget {
               child: Text(
                 sections[i],
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                   color: active ? Colors.white : kBrandDarkPurple,
                 ),
@@ -123,11 +123,11 @@ class _VTextFieldState extends State<VTextField> {
       child: TextFormField(
         controller: _ctrl,
         keyboardType: widget.keyboardType,
-        style: const TextStyle(fontSize: 13),
+        style: const TextStyle(fontSize: 16),
         stylusHandwritingEnabled: true,
         decoration: InputDecoration(
           labelText: widget.label,
-          labelStyle: const TextStyle(fontSize: 12, color: kBrandDarkPurple),
+          labelStyle: const TextStyle(fontSize: 16, color: kBrandDarkPurple),
           suffixText: widget.suffix,
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(
@@ -197,11 +197,11 @@ class _VNumberFieldState extends State<VNumberField> {
         controller: _ctrl,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.,]'))],
-        style: const TextStyle(fontSize: 13),
+        style: const TextStyle(fontSize: 16),
         stylusHandwritingEnabled: true,
         decoration: InputDecoration(
           labelText: widget.label,
-          labelStyle: const TextStyle(fontSize: 12, color: kBrandDarkPurple),
+          labelStyle: const TextStyle(fontSize: 16, color: kBrandDarkPurple),
           suffixText: widget.suffix,
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(
@@ -247,7 +247,7 @@ class VToggleGroup extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 6),
               child: Text(
                 label,
-                style: const TextStyle(fontSize: 12, color: kBrandDarkPurple),
+                style: const TextStyle(fontSize: 16, color: kBrandDarkPurple),
               ),
             ),
           Wrap(
@@ -270,7 +270,7 @@ class VToggleGroup extends StatelessWidget {
                   child: Text(
                     option,
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 16,
                       fontWeight: FontWeight.w500,
                       color: active ? Colors.white : kBrandDarkPurple,
                     ),
@@ -323,7 +323,7 @@ class VCheckbox extends StatelessWidget {
               Flexible(
                 child: Text(
                   label,
-                  style: const TextStyle(fontSize: 13, color: kBrandDarkPurple),
+                  style: const TextStyle(fontSize: 16, color: kBrandDarkPurple),
                 ),
               ),
             ],
@@ -383,11 +383,11 @@ class _VTextAreaState extends State<VTextArea> {
       child: TextFormField(
         controller: _ctrl,
         maxLines: widget.maxLines,
-        style: const TextStyle(fontSize: 13),
+        style: const TextStyle(fontSize: 16),
         stylusHandwritingEnabled: true,
         decoration: InputDecoration(
           labelText: widget.label,
-          labelStyle: const TextStyle(fontSize: 12, color: kBrandDarkPurple),
+          labelStyle: const TextStyle(fontSize: 16, color: kBrandDarkPurple),
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 10,
@@ -431,14 +431,14 @@ class VDropdown extends StatelessWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(fontSize: 12, color: kBrandDarkPurple),
+            style: const TextStyle(fontSize: 16, color: kBrandDarkPurple),
           ),
           const SizedBox(height: 4),
           DropdownButtonFormField<String>(
             initialValue: options.contains(selected) ? selected : null,
             isExpanded: true,
             isDense: true,
-            style: const TextStyle(fontSize: 13, color: Colors.black87),
+            style: const TextStyle(fontSize: 16, color: Colors.black87),
             decoration: InputDecoration(
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(

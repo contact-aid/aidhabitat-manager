@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import 'brand_colors.dart';
+import 'cta_text_style.dart';
 import 'soft_transitions.dart';
 
 const Color kConfirmationDanger = Color(0xFFB91C1C);
@@ -172,7 +173,7 @@ class AppConfirmationDialog<T> extends StatelessWidget {
                 const SizedBox(height: 4),
                 DefaultTextStyle(
                   style: const TextStyle(
-                    fontSize: 14,
+                    fontSize: 16,
                     height: 1.35,
                     color: Color(0xFF5C6670),
                   ),
@@ -219,7 +220,7 @@ class _ConfirmationButton<T> extends StatelessWidget {
         minimumSize: const Size(0, 40),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        textStyle: kCtaTextStyle,
       );
       if (action.icon != null) {
         return FilledButton.icon(
@@ -248,7 +249,7 @@ class _ConfirmationButton<T> extends StatelessWidget {
       minimumSize: const Size(0, 40),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+      textStyle: kCtaTextStyle,
     );
     if (action.icon != null) {
       return TextButton.icon(

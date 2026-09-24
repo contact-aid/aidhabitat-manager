@@ -4,6 +4,7 @@ import '../models/types.dart';
 import '../services/feedback_activity_service.dart';
 import '../services/feedback_service.dart';
 import 'brand_colors.dart';
+import 'cta_text_style.dart';
 
 class FeedbackTab extends StatefulWidget {
   const FeedbackTab({
@@ -83,10 +84,13 @@ class _FeedbackTabState extends State<FeedbackTab> {
 
   @override
   Widget build(BuildContext context) {
-    final isCompact = MediaQuery.sizeOf(context).width < 760;
-    final panelWidth = isCompact ? 330.0 : 390.0;
-    final availableHeight = MediaQuery.sizeOf(context).height - 36;
-    final panelHeight = availableHeight.clamp(300.0, isCompact ? 340.0 : 350.0);
+    final screenSize = MediaQuery.sizeOf(context);
+    final isCompact = screenSize.width < 760;
+    final panelWidth = isCompact
+        ? (screenSize.width - 16).clamp(0.0, 330.0)
+        : 390.0;
+    final availableHeight = screenSize.height - 36;
+    final panelHeight = availableHeight.clamp(360.0, isCompact ? 420.0 : 430.0);
 
     return SizedBox(
       width: panelWidth,
@@ -128,7 +132,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
 
   Widget _buildCollapsed() {
     return SizedBox(
-      width: 132,
+      width: 164,
       height: 40,
       child: Material(
         key: const ValueKey('collapsed'),
@@ -152,13 +156,9 @@ class _FeedbackTabState extends State<FeedbackTab> {
                 color: kBrandDarkPurple,
               ),
               const SizedBox(width: 7),
-              const Text(
+              Text(
                 'Signaler',
-                style: TextStyle(
-                  color: kBrandDarkPurple,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: kCtaTextStyle.copyWith(color: kBrandDarkPurple),
               ),
             ],
           ),
@@ -237,7 +237,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                           },
                     selectedColor: const Color(0xFFF0E4F4),
                     labelStyle: TextStyle(
-                      fontSize: 14,
+                      fontSize: 16,
                       fontWeight: FontWeight.w800,
                       color: _type == type
                           ? kBrandDarkPurple
@@ -271,7 +271,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                   hintText: 'Décris le bug, la difficulté ou l’idée…',
                   filled: true,
                   fillColor: const Color(0xFFFDFCFB),
-                  hintStyle: const TextStyle(fontSize: 14),
+                  hintStyle: const TextStyle(fontSize: 16),
                   contentPadding: const EdgeInsets.all(14),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
@@ -289,7 +289,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                     ),
                   ),
                 ),
-                style: const TextStyle(fontSize: 14),
+                style: const TextStyle(fontSize: 16),
               ),
             ),
             if (_status != null) ...[
@@ -300,7 +300,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                   color: _statusIsError
                       ? const Color(0xFFB91C1C)
                       : const Color(0xFF047857),
-                  fontSize: 12,
+                  fontSize: 16,
                   fontWeight: FontWeight.w800,
                 ),
               ),

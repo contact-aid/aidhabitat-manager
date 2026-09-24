@@ -1085,10 +1085,14 @@ class DataService {
   /// second device sees the latest beneficiary, housing and context values
   /// immediately, without delaying the initial local render.
   Future<bool> refreshDossierRecordsFromRemote() async {
+    final session = SyncSessionScope.current ?? SyncSessionScope();
     try {
       final rawPayloads = await _nocodbApiClient.fetchDossierPayloads();
-      if (rawPayloads.isEmpty) return false;
-      await _dossierRepository.mergeRemoteDossierPayloads(rawPayloads);
+      session.check();
+      if (rawPayloads.isNotEmpty) {
+        await _dossierRepository.mergeRemoteDossierPayloads(rawPayloads);
+      }
+      session.check();
       _dossierRecordsController.add(null);
       return true;
     } catch (_) {

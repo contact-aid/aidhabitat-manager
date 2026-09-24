@@ -566,7 +566,8 @@ class _RecommendationsTabState extends State<RecommendationsTab>
 
   double _recommendationCardHeight(double cardWidth) {
     final imageHeight = (cardWidth - 24) / 1.5;
-    return imageHeight + 174;
+    // Leave room for the two-line description and 16 px field labels.
+    return imageHeight + 210;
   }
 
   Widget _buildAddRecommendationCard() {
@@ -736,7 +737,7 @@ class _RecommendationCard extends StatelessWidget {
                   child: Text(
                     '${index + 1}',
                     style: const TextStyle(
-                      fontSize: 14,
+                      fontSize: 16,
                       fontWeight: FontWeight.w900,
                       color: kBrandPurple,
                     ),
@@ -806,7 +807,7 @@ class _RecommendationCard extends StatelessWidget {
             value: descriptionValue,
             maxLines: 2,
             minLines: 2,
-            valueSize: 14,
+            valueSize: 16,
             onChanged: (v) => onChange(item.copyWith(note: v)),
           ),
         ],
@@ -1042,7 +1043,7 @@ class _WikiPickerDialogState extends State<WikiPickerDialog> {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 16,
                   fontWeight: FontWeight.w700,
                   color: Color(0xFF2B323A),
                 ),
@@ -1113,7 +1114,7 @@ class _InlineTitleFieldState extends State<_InlineTitleField> {
       minLines: 1,
       stylusHandwritingEnabled: true,
       style: const TextStyle(
-        fontSize: 14,
+        fontSize: 16,
         fontWeight: FontWeight.w700,
         color: Color(0xFF2B323A),
       ),
@@ -1136,7 +1137,7 @@ class _InlineTitleFieldState extends State<_InlineTitleField> {
         ),
         hintText: widget.hint,
         hintStyle: const TextStyle(
-          fontSize: 14,
+          fontSize: 16,
           fontWeight: FontWeight.w700,
           color: Color(0xFF8A939D),
         ),
@@ -1350,7 +1351,7 @@ class _DescriptionsPickerDialogState extends State<_DescriptionsPickerDialog> {
               const SizedBox(height: 4),
               Text(
                 widget.title,
-                style: const TextStyle(fontSize: 13, color: Color(0xFF5C6670)),
+                style: const TextStyle(fontSize: 16, color: Color(0xFF5C6670)),
               ),
               const SizedBox(height: 12),
               Flexible(
@@ -1407,7 +1408,7 @@ class _DescriptionsPickerDialogState extends State<_DescriptionsPickerDialog> {
                               child: Text(
                                 widget.descriptions[i],
                                 style: const TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 16,
                                   color: Color(0xFF2B323A),
                                   height: 1.4,
                                 ),

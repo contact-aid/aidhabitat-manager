@@ -1140,7 +1140,7 @@ class AuthService {
     List<Dossier> dossiers,
     LocalAppUser user,
   ) {
-    if (user.role == LocalUserRole.admin || _hasWildcardAccess(user.scopes)) {
+    if (user.role == LocalUserRole.admin) {
       return dossiers;
     }
 
@@ -1187,12 +1187,6 @@ class AuthService {
       );
     }
     return scopesByUserId;
-  }
-
-  bool _hasWildcardAccess(List<LocalAccessScope> scopes) {
-    return scopes.any(
-      (scope) => scope.type == 'dossier_access' && scope.value.trim() == '*',
-    );
   }
 
   Future<LocalAppUser> _mapUser(

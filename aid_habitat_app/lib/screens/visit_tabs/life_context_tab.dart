@@ -182,7 +182,7 @@ class _LifeContextTabState extends State<LifeContextTab> {
         const Text(
           'Capacit\u00e9s fonctionnelles',
           style: TextStyle(
-            fontSize: 13,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
             color: kBrandDarkPurple,
           ),

@@ -74,6 +74,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Dossier? _lastDossierTreeSelected;
   int _pendingSyncCount = 0;
   bool _isSyncing = false;
+  bool _isRefreshingDossiersManually = false;
   bool _isLoading = true;
   bool _isOffline = false;
   String? _lastSyncError;
@@ -339,6 +340,39 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _handleSyncNow() {
     FeedbackActivityService.instance.track('Synchronisation manuelle');
     _syncEngine.requestFullSync();
+  }
+
+  Future<void> _refreshCurrentUserDossiers() async {
+    if (_isRefreshingDossiersManually ||
+        _isOffline ||
+        ConnectivityService().isOffline ||
+        widget.remoteSessionExpired) {
+      return;
+    }
+    setState(() => _isRefreshingDossiersManually = true);
+    try {
+      final sessionReady = await _authService.resumePendingRemoteSession();
+      if (!sessionReady) throw StateError('Session distante indisponible');
+      if (!mounted || _isOffline || ConnectivityService().isOffline) return;
+      // GET /api/dossiers is scoped by the authenticated server session:
+      // only ADMIN receives every dossier; other profiles receive their own.
+      final refreshed = await _dataService.refreshDossierRecordsFromRemote();
+      if (!refreshed) throw StateError('Actualisation distante impossible');
+      await _refreshDossiers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Dossiers actualisés.')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Actualisation impossible. Vérifiez la connexion.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isRefreshingDossiersManually = false);
+    }
   }
 
   Future<void> _retrySyncOrReview() async {
@@ -687,7 +721,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 'conservées.',
                 style: TextStyle(
                   color: Color(0xFF5B4668),
-                  fontSize: 13,
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -726,7 +760,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     'Synchronisation en échec',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 13,
+                      fontSize: 16,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -735,7 +769,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     _lastSyncError ?? '',
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: 16,
                       fontWeight: FontWeight.w400,
                     ),
                   ),
@@ -1010,6 +1044,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         return DossiersListScreen(
           dossiers: _dossiers,
           onSelectDossier: _handleSelectDossier,
+          onRefreshDossiers: _refreshCurrentUserDossiers,
+          isOnline: !_isOffline && !widget.remoteSessionExpired,
+          isRefreshingDossiers: _isRefreshingDossiersManually,
         );
       case 'wiki':
         return const WikiScreen();
@@ -1330,7 +1367,7 @@ class _FailingOpCard extends StatelessWidget {
                 child: Text(
                   '$entityType · $operationType',
                   style: const TextStyle(
-                    fontSize: 14,
+                    fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF7F1D1D), // red-900
                   ),
@@ -1345,7 +1382,7 @@ class _FailingOpCard extends StatelessWidget {
                 child: Text(
                   '$attemptCount tentative${attemptCount == "1" ? "" : "s"}',
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontSize: 16,
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF7F1D1D),
                   ),
@@ -1358,7 +1395,7 @@ class _FailingOpCard extends StatelessWidget {
             Text(
               'ID : $entityLocalId',
               style: const TextStyle(
-                fontSize: 11,
+                fontSize: 16,
                 fontFamily: 'monospace',
                 color: Color(0xFF991B1B),
               ),
@@ -1368,7 +1405,7 @@ class _FailingOpCard extends StatelessWidget {
           SelectableText(
             lastError,
             maxLines: 4,
-            style: const TextStyle(fontSize: 12, color: Color(0xFF7F1D1D)),
+            style: const TextStyle(fontSize: 16, color: Color(0xFF7F1D1D)),
           ),
           const SizedBox(height: 10),
           Row(

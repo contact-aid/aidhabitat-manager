@@ -256,7 +256,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
   Widget _value(String title, dynamic value) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+      Text(title, style: const TextStyle(fontSize: 16, color: Colors.grey)),
       SelectableText(
         value == null || value == ''
             ? 'Non renseigne'

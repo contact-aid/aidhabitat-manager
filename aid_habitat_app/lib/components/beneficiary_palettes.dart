@@ -102,7 +102,7 @@ class EpciBadge extends StatelessWidget {
           // Refonte 2026-05-13 : Nunito w600 — aligné sur les autres
           // titres / badges de page de l'app.
           style: GoogleFonts.nunito(
-            fontSize: large ? 14 : 12,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
             letterSpacing: 0.2,
             color: palette.fg,

@@ -280,7 +280,7 @@ class _AnahScreenState extends State<AnahScreen> {
                   "(politique de sécurité du site gouv.fr).",
                   style: TextStyle(
                     color: Color(0xFF2B323A),
-                    fontSize: 14,
+                    fontSize: 16,
                     height: 1.5,
                   ),
                   textAlign: TextAlign.center,
@@ -297,7 +297,7 @@ class _AnahScreenState extends State<AnahScreen> {
                         "Ouvrir MaPrimeAdapt'",
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
-                          fontSize: 15,
+                          fontSize: 16,
                         ),
                       ),
                     ),
@@ -317,7 +317,7 @@ class _AnahScreenState extends State<AnahScreen> {
                       padding: EdgeInsets.symmetric(vertical: 10),
                       child: Text(
                         "Site institutionnel anah.gouv.fr",
-                        style: TextStyle(fontSize: 13),
+                        style: TextStyle(fontSize: 16),
                       ),
                     ),
                     style: OutlinedButton.styleFrom(
@@ -330,7 +330,7 @@ class _AnahScreenState extends State<AnahScreen> {
                   const SizedBox(height: 20),
                   Text(
                     _statusError!,
-                    style: TextStyle(color: Colors.red.shade700, fontSize: 12),
+                    style: TextStyle(color: Colors.red.shade700, fontSize: 16),
                     textAlign: TextAlign.center,
                   ),
                 ],
@@ -402,7 +402,7 @@ class _AnahScreenState extends State<AnahScreen> {
                   "sécurisé intégré d'iOS, sans quitter l'application.",
                   style: TextStyle(
                     color: Color(0xFF2B323A),
-                    fontSize: 14,
+                    fontSize: 16,
                     height: 1.5,
                   ),
                   textAlign: TextAlign.center,
@@ -419,7 +419,7 @@ class _AnahScreenState extends State<AnahScreen> {
                         "Ouvrir MaPrimeAdapt'",
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
-                          fontSize: 15,
+                          fontSize: 16,
                         ),
                       ),
                     ),
@@ -439,7 +439,7 @@ class _AnahScreenState extends State<AnahScreen> {
                       padding: EdgeInsets.symmetric(vertical: 10),
                       child: Text(
                         "Site institutionnel anah.gouv.fr",
-                        style: TextStyle(fontSize: 13),
+                        style: TextStyle(fontSize: 16),
                       ),
                     ),
                     style: OutlinedButton.styleFrom(
@@ -469,7 +469,7 @@ class _AnahScreenState extends State<AnahScreen> {
           children: [
             Text(
               'Portail MaPrimeAdapt\' — Agence nationale de l\'habitat',
-              style: TextStyle(color: Color(0xFF2B323A), fontSize: 13),
+              style: TextStyle(color: Color(0xFF2B323A), fontSize: 16),
             ),
           ],
         ),
@@ -508,7 +508,7 @@ class _AnahScreenState extends State<AnahScreen> {
             Text(
               'Vérification…',
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 16,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF2B323A),
               ),
@@ -554,7 +554,7 @@ class _AnahScreenState extends State<AnahScreen> {
             Text(
               label,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 16,
                 fontWeight: FontWeight.w700,
                 color: fg,
               ),
@@ -756,7 +756,7 @@ class _AnahScreenState extends State<AnahScreen> {
               Text(
                 message,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFF2B323A), fontSize: 12),
+                style: TextStyle(color: Color(0xFF2B323A), fontSize: 16),
               ),
               const SizedBox(height: 16),
               Row(

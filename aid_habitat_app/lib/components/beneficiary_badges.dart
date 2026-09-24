@@ -140,7 +140,7 @@ class AccompanimentBadge extends StatelessWidget {
         // Refonte 2026-05-13 : Nunito w800 pour plus de poids visuel
         // sur les badges du header (Quicksand plafonne à w700).
         style: GoogleFonts.nunito(
-          fontSize: large ? 13 : 12,
+          fontSize: 16,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.2,
           color: palette.fg,
@@ -254,7 +254,7 @@ class IncomeCategoryBadge extends StatelessWidget {
         value,
         // Refonte 2026-05-13 : Nunito w800 (cf. AccompanimentBadge).
         style: GoogleFonts.nunito(
-          fontSize: large ? 13 : 12,
+          fontSize: 16,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.2,
           color: fg,
@@ -278,11 +278,7 @@ class AnahStatusBadge extends StatelessWidget {
   final String status;
   final bool large;
 
-  const AnahStatusBadge({
-    super.key,
-    required this.status,
-    this.large = false,
-  });
+  const AnahStatusBadge({super.key, required this.status, this.large = false});
 
   @override
   Widget build(BuildContext context) {
@@ -322,7 +318,7 @@ class AnahStatusBadge extends StatelessWidget {
         label,
         // Refonte 2026-05-13 : Nunito w800 (cf. AccompanimentBadge).
         style: GoogleFonts.nunito(
-          fontSize: large ? 13 : 12,
+          fontSize: 16,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.2,
           color: fg,
