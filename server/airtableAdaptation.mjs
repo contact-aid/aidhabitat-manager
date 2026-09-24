@@ -86,9 +86,9 @@ export function projectAirtableDossier({ dossier, client }) {
   };
 }
 
-// Existing imports may have kept the Airtable client record ID as patient_id.
-// Only an exact, unique ID can establish a first link. Names and addresses
-// are deliberately excluded because they can be duplicated or changed.
+// Imported NocoDB dossiers already use `airtable:<record ID>` as uuid_source.
+// Older imports may instead have kept the Airtable client ID as patient_id.
+// Names and addresses are excluded because they can be duplicated or changed.
 export function resolveAirtableLinks(airtableRecords, nocodbDossiers) {
   const sourceCounts = new Map();
   const clientCounts = new Map();
@@ -98,27 +98,28 @@ export function resolveAirtableLinks(airtableRecords, nocodbDossiers) {
     if (record.airtableClientRecordId) clientCounts.set(record.airtableClientRecordId,
       (clientCounts.get(record.airtableClientRecordId) || 0) + 1);
   }
-  const linkCounts = new Map();
+  const uuidCounts = new Map();
   const patientCounts = new Map();
   const field = (row, key) => row?.fields?.[key] ?? row?.[key];
   for (const row of nocodbDossiers) {
-    const link = String(field(row, 'airtable_record_id') ?? '').trim();
+    const uuid = String(field(row, 'uuid_source') ?? '').trim();
     const patientId = String(field(row, 'patient_id') ?? '').trim();
-    if (link) linkCounts.set(link, (linkCounts.get(link) || 0) + 1);
+    if (uuid) uuidCounts.set(uuid, (uuidCounts.get(uuid) || 0) + 1);
     if (patientId) patientCounts.set(patientId,
       (patientCounts.get(patientId) || 0) + 1);
   }
   return airtableRecords.map((record) => {
     const sourceId = record.airtableRecordId;
     const clientId = record.airtableClientRecordId;
+    const sourceUuid = `airtable:${sourceId}`;
     const linked = nocodbDossiers.filter((row) =>
-      field(row, 'airtable_record_id') === sourceId);
+      field(row, 'uuid_source') === sourceUuid);
     const legacy = linked.length ? [] : nocodbDossiers.filter((row) =>
-      !field(row, 'airtable_record_id') && clientId &&
+      clientId &&
       field(row, 'patient_id') === clientId);
     const candidates = linked.length ? linked : legacy;
     const unique = sourceCounts.get(sourceId) === 1 &&
-      (linked.length ? linkCounts.get(sourceId) === 1 :
+      (linked.length ? uuidCounts.get(sourceUuid) === 1 :
         clientId && clientCounts.get(clientId) === 1 &&
         patientCounts.get(clientId) === 1);
     const dossierId = unique && candidates.length === 1
@@ -126,7 +127,7 @@ export function resolveAirtableLinks(airtableRecords, nocodbDossiers) {
     return {
       ...record,
       nocodbDossierId: dossierId || null,
-      linkSource: dossierId ? (linked.length ? 'stored' : 'legacy_client_id') : null,
+      linkSource: dossierId ? (linked.length ? 'airtable_uuid' : 'legacy_client_id') : null,
     };
   });
 }

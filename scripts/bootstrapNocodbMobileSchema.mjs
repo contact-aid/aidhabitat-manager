@@ -115,12 +115,6 @@ const EXISTING_TABLE_PATCHES = [
       ['code_postal_libre', 'SingleLineText'],
     ],
   },
-  {
-    tableName: 'dossiers',
-    fields: [
-      ['airtable_record_id', 'SingleLineText'],
-    ],
-  },
 ];
 
 const TYPE_TO_COLUMN = {

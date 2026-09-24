@@ -22,7 +22,7 @@ import { registerContextRoutes } from './contextRoutes.mjs';
 import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
-import { createAirtableAdaptationReader, projectAirtableDossier } from './airtableAdaptation.mjs';
+import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
 } from './resyncLegacyNames.mjs';
@@ -5644,9 +5644,8 @@ app.get('/api/dossiers', requireAuth, async (req, res, next) => {
   }
 });
 
-// Explicit read-only Airtable source for the "Actualiser" action. The API
-// never sends a write to Airtable; Flutter decides which already-known local
-// dossier can be matched before enqueuing any NocoDB update.
+// Explicit read-only Airtable source for the "Actualiser" action. Exact
+// airtable:rec... NocoDB UUIDs identify imported dossiers; no write occurs.
 app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next) => {
   try {
     const fullName = stringValue(req.appUser?.ergoLabel).trim();
@@ -5662,7 +5661,19 @@ app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next)
     const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
     const records = (await read(firstName, { fullName }))
       .map(projectAirtableDossier);
-    res.json({ success: true, error: null, data: { records } });
+    const dossierRows = await queryAll(TABLES.dossiers, {
+      fields: ['uuid_source', 'patient_id', 'ergo_id'],
+    });
+    const scopedIds = new Set(filterDossiersByScopes(
+      dossierRows.map((row) => ({
+        id: stringValue(field(row, 'uuid_source')),
+        ergoId: field(row, 'ergo_id'),
+      })), req.appUser,
+    ).map((row) => row.id));
+    const scopedRows = dossierRows.filter((row) =>
+      scopedIds.has(stringValue(field(row, 'uuid_source'))));
+    const linked = resolveAirtableLinks(records, scopedRows);
+    res.json({ success: true, error: null, data: { records: linked } });
   } catch (error) {
     next(error);
   }

@@ -138,12 +138,14 @@ try {
   if (entity === 'dossier') {
     await check('read-only Airtable route scopes Adaptation to the authenticated intervenant', async () => {
       airtableCalls.length = 0;
+      mock.row('dossier').uuid_source = 'airtable:recAAAAAAAAAAAAAA';
       expectStatus(await request('/api/airtable/adaptation-dossiers'), 401);
       const response = expectStatus(await request('/api/airtable/adaptation-dossiers', {
         token: clientA,
       }), 200);
       assert.equal(response.data.records.length, 1);
       assert.equal(response.data.records[0].airtableRecordId, 'recAAAAAAAAAAAAAA');
+      assert.equal(response.data.records[0].nocodbDossierId, 'airtable:recAAAAAAAAAAAAAA');
       assert.equal(response.data.records[0].beneficiary.nombre_personnes, 2);
       assert(airtableCalls.length === 2);
       assert(airtableCalls.every((call) => call.init.method === 'GET'));

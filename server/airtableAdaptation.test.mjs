@@ -99,16 +99,16 @@ test('an absent Airtable record identity cannot be guessed from a patient name',
   }), /Identifiant Airtable/);
 });
 
-test('an exact stored link or unique legacy client ID selects a fictitious dossier', () => {
+test('an exact imported UUID or unique legacy client ID selects a fictitious dossier', () => {
   const records = [
     { airtableRecordId: id('a'), airtableClientRecordId: id('x') },
     { airtableRecordId: id('b'), airtableClientRecordId: id('y') },
   ];
   assert.deepEqual(resolveAirtableLinks(records, [
-    { fields: { uuid_source: 'fictif-a', airtable_record_id: id('a'), patient_id: 'other' } },
+    { fields: { uuid_source: `airtable:${id('a')}`, patient_id: 'other' } },
     { fields: { uuid_source: 'fictif-b', patient_id: id('y') } },
   ]).map((result) => [result.nocodbDossierId, result.linkSource]), [
-    ['fictif-a', 'stored'], ['fictif-b', 'legacy_client_id'],
+    [`airtable:${id('a')}`, 'airtable_uuid'], ['fictif-b', 'legacy_client_id'],
   ]);
 });
 
@@ -123,7 +123,7 @@ test('ambiguous or name-only matches never select a dossier', () => {
     { fields: { uuid_source: 'fictif-c', nom: 'Exemple' } },
   ])[0].nocodbDossierId, null);
   assert.equal(resolveAirtableLinks(records, [
-    { fields: { uuid_source: 'fictif-d', airtable_record_id: id('a') } },
-    { fields: { uuid_source: 'fictif-e', airtable_record_id: id('a') } },
+    { fields: { uuid_source: `airtable:${id('a')}` } },
+    { fields: { uuid_source: `airtable:${id('a')}` } },
   ])[0].nocodbDossierId, null);
 });
