@@ -5199,6 +5199,35 @@ app.post('/api/retirement-funds-principal', requireAuth, async (req, res, next) 
   }
 });
 
+app.put('/api/retirement-funds-principal/:fundId', requireAuth, async (req, res, next) => {
+  try {
+    const fundId = String(req.params.fundId || '').trim();
+    const name = stringValue(req.body?.name).trim();
+    const phone = stringValue(req.body?.phone).trim();
+    if (!name) return res.status(400).json({ success: false, error: 'Nom obligatoire' });
+    const records = await queryAll(TABLES.caissesRetraite, { fields: ['nom'] });
+    if (!records.some((record) => String(record.id) === fundId)) {
+      return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+    }
+    await updateRecord(TABLES.caissesRetraite, fundId, {
+      nom: name, numero_telephone_contact: nullableString(phone),
+    });
+    res.json({ success: true, error: null, data: { fund: { id: fundId, name, phone } } });
+  } catch (error) { next(error); }
+});
+
+app.delete('/api/retirement-funds-principal/:fundId', requireAuth, async (req, res, next) => {
+  try {
+    const fundId = String(req.params.fundId || '').trim();
+    const records = await queryAll(TABLES.caissesRetraite, { fields: ['nom'] });
+    if (!records.some((record) => String(record.id) === fundId)) {
+      return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+    }
+    await callNocoTool('deleteRecords', { tableId: TABLES.caissesRetraite, records: [{ id: fundId }] });
+    res.status(204).end();
+  } catch (error) { next(error); }
+});
+
 app.get('/api/anah-status', requireAuth, async (_req, res, next) => {
   try {
     // Cache HTTP : ANAH status (feature flag + URLs) change quasi
@@ -5583,6 +5612,27 @@ app.put('/api/retirement-funds/:fundId', requireAuth, async (req, res, next) => 
   } catch (error) {
     next(error);
   }
+});
+
+app.delete('/api/retirement-funds/:fundId', requireAuth, async (req, res, next) => {
+  try {
+    const fundId = String(req.params.fundId || '').trim();
+    const store = await readRetirementFundsStore();
+    if (fundId.startsWith('custom-')) {
+      const count = store.customFunds.length;
+      store.customFunds = store.customFunds.filter((fund) => fund.id !== fundId);
+      if (store.customFunds.length === count) return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+    } else {
+      const records = await queryAll(TABLES.caissesRetraiteComplementaires, { fields: ['nom'] });
+      if (!records.some((record) => String(record.id) === fundId)) {
+        return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+      }
+      await callNocoTool('deleteRecords', { tableId: TABLES.caissesRetraiteComplementaires, records: [{ id: fundId }] });
+      delete store.funds[fundId];
+    }
+    await writeRetirementFundsStore(store);
+    res.status(204).end();
+  } catch (error) { next(error); }
 });
 
 app.get('/api/mobile-sync/schema', requireAuth, async (_req, res, next) => {

@@ -1704,6 +1704,8 @@ class DocumentRepository {
               continue;
             }
           }
+          // A newer server clock cannot acknowledge an unpublished edit.
+          // Keep the local photo/document even if its queue entry is missing.
           if (existingSyncState != SyncState.synced.name) {
             continue;
           }
@@ -2040,7 +2042,6 @@ class DocumentRepository {
         return 'application/octet-stream';
     }
   }
-
 }
 
 /// Container plat pour un document à embarquer **inline** dans la

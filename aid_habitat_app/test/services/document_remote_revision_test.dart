@@ -108,7 +108,8 @@ void main() {
 
   test('a newer remote document cannot replace unsent local content', () async {
     await db.update('documents', {
-      'title': 'Titre local fictif', 'sync_state': 'pendingSync',
+      'title': 'Titre local fictif',
+      'sync_state': 'pendingSync',
     });
     await repository.mergeRemoteDocuments('patient', [
       remote(revision: 'v2', timestamp: third),
@@ -743,7 +744,9 @@ void main() {
     final document = {...remote(), 'clientDocumentId': 'origin'};
     expect(
       () => resolveImportedDocumentUploadIdentity(
-        [{'clientDocumentId': 'unrelated'}],
+        [
+          {'clientDocumentId': 'unrelated'},
+        ],
         ['https://example.invalid'],
       ),
       throwsStateError,

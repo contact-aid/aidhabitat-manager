@@ -963,6 +963,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                         child: IncomeCategoryBadge(
                           value: income,
                           monochrome: true,
+                          compact: true,
                         ),
                       ),
               ),
@@ -973,7 +974,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                     ? const SizedBox.shrink()
                     : Align(
                         alignment: Alignment.centerLeft,
-                        child: EpciBadge(label: epci),
+                        child: EpciBadge(label: epci, compact: true),
                       ),
               ),
               // DATE DE VISITE — alignée à droite pour la pousser au

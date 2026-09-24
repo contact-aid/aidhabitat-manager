@@ -1102,7 +1102,7 @@ class SyncRepository {
         final observed = remoteData?['remoteData'];
         final remoteRevision = observed is Map
             ? (observed['app_sync_revision'] ?? observed['revision'])
-                ?.toString()
+                  ?.toString()
             : null;
         final predecessors = payload['predecessorWriteIds'];
         if (remoteRevision != null &&
@@ -1699,11 +1699,12 @@ class SyncRepository {
     }
   }
 
-  /// Explicit user choice: keep the complete local note and retry it against
-  /// either a freshly fetched revision or the revision observed in the 409
-  /// response. This is never automatic for a genuine cross-device conflict.
+  /// Keep the complete local note and retry it against the revision observed
+  /// in the 409 response. The sync engine can choose this after comparing
+  /// verified edit timestamps; the review screen can also call it directly.
   Future<bool> resolveNoteConflictKeepingLocal(
     String operationId, {
+    String? revision,
     String? observedRevision,
   }) async {
     final db = await _database.database;
@@ -1725,13 +1726,14 @@ class SyncRepository {
                 ),
               )
               as Map<String, dynamic>;
-      final revision = observedRevision == null
+      final suppliedRevision = observedRevision ?? revision;
+      final verifiedRevision = suppliedRevision == null
           ? _noteConflictRevision(payload['conflict'])
-          : _noteConflictRevision({'revision': observedRevision});
-      if (revision == null) return false;
+          : _noteConflictRevision({'revision': suppliedRevision});
+      if (verifiedRevision == null) return false;
       payload
         ..remove('conflict')
-        ..['expectedRevision'] = revision
+        ..['expectedRevision'] = verifiedRevision
         ..['writeId'] = newSyncWriteId()
         ..['predecessorWriteIds'] = <String>[];
       final updated = await txn.update(
@@ -1751,7 +1753,10 @@ class SyncRepository {
       if (updated != 1) return false;
       await txn.update(
         'note_pages',
-        {'remote_revision': revision, 'sync_state': SyncState.pendingSync.name},
+        {
+          'remote_revision': verifiedRevision,
+          'sync_state': SyncState.pendingSync.name,
+        },
         where: 'local_id = ?',
         whereArgs: [rows.single['entity_local_id']],
       );

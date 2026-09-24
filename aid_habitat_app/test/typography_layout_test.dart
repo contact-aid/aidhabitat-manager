@@ -31,7 +31,7 @@ class _LayoutAuthService implements AuthService {
 }
 
 void main() {
-  testWidgets('CTA uses the former Signaler font variant at 16 px', (
+  testWidgets('CTA uses the former Signaler font variant at 14 px', (
     tester,
   ) async {
     TextStyle? inheritedStyle;
@@ -57,7 +57,7 @@ void main() {
       kCtaTextStyle.fontFamilyFallback,
       inheritedStyle!.fontFamilyFallback,
     );
-    expect(kCtaTextStyle.fontSize, 16);
+    expect(kCtaTextStyle.fontSize, 14);
     expect(kCtaTextStyle.fontWeight, FontWeight.w800);
   });
 

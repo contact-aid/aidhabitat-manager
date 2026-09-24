@@ -221,6 +221,7 @@ IncomeCategoryPalette incomePaletteFor(String value) {
 class IncomeCategoryBadge extends StatelessWidget {
   final String value;
   final bool large;
+  final bool compact;
 
   /// Variante sans couleur : fond gris neutre (slate-100), texte
   /// gris foncé. Utilisée dans la liste « Mes dossiers » où le badge
@@ -233,6 +234,7 @@ class IncomeCategoryBadge extends StatelessWidget {
     required this.value,
     this.large = false,
     this.monochrome = false,
+    this.compact = false,
   });
 
   @override
@@ -254,7 +256,7 @@ class IncomeCategoryBadge extends StatelessWidget {
         value,
         // Refonte 2026-05-13 : Nunito w800 (cf. AccompanimentBadge).
         style: GoogleFonts.nunito(
-          fontSize: 16,
+          fontSize: compact ? 14 : 16,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.2,
           color: fg,

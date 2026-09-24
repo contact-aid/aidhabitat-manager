@@ -261,6 +261,7 @@ class FormTextField extends StatefulWidget {
   /// pour les contextes où la valeur doit être plus visible (bloc
   /// Informations Bénéficiaire — saisie à 14 px).
   final double? valueSize;
+  final FontWeight? valueWeight;
 
   const FormTextField({
     super.key,
@@ -280,6 +281,7 @@ class FormTextField extends StatefulWidget {
     this.labelSize,
     this.labelSpacing,
     this.valueSize,
+    this.valueWeight,
   });
 
   @override
@@ -359,6 +361,7 @@ class _FormTextFieldState extends State<FormTextField> {
               minLines: widget.minLines ?? (isMultiline ? 2 : 1),
               style: TextStyle(
                 fontSize: (widget.valueSize ?? 14).clamp(14, double.infinity),
+                fontWeight: widget.valueWeight,
                 color: const Color(0xFF2B323A),
               ),
               stylusHandwritingEnabled: true,

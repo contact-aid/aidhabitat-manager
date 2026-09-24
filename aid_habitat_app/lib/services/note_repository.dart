@@ -467,10 +467,19 @@ class NoteRepository {
     );
     final existing = existingRows.isNotEmpty ? existingRows.first : null;
 
-    // Une note non acquittée reste locale, même si le serveur affiche un
-    // timestamp plus récent. Le serveur ne reprend la priorité qu'après
-    // le choix explicite de ses valeurs par l'utilisateur.
+    // Une note non publiée reste prioritaire, quel que soit l'horodatage
+    // distant. Une note déjà synchronisée peut accepter le même timestamp
+    // pour réparer un cache incomplet, mais jamais un snapshot plus ancien.
     if (existing != null) {
+      final outstanding = await db.query(
+        'sync_operations',
+        columns: const ['id'],
+        where:
+            "entity_type = 'note_page' AND entity_local_id = ? AND status != 'completed'",
+        whereArgs: [existing['local_id']],
+        limit: 1,
+      );
+      if (outstanding.isNotEmpty) return false;
       final localUpdatedAt = existing['updated_at'] as String?;
       final localHasUnpublishedChanges =
           existing['sync_state']?.toString() != SyncState.synced.name;

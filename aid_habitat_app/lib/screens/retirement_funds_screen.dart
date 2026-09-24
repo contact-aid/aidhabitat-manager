@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../components/brand_colors.dart';
@@ -118,12 +119,13 @@ class _RetirementFundsScreenState extends State<RetirementFundsScreen> {
     );
   }
 
-  Future<void> _openFund(RetirementFund fund) async {
+  Future<void> _openFund(RetirementFund fund, {bool edit = false}) async {
     await showSoftDialog<void>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.5),
       builder: (context) => _RetirementFundDialog(
         fund: fund,
+        startEditing: edit,
         onSaved: (saved) {
           if (!mounted) return;
           setState(() {
@@ -134,6 +136,81 @@ class _RetirementFundsScreenState extends State<RetirementFundsScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _duplicateFund(RetirementFund fund) async {
+    try {
+      final created = await _dataService.createRetirementFund(
+        name: '${fund.name} (copie)',
+        phone: fund.phone,
+        audience: fund.audience,
+        requestMethod: fund.requestMethod,
+        requestDelay: fund.requestDelay,
+        aidAmount: fund.aidAmount,
+        therapistNote: fund.therapistNote,
+        website: fund.website,
+        logoUrl: fund.logoUrl,
+      );
+      if (mounted) setState(() => _funds = [..._funds, created]);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Duplication impossible : $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteFund(RetirementFund fund) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Supprimer cette caisse ?'),
+        content: Text(fund.name),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _dataService.deleteRetirementFund(fund.id);
+      if (mounted) {
+        setState(() => _funds = _funds.where((f) => f.id != fund.id).toList());
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Suppression impossible : $error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _shareFund(RetirementFund fund) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final origin = box == null
+        ? const Rect.fromLTWH(0, 0, 1, 1)
+        : box.localToGlobal(Offset.zero) & box.size;
+    try {
+      await Share.share(
+        '${fund.name}\n${fund.phone}\n${fund.website}'.trim(),
+        sharePositionOrigin: origin,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Partage impossible : $error')));
+      }
+    }
   }
 
   /// Ouvre un dialog de création d'une nouvelle caisse de retraite.
@@ -321,6 +398,10 @@ class _RetirementFundsScreenState extends State<RetirementFundsScreen> {
                     fund: fund,
                     dateLabel: _buildDateLabel(fund),
                     onTap: () => _openFund(fund),
+                    onEdit: () => _openFund(fund, edit: true),
+                    onShare: () => _shareFund(fund),
+                    onDuplicate: () => _duplicateFund(fund),
+                    onDelete: () => _deleteFund(fund),
                   );
                 },
               ),
@@ -381,11 +462,19 @@ class _FundCard extends StatefulWidget {
   final RetirementFund fund;
   final String dateLabel;
   final VoidCallback onTap;
+  final VoidCallback onEdit;
+  final VoidCallback onShare;
+  final VoidCallback onDuplicate;
+  final VoidCallback onDelete;
 
   const _FundCard({
     required this.fund,
     required this.dateLabel,
     required this.onTap,
+    required this.onEdit,
+    required this.onShare,
+    required this.onDuplicate,
+    required this.onDelete,
   });
 
   @override
@@ -479,52 +568,103 @@ class _FundCardState extends State<_FundCard> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 14,
+                          fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF8A939D),
                           letterSpacing: 1.2,
                         ),
                       ),
+                      const SizedBox(height: 6),
                       // Widget : pastille téléphone SOUS la date — fond
                       // gris très clair, icône + numéro en slate-700.
-                      if (fund.phone.isNotEmpty) ...[
-                        const SizedBox(height: 10),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF2F4F6),
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  LucideIcons.phone,
-                                  size: 12,
-                                  color: Color(0xFF5C6670),
-                                ),
-                                const SizedBox(width: 6),
-                                Flexible(
-                                  child: Text(
-                                    fund.phone,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF5C6670),
-                                    ),
+                      Row(
+                        children: [
+                          if (fund.phone.isNotEmpty)
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF2F4F6),
+                                    borderRadius: BorderRadius.circular(50),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        LucideIcons.phone,
+                                        size: 12,
+                                        color: Color(0xFF5C6670),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          fund.phone,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF5C6670),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
+                              ),
+                            )
+                          else
+                            const Spacer(),
+                          PopupMenuButton<String>(
+                            tooltip: 'Actions',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 34,
+                              height: 34,
                             ),
+                            icon: const Icon(
+                              LucideIcons.moreVertical,
+                              size: 18,
+                            ),
+                            onSelected: (action) {
+                              switch (action) {
+                                case 'edit':
+                                  widget.onEdit();
+                                case 'share':
+                                  widget.onShare();
+                                case 'duplicate':
+                                  widget.onDuplicate();
+                                case 'delete':
+                                  widget.onDelete();
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Modifier'),
+                              ),
+                              PopupMenuItem(
+                                value: 'share',
+                                child: Text('Partager'),
+                              ),
+                              PopupMenuItem(
+                                value: 'duplicate',
+                                child: Text('Dupliquer'),
+                              ),
+                              PopupMenuDivider(),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Supprimer'),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -541,10 +681,15 @@ class _FundCardState extends State<_FundCard> {
 // superposée sur le hero (parité visuelle avec les cartes Bibliothèque).
 
 class _RetirementFundDialog extends StatefulWidget {
-  const _RetirementFundDialog({required this.fund, required this.onSaved});
+  const _RetirementFundDialog({
+    required this.fund,
+    required this.onSaved,
+    this.startEditing = false,
+  });
 
   final RetirementFund fund;
   final ValueChanged<RetirementFund> onSaved;
+  final bool startEditing;
 
   @override
   State<_RetirementFundDialog> createState() => _RetirementFundDialogState();
@@ -570,6 +715,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
   void initState() {
     super.initState();
     _currentFund = widget.fund;
+    _isEditing = widget.startEditing;
     _nameController = TextEditingController(text: widget.fund.name);
     _audienceController = TextEditingController(text: widget.fund.audience);
     _requestDelayController = TextEditingController(

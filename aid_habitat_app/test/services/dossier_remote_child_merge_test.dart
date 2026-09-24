@@ -212,4 +212,65 @@ void main() {
     expect(items.single['wikiItemId'], 'wiki-local');
     expect(row['sync_state'], 'conflict');
   });
+
+  for (final localWins in [true, false]) {
+    test(
+      'la préconisation la plus récente gagne (locale=$localWins)',
+      () async {
+        const localAt = '2026-09-10T10:00:00.000Z';
+        const revision = '11111111-1111-4111-8111-111111111111';
+        await db.insert('visit_recommendations', {
+          'local_id': 'reco-local',
+          'dossier_local_id': 'dossier-1',
+          'items_json': jsonEncode([
+            {'id': 'local-1', 'wikiItemId': 'wiki-local'},
+            {'id': 'draft-1', 'wikiItemId': '', 'customTitle': 'Brouillon'},
+          ]),
+          'updated_at': localAt,
+          'sync_state': 'conflict',
+        });
+        await db.insert('sync_operations', {
+          'id': 'visitrec_update_dossier-1',
+          'entity_type': 'visit_recommendations',
+          'entity_local_id': 'dossier-1',
+          'operation_type': 'update',
+          'status': 'conflict',
+          'payload_json': jsonEncode({
+            'dossierId': 'dossier-1',
+            'envelope': {
+              'protocolVersion': 1,
+              'writeId': '22222222-2222-4222-8222-222222222222',
+              'expectedRevision': null,
+              'items': [
+                {'id': 'local-1', 'wikiItemId': 'wiki-local'},
+              ],
+            },
+          }),
+          'created_at': localAt,
+          'updated_at': localAt,
+        });
+        final resolved = await repository
+            .resolveVisitRecommendationsByLatestEdit('dossier-1', {
+              'updatedAt': localWins
+                  ? '2026-09-09T10:00:00.000Z'
+                  : '2026-09-11T10:00:00.000Z',
+              'revision': revision,
+              'items': [
+                {'id': 'remote-1', 'wikiItemId': 'wiki-remote'},
+              ],
+            });
+        expect(resolved, isTrue);
+        final op = (await db.query('sync_operations')).single;
+        final row = (await db.query('visit_recommendations')).single;
+        expect(op['status'], localWins ? 'pending' : 'completed');
+        final items = jsonDecode(row['items_json'] as String) as List;
+        expect(items.first['id'], localWins ? 'local-1' : 'remote-1');
+        expect(items.last['id'], 'draft-1');
+        if (localWins) {
+          final payload = jsonDecode(op['payload_json'] as String) as Map;
+          expect(payload['envelope']['expectedRevision'], revision);
+        }
+      },
+    );
+  }
 }

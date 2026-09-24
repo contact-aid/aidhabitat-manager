@@ -2314,6 +2314,39 @@ class NocodbApiClient {
     };
   }
 
+  Future<void> updatePrincipalRetirementFund({
+    required String fundId,
+    required String name,
+    required String phone,
+  }) async {
+    final response = await _client
+        .put(
+          Uri.parse(
+            '$_baseUrl/api/retirement-funds-principal/${Uri.encodeComponent(fundId)}',
+          ),
+          headers: _headers,
+          body: jsonEncode({'name': name, 'phone': phone}),
+        )
+        .timeout(_defaultTimeout);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Modification impossible (${response.statusCode})');
+    }
+  }
+
+  Future<void> deletePrincipalRetirementFund(String fundId) async {
+    final response = await _client
+        .delete(
+          Uri.parse(
+            '$_baseUrl/api/retirement-funds-principal/${Uri.encodeComponent(fundId)}',
+          ),
+          headers: _headers,
+        )
+        .timeout(_defaultTimeout);
+    if (response.statusCode != 204) {
+      throw Exception('Suppression impossible (${response.statusCode})');
+    }
+  }
+
   /// POST /api/retirement-funds — crée une caisse de retraite
   /// complémentaire. Demande utilisateur 2026-05-12 : « Fais le même
   /// type de bouton sur la page caisse de retraite pour pouvoir
@@ -2407,6 +2440,20 @@ class NocodbApiClient {
       throw Exception('Unexpected retirement fund payload');
     }
     return _mapRetirementFund(savedFund);
+  }
+
+  Future<void> deleteRetirementFund(String fundId) async {
+    final response = await _client
+        .delete(
+          Uri.parse(
+            '$_baseUrl/api/retirement-funds/${Uri.encodeComponent(fundId)}',
+          ),
+          headers: _headers,
+        )
+        .timeout(_defaultTimeout);
+    if (response.statusCode != 204) {
+      throw Exception('Suppression impossible (${response.statusCode})');
+    }
   }
 
   Future<List<AdminAccessMember>> fetchAdminAccessMembers() async {

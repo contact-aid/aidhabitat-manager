@@ -1149,14 +1149,20 @@ class DossierRepository {
 
         if (existingDossier.isNotEmpty &&
             existingSyncState != SyncState.synced) {
-          // Une date serveur plus récente ne prouve jamais que la saisie
-          // locale a été envoyée. Le relevé reste prioritaire jusqu'à
-          // l'acquittement de sa mutation ou au choix explicite du serveur.
+          // Un horodatage distant ne prouve pas que la saisie locale a été
+          // publiée. La conserver même si la file d'opérations est absente.
           continue;
         }
 
-        // Une saisie patient ou logement non acquittée protège également
-        // le dossier entier, même si le serveur annonce un timestamp récent.
+        // Garde de second niveau : on regarde aussi le `patients.sync_state`
+        // ET le `housings.sync_state` du dossier. Avant cette garde, un
+        // pull NocoDB pouvait écraser un patient ou un housing en cours
+        // de push, parce que `dossiers.sync_state` était à `synced` mais
+        // `patients.sync_state` était à `pendingSync`. Symptôme côté UI :
+        // « le nom modifié disparaît pendant quelques secondes » — le
+        // serveur renvoyait l'ancien nom (eventual consistency) et le
+        // merge l'écrivait par-dessus le nouveau nom local.
+        //
         if (existingDossier.isNotEmpty) {
           final patientLocalIdExisting =
               existingDossier.first['patient_local_id'] as String?;
@@ -4049,6 +4055,130 @@ class DossierRepository {
       remoteRevision: snapshot['revision']?.toString(),
       remoteSnapshotExists: snapshot['snapshotExists'] == true,
     );
+  }
+
+  /// Resolve a publication revision conflict using the edit times of the
+  /// local list and the server snapshot. The local drafts stay local when the
+  /// server version wins.
+  Future<bool> resolveVisitRecommendationsByLatestEdit(
+    String dossierId,
+    Map<String, dynamic> snapshot,
+  ) async {
+    final remoteAt = DateTime.tryParse(snapshot['updatedAt']?.toString() ?? '');
+    final remoteRevision = snapshot['revision']?.toString();
+    final remoteItems = (snapshot['items'] as List?)
+        ?.whereType<Map>()
+        .map((item) => item.cast<String, dynamic>())
+        .toList();
+    if (remoteAt == null ||
+        remoteItems == null ||
+        remoteRevision == null ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(remoteRevision)) {
+      return false;
+    }
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'visit_recommendations',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      final operations = await txn.query(
+        'sync_operations',
+        where:
+            "entity_type = 'visit_recommendations' AND entity_local_id = ? AND status = 'conflict'",
+        whereArgs: [dossierId],
+        limit: 2,
+      );
+      if (rows.length != 1 || operations.length != 1) return false;
+      final localAt = DateTime.tryParse(
+        rows.single['updated_at']?.toString() ?? '',
+      );
+      if (localAt == null || localAt.isAtSameMomentAs(remoteAt)) return false;
+      final op = operations.single;
+      final now = DateTime.now().toIso8601String();
+      if (localAt.isAfter(remoteAt)) {
+        final payload =
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    op['payload_json'] as String,
+                  ),
+                )
+                as Map<String, dynamic>;
+        final envelope = (payload['envelope'] as Map?)?.cast<String, dynamic>();
+        if (envelope == null || envelope['items'] is! List) return false;
+        final writeId = newSyncWriteId();
+        payload
+          ..remove('conflict')
+          ..['envelope'] = {
+            ...envelope,
+            'writeId': writeId,
+            'expectedRevision': remoteRevision,
+          };
+        await txn.update(
+          'sync_operations',
+          {
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+            'status': 'pending',
+            'attempt_count': 0,
+            'last_error': null,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [op['id']],
+        );
+        await txn.update(
+          'visit_recommendations',
+          {
+            'remote_revision': remoteRevision,
+            'remote_snapshot_exists': 1,
+            'sync_state': SyncState.pendingSync.name,
+          },
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      } else {
+        final localItems =
+            (jsonDecode(rows.single['items_json'] as String) as List)
+                .whereType<Map>()
+                .map((item) => item.cast<String, dynamic>())
+                .toList();
+        final merged = mergePublishedRecommendationsWithLocalDrafts(
+          remotePublishedItems: remoteItems,
+          localItems: localItems,
+        );
+        await txn.update(
+          'sync_operations',
+          {'status': 'completed', 'last_error': null, 'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [op['id']],
+        );
+        await txn.update(
+          'visit_recommendations',
+          {
+            'items_json': jsonEncode(merged),
+            'remote_revision': remoteRevision,
+            'remote_snapshot_exists': 1,
+            'sync_state':
+                merged.any(
+                  (item) => (item['wikiItemId']?.toString() ?? '').isEmpty,
+                )
+                ? SyncState.pendingSync.name
+                : SyncState.synced.name,
+            'updated_at': snapshot['updatedAt'],
+          },
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      }
+      return true;
+    });
   }
 
   Future<bool> mergeRemoteVisitRecommendationsPayload(

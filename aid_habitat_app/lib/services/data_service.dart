@@ -374,6 +374,7 @@ class DataService {
     String aidAmount = '',
     String therapistNote = '',
     String website = '',
+    String logoUrl = '',
   }) async {
     final created = await _nocodbApiClient.createRetirementFund(
       name: name,
@@ -384,6 +385,7 @@ class DataService {
       aidAmount: aidAmount,
       therapistNote: therapistNote,
       website: website,
+      logoUrl: logoUrl,
     );
     // Re-pull la liste complète pour merger en SQLite local et que
     // l'écran appelant puisse re-fetchAll proprement.
@@ -393,6 +395,11 @@ class DataService {
       /* best-effort */
     }
     return created;
+  }
+
+  Future<void> deleteRetirementFund(String fundId) async {
+    await _nocodbApiClient.deleteRetirementFund(fundId);
+    await _retirementFundsRepository.deleteLocalFund(fundId);
   }
 
   /// Pulls the latest admin access list from the server and merges into

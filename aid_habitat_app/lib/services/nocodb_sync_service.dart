@@ -522,7 +522,12 @@ class NocodbSyncService {
           remoteData: e.remoteData,
         );
         if (retained) {
-          conflicts += 1;
+          final resolved = await _resolveVisitConflictByLatestEdit(operation);
+          if (resolved) {
+            deferred += 1;
+          } else {
+            conflicts += 1;
+          }
         } else {
           deferred += 1;
         }
@@ -601,6 +606,178 @@ class NocodbSyncService {
       conflicts: conflicts,
       failures: failures,
     );
+  }
+
+  /// Rebase only a verified visit-report conflict. A device's edit timestamp
+  /// and the server's update timestamp decide which value wins; missing or
+  /// equal timestamps leave the conflict available for manual review.
+  Future<bool> _resolveVisitConflictByLatestEdit(
+    SyncOperation operation,
+  ) async {
+    if (operation.entityType == 'note_page') {
+      return _resolveNoteConflictByLatestEdit(operation);
+    }
+    if (operation.entityType == 'visit_recommendations') {
+      try {
+        final remoteId = await _resolveChildDossierId(operation.entityLocalId);
+        final snapshot = await _apiClient.fetchVisitRecommendationsSnapshot(
+          remoteId,
+        );
+        return DossierRepository(
+          database: _database,
+        ).resolveVisitRecommendationsByLatestEdit(
+          operation.entityLocalId,
+          snapshot,
+        );
+      } catch (_) {
+        return false;
+      }
+    }
+    const reviewableTypes = {
+      'patient',
+      'housing',
+      'dossier',
+      'contexte_de_vie',
+      'mesures_anthropometriques',
+      'observations_synthese',
+      'diagnostic_sanitaires',
+    };
+    if (!reviewableTypes.contains(operation.entityType)) return false;
+    try {
+      final db = await _database.database;
+      final repository = DossierRepository(database: _database);
+      String dossierId = operation.entityLocalId;
+      if (operation.entityType == 'patient' ||
+          operation.entityType == 'housing') {
+        final rows = await db.query(
+          'dossiers',
+          columns: const ['local_id'],
+          where: operation.entityType == 'patient'
+              ? 'patient_local_id = ?'
+              : '(local_id = ? OR housing_local_id = ?)',
+          whereArgs: operation.entityType == 'patient'
+              ? [operation.entityLocalId]
+              : [operation.entityLocalId, operation.entityLocalId],
+          limit: 2,
+        );
+        if (rows.length != 1) return false;
+        dossierId = rows.single['local_id'] as String;
+      }
+      final scope = await repository.conflictReviewScope(dossierId);
+      final reviews = <SyncConflictReview>[];
+      if (const {
+        'patient',
+        'housing',
+        'dossier',
+      }.contains(operation.entityType)) {
+        final payloads = await _apiClient.fetchDossierPayloads();
+        final matches = payloads
+            .where((row) => row['id'] == scope.remoteDossierId)
+            .toList();
+        if (matches.length != 1) return false;
+        reviews.addAll(
+          await repository.reviewConflicts(dossierId, matches.single),
+        );
+      } else {
+        final remoteId = scope.remoteDossierId;
+        final remote = switch (operation.entityType) {
+          'contexte_de_vie' => await _apiClient.fetchContext(remoteId),
+          'mesures_anthropometriques' => await _apiClient.fetchMesuresPayload(
+            remoteId,
+          ),
+          'observations_synthese' => await _apiClient.fetchObservationsPayload(
+            remoteId,
+          ),
+          _ => await _apiClient.fetchDiagnosticSanitairePayload(remoteId),
+        };
+        reviews.addAll(
+          await repository.reviewSecondaryConflicts(dossierId, {
+            operation.entityType: remote,
+          }),
+        );
+      }
+      final matching = reviews.where(
+        (review) => review.operationId == operation.id,
+      );
+      if (matching.length != 1) return false;
+      final review = matching.single;
+      final localRows = await db.query(
+        review.table,
+        columns: const ['updated_at'],
+        where: 'local_id = ?',
+        whereArgs: [review.localRowId],
+        limit: 1,
+      );
+      if (localRows.length != 1) return false;
+      final localAt = DateTime.tryParse(
+        localRows.single['updated_at']?.toString() ?? '',
+      );
+      final remoteAt = DateTime.tryParse(review.remoteUpdatedAt ?? '');
+      if (localAt == null ||
+          remoteAt == null ||
+          localAt.isAtSameMomentAs(remoteAt)) {
+        return false;
+      }
+      await repository.resolveReviewedConflict(
+        review,
+        keepLocal: localAt.isAfter(remoteAt),
+      );
+      return true;
+    } catch (_) {
+      // Retain the original conflict if the remote snapshot or local edit
+      // clock cannot be verified, including changes made during review.
+      return false;
+    }
+  }
+
+  Future<bool> _resolveNoteConflictByLatestEdit(SyncOperation operation) async {
+    try {
+      final details = await _syncRepository.noteConflictDetails(operation.id);
+      if (details == null) return false;
+      final patientId = details['patientId']?.toString() ?? '';
+      final tabKey = details['tabKey']?.toString() ?? '';
+      if (patientId.isEmpty || tabKey.isEmpty) return false;
+      final pageNumber = int.tryParse('${details['pageNumber'] ?? 0}');
+      if (pageNumber == null) return false;
+      final remote = await _apiClient.fetchNotePage(
+        patientId: patientId,
+        tabKey: tabKey,
+        pageNumber: pageNumber,
+        scopeType: details['scopeType']?.toString(),
+        scopeId: details['scopeId']?.toString(),
+      );
+      if (remote == null) return false;
+      final db = await _database.database;
+      final rows = await db.query(
+        'note_pages',
+        columns: const ['updated_at'],
+        where: 'local_id = ?',
+        whereArgs: [operation.entityLocalId],
+        limit: 1,
+      );
+      if (rows.length != 1) return false;
+      final localAt = DateTime.tryParse(
+        rows.single['updated_at']?.toString() ?? '',
+      );
+      final remoteAt = DateTime.tryParse(remote['updatedAt']?.toString() ?? '');
+      if (localAt == null ||
+          remoteAt == null ||
+          localAt.isAtSameMomentAs(remoteAt)) {
+        return false;
+      }
+      if (localAt.isAfter(remoteAt)) {
+        return _syncRepository.resolveNoteConflictKeepingLocal(
+          operation.id,
+          revision: remote['revision']?.toString(),
+        );
+      }
+      return _syncRepository.resolveNoteConflictUsingServer(
+        operation.id,
+        remote,
+      );
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<String?> _expectedVersion(
