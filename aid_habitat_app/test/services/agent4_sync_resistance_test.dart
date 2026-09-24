@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:aid_habitat_app/services/app_config.dart';
+import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/services/connectivity_service.dart';
 import 'package:aid_habitat_app/services/dossier_repository.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
@@ -571,6 +572,274 @@ void main() {
     });
     expect((await second.db.query('dossiers')).single['sync_state'], 'synced');
   });
+
+  test(
+    'fictitious levels sync, reopen, then sync a new WC and bathroom',
+    () async {
+      final device = await _openDevice();
+      addTearDown(device.db.close);
+      await device.dossiers.mergeRemoteDossierPayloads([_remoteDossier()]);
+      var serverVersion = _baseVersion;
+      var serverRooms = <String, dynamic>{
+        'basement': <String>[],
+        'rdc': ['Cuisine'],
+        'floor': <String>[],
+        'secondFloor': <String>[],
+        'thirdFloor': <String>[],
+      };
+      var writes = 0;
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'PATCH');
+          expect(request.url.path, '/api/logements/by-beneficiary/patient-1');
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          final guard = (body['concurrency'] as Map).cast<String, dynamic>();
+          expect(body['expectedUpdatedAt'], serverVersion);
+          expect(guard['baseValues']['roomsBreakdown'], serverRooms);
+          serverRooms = (body['roomsBreakdown'] as Map).cast<String, dynamic>();
+          writes++;
+          serverVersion = '2026-09-0${writes + 1}T10:00:00.000Z';
+          return http.Response(
+            jsonEncode({
+              'data': {'id': 'housing-1', 'updatedAt': serverVersion},
+            }),
+            200,
+          );
+        }),
+      );
+      await device.dossiers.updateHousing('dossier-1', {
+        'rdc': true,
+        'rdc_rooms_json': jsonEncode(['Cuisine', 'WC']),
+      });
+      final first = await NocodbSyncService(
+        database: device.local,
+        syncRepository: device.queue,
+        apiClient: client,
+      ).pushPendingChanges();
+      expect(first.conflictCount, 0);
+      expect(first.pushedOperations, 1);
+
+      // Reopening reads the acknowledged SQLite row. A replica pull is guarded
+      // briefly after the write, so it cannot replace this newer local state.
+      final reopened = DossierRepository(database: device.local);
+      expect(
+        jsonDecode(
+          (await reopened.fetchHousingRaw('dossier-1'))!['rdc_rooms_json']
+              as String,
+        ),
+        ['Cuisine', 'WC'],
+      );
+      await reopened.updateHousing('dossier-1', {
+        'rdc_rooms_json': jsonEncode(['Cuisine', 'WC', 'Salle de bain']),
+      });
+      final second = await NocodbSyncService(
+        database: device.local,
+        syncRepository: device.queue,
+        apiClient: client,
+      ).pushPendingChanges();
+      expect(second.conflictCount, 0);
+      expect(second.pushedOperations, 1);
+      expect(writes, 2);
+      expect(serverRooms['rdc'], ['Cuisine', 'WC', 'Salle de bain']);
+      expect(
+        (await reopened.fetchHousingRaw('dossier-1'))!['sync_state'],
+        'synced',
+      );
+    },
+  );
+
+  test('fictitious autonomy sync, reopen, then medical context sync', () async {
+    const firstRevision = '11111111-1111-4111-8111-111111111111';
+    const secondRevision = '22222222-2222-4222-8222-222222222222';
+    const thirdRevision = '33333333-3333-4333-8333-333333333333';
+    final device = await _openDevice();
+    addTearDown(device.db.close);
+    final remote = _remoteDossier()
+      ..['medicalContext'] = const MedicalContext().toJson()
+      ..['autonomy'] = const AutonomyData().toJson()
+      ..['contextServerReference'] = {
+        'recordId': 501,
+        'revision': firstRevision,
+        'updatedAt': _baseVersion,
+      };
+    await device.dossiers.mergeRemoteDossierPayloads([remote]);
+    var expectedRevision = firstRevision;
+    var writes = 0;
+    final client = NocodbApiClient(
+      client: MockClient((request) async {
+        expect(request.method, 'PUT');
+        expect(request.url.path, '/api/contextes/dossier-1');
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final guard = (body['concurrency'] as Map).cast<String, dynamic>();
+        expect(guard['reference']['revision'], expectedRevision);
+        final updates = (body['updates'] as Map).cast<String, dynamic>();
+        writes++;
+        if (writes == 1) {
+          expect((updates['autonomy'] as Map)['done'], isTrue);
+          expect(updates.containsKey('medicalContext'), isFalse);
+          expectedRevision = secondRevision;
+        } else {
+          expect((updates['medicalContext'] as Map)['pathology'], 'fiction');
+          expect(updates.containsKey('autonomy'), isFalse);
+          expectedRevision = thirdRevision;
+        }
+        return http.Response(
+          jsonEncode({
+            'data': {
+              'serverReference': {
+                'recordId': 501,
+                'revision': expectedRevision,
+                'updatedAt': '2026-09-0${writes + 1}T10:00:00.000Z',
+              },
+            },
+          }),
+          200,
+        );
+      }),
+    );
+    await device.dossiers.upsertContexteDeVie(
+      'dossier-1',
+      'patient-1',
+      autonomy: const AutonomyData(done: true),
+    );
+    final first = await NocodbSyncService(
+      database: device.local,
+      syncRepository: device.queue,
+      apiClient: client,
+    ).pushPendingChanges();
+    expect(first.conflictCount, 0);
+    expect(first.pushedOperations, 1);
+
+    final reopened = DossierRepository(database: device.local);
+    expect(
+      (await reopened.fetchContexteDeVie('dossier-1'))!['autonomy']['done'],
+      isTrue,
+    );
+    await reopened.upsertContexteDeVie(
+      'dossier-1',
+      'patient-1',
+      medicalContext: const MedicalContext(pathology: 'fiction'),
+    );
+    final second = await NocodbSyncService(
+      database: device.local,
+      syncRepository: device.queue,
+      apiClient: client,
+    ).pushPendingChanges();
+    expect(second.conflictCount, 0);
+    expect(second.pushedOperations, 1);
+    expect(writes, 2);
+    expect(
+      (await device.db.query('contexte_de_vie')).single['sync_state'],
+      'synced',
+    );
+  });
+
+  test(
+    'fictitious context take-server decision permits a new guarded sync',
+    () async {
+      const firstRevision = '11111111-1111-4111-8111-111111111111';
+      const secondRevision = '22222222-2222-4222-8222-222222222222';
+      const thirdRevision = '33333333-3333-4333-8333-333333333333';
+      final device = await _openDevice();
+      addTearDown(device.db.close);
+      final remote = _remoteDossier()
+        ..['medicalContext'] = const MedicalContext().toJson()
+        ..['autonomy'] = const AutonomyData().toJson()
+        ..['contextServerReference'] = {
+          'recordId': 501,
+          'revision': firstRevision,
+          'updatedAt': _baseVersion,
+        };
+      await device.dossiers.mergeRemoteDossierPayloads([remote]);
+      await device.dossiers.upsertContexteDeVie(
+        'dossier-1',
+        'patient-1',
+        autonomy: const AutonomyData(done: true),
+      );
+      var writes = 0;
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          final guard = (body['concurrency'] as Map).cast<String, dynamic>();
+          writes++;
+          if (writes == 1) {
+            expect(guard['reference']['revision'], firstRevision);
+            return http.Response(
+              jsonEncode({
+                'error': 'CONTEXT_REFERENCE_CONFLICT',
+                'remoteUpdatedAt': '2026-09-02T10:00:00.000Z',
+              }),
+              409,
+            );
+          }
+          expect(guard['reference']['revision'], secondRevision);
+          expect((body['updates']['autonomy'] as Map)['done'], isTrue);
+          return http.Response(
+            jsonEncode({
+              'data': {
+                'serverReference': {
+                  'recordId': 501,
+                  'revision': thirdRevision,
+                  'updatedAt': '2026-09-03T10:00:00.000Z',
+                },
+              },
+            }),
+            200,
+          );
+        }),
+      );
+      final first = await NocodbSyncService(
+        database: device.local,
+        syncRepository: device.queue,
+        apiClient: client,
+      ).pushPendingChanges();
+      expect(first.conflictCount, 1);
+      expect(
+        (await device.db.query('contexte_de_vie')).single['sync_state'],
+        'conflict',
+      );
+
+      final review = (await device.dossiers.reviewSecondaryConflicts(
+        'dossier-1',
+        {
+          'contexte_de_vie': {
+            'dossierId': 'dossier-1',
+            'serverReference': {
+              'recordId': 501,
+              'revision': secondRevision,
+              'updatedAt': '2026-09-02T10:00:00.000Z',
+            },
+            'medicalContext': const MedicalContext().toJson(),
+            'autonomy': const AutonomyData().toJson(),
+          },
+        },
+      )).single;
+      await device.dossiers.resolveReviewedConflict(review, keepLocal: false);
+      final reopened = DossierRepository(database: device.local);
+      expect(
+        (await reopened.fetchContexteDeVie('dossier-1'))!['autonomy']['done'],
+        isFalse,
+      );
+      await reopened.upsertContexteDeVie(
+        'dossier-1',
+        'patient-1',
+        autonomy: const AutonomyData(done: true),
+      );
+      final second = await NocodbSyncService(
+        database: device.local,
+        syncRepository: device.queue,
+        apiClient: client,
+      ).pushPendingChanges();
+      expect(second.conflictCount, 0);
+      expect(second.pushedOperations, 1);
+      expect(writes, 2);
+      expect(
+        (await device.db.query('contexte_de_vie')).single['sync_state'],
+        'synced',
+      );
+      expect((await device.db.query('sync_conflict_history')).length, 1);
+    },
+  );
 
   test(
     'same-field conflict stays local and an obsolete comparison cannot win',
