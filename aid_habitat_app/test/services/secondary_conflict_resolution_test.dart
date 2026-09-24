@@ -239,10 +239,7 @@ void main() {
     await conflict('contexte_de_vie');
     final before = await snapshot();
     final compared = (await repository.reviewSecondaryConflicts(_dossier, {
-      'contexte_de_vie': {
-        'dossierId': _dossier,
-        'serverReference': null,
-      },
+      'contexte_de_vie': {'dossierId': _dossier, 'serverReference': null},
     })).single;
     expect(compared.remoteExists, isFalse);
     expect(await snapshot(), before);
@@ -251,6 +248,52 @@ void main() {
     expect(retry['concurrency']['reference'], isNull);
     expect(retry['concurrency']['createIfAbsent'], isTrue);
   });
+
+  test(
+    'take remote context supplies the reference for the next height edit',
+    () async {
+      await repository.upsertContexteDeVie(
+        _dossier,
+        _patient,
+        medicalContext: const MedicalContext(heightCm: '172', weightKg: '76.0'),
+      );
+      await conflict('contexte_de_vie');
+      const reference = {
+        'recordId': 501,
+        'revision': '11111111-1111-4111-8111-111111111111',
+        'updatedAt': _reviewed,
+      };
+      final compared = (await repository.reviewSecondaryConflicts(_dossier, {
+        'contexte_de_vie': {
+          'dossierId': _dossier,
+          'serverReference': reference,
+          'medicalContext': const MedicalContext(
+            heightCm: '170',
+            weightKg: '76.0',
+          ).toJson(),
+          'autonomy': const AutonomyData().toJson(),
+        },
+      })).single;
+      await repository.resolveReviewedConflict(compared, keepLocal: false);
+      final row = (await db.query('contexte_de_vie')).single;
+      expect(row['remote_reference_known'], 1);
+      expect(jsonDecode(row['remote_reference_json'] as String), reference);
+
+      await repository.upsertContexteDeVie(
+        _dossier,
+        _patient,
+        medicalContext: const MedicalContext(heightCm: '173', weightKg: '76.0'),
+      );
+      final next = await payload('contexte_de_vie');
+      expect(next['updates'].keys, ['medicalContext']);
+      expect(next['concurrency']['reference'], reference);
+      expect(
+        next['concurrency']['baseValues']['medicalContext']['heightCm'],
+        '170',
+      );
+      expect((await operation('contexte_de_vie'))['status'], 'pending');
+    },
+  );
 
   test(
     'child conflict aggregates to dossier until every child is resolved',

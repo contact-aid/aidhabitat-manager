@@ -325,6 +325,7 @@ class _ContextTabState extends State<ContextTab>
         autonomyDone: occ.autonomyDone,
         autonomy: occ.autonomy,
         humanHelp: occ.humanHelp,
+        attention: occ.attention,
       ),
     );
   }
