@@ -721,7 +721,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 'conservées.',
                 style: TextStyle(
                   color: Color(0xFF5B4668),
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -760,7 +760,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     'Synchronisation en échec',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -769,7 +769,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     _lastSyncError ?? '',
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w400,
                     ),
                   ),
@@ -1367,7 +1367,7 @@ class _FailingOpCard extends StatelessWidget {
                 child: Text(
                   '$entityType · $operationType',
                   style: const TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF7F1D1D), // red-900
                   ),
@@ -1382,7 +1382,7 @@ class _FailingOpCard extends StatelessWidget {
                 child: Text(
                   '$attemptCount tentative${attemptCount == "1" ? "" : "s"}',
                   style: const TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF7F1D1D),
                   ),
@@ -1395,7 +1395,7 @@ class _FailingOpCard extends StatelessWidget {
             Text(
               'ID : $entityLocalId',
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontFamily: 'monospace',
                 color: Color(0xFF991B1B),
               ),
@@ -1405,7 +1405,7 @@ class _FailingOpCard extends StatelessWidget {
           SelectableText(
             lastError,
             maxLines: 4,
-            style: const TextStyle(fontSize: 16, color: Color(0xFF7F1D1D)),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF7F1D1D)),
           ),
           const SizedBox(height: 10),
           Row(

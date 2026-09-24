@@ -272,7 +272,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             dateLabelUpper,
             style: const TextStyle(
               // Bump 2026-05-13 : 11→13, w600→w700.
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               letterSpacing: 1.5,
               color: kBrandPurple, // mauve-500
@@ -546,7 +546,7 @@ class _RecentDossierRowState extends State<_RecentDossierRow> {
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
                                     // Bump 2026-05-13 : 12→14, ajout w600.
-                                    fontSize: 16,
+                                    fontSize: 14,
                                     fontWeight: FontWeight.w600,
                                     color: Color(0xFF8A939D),
                                   ),
@@ -592,7 +592,7 @@ class _RecentDossierRowState extends State<_RecentDossierRow> {
                               visitTimeHighlight,
                               style: const TextStyle(
                                 // Bump 2026-05-13 : 13→15, w700→w800.
-                                fontSize: 16,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white,
                                 letterSpacing: 0.3,
@@ -628,7 +628,7 @@ class _RecentDossierRowState extends State<_RecentDossierRow> {
                               visitLabel.isEmpty ? 'À planifier' : visitLabel,
                               style: TextStyle(
                                 // Bump 2026-05-13 : 12→14, bold→w800.
-                                fontSize: 16,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w800,
                                 color: visitLabel.isEmpty
                                     ? const Color(0xFF8A939D)
@@ -856,7 +856,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                       'AGENDA',
                       style: TextStyle(
                         // Bump 2026-05-13 : 11→13, w600→w700.
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.5,
                         color: Color(0xFF554265), // mauve-700
@@ -880,7 +880,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                         'PROCHAINE VISITE',
                         style: TextStyle(
                           // Bump 2026-05-13 : 11→13, w600→w700.
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.5,
                           color: kBrandPurple, // mauve-500
@@ -903,7 +903,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                         'Tout est à jour côté agenda.',
                         style: TextStyle(
                           // Bump 2026-05-13 : 13→15, ajout w600.
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF5C6670), // ink-500
                         ),
@@ -996,7 +996,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                         dayBadgeLabel,
                         style: const TextStyle(
                           // Bump 2026-05-13 : 11→13, w600→w700.
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.5,
                           color: Color(0xFF554265), // mauve-700
@@ -1020,7 +1020,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                             : '— de trajet',
                         style: const TextStyle(
                           // Bump 2026-05-13 : 12→14, ajout w600.
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF554265), // mauve-700
                         ),
@@ -1050,7 +1050,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                           'PROCHAINE VISITE',
                           style: TextStyle(
                             // Bump 2026-05-13 : 11→13, w600→w700.
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w700,
                             letterSpacing: 1.5,
                             color: kBrandPurple, // mauve-500
@@ -1095,7 +1095,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           // Bump 2026-05-13 : 13→15, ajout w600.
-                                          fontSize: 16,
+                                          fontSize: 14,
                                           fontWeight: FontWeight.w600,
                                           color: Color(0xFF5C6670),
                                         ),
@@ -1117,7 +1117,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                                       phone,
                                       style: const TextStyle(
                                         // Bump 2026-05-13 : 13→15, ajout w600.
-                                        fontSize: 16,
+                                        fontSize: 14,
                                         fontWeight: FontWeight.w600,
                                         color: Color(0xFF5C6670),
                                       ),
@@ -1501,7 +1501,7 @@ class _TravelOverline extends StatelessWidget {
                 'Calcul du trajet…',
                 style: TextStyle(
                   // Bump 2026-05-13 : 11.5→13.5, ajout w600.
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF8A939D),
                   fontStyle: FontStyle.italic,
@@ -1513,7 +1513,7 @@ class _TravelOverline extends StatelessWidget {
             'Trajet indisponible',
             style: TextStyle(
               // Bump 2026-05-13 : 11.5→13.5, w600→w700.
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: Color(0xFF8A939D),
               fontStyle: FontStyle.italic,
@@ -1523,7 +1523,7 @@ class _TravelOverline extends StatelessWidget {
             RouteService.formatDuration(d),
             style: const TextStyle(
               // Bump 2026-05-13 : 12→14, w700→w800.
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w800,
               color: kBrandPurple,
               letterSpacing: 0.2,
@@ -1642,7 +1642,7 @@ class _PendingReportsPanel extends StatelessWidget {
                       'À RELANCER',
                       style: TextStyle(
                         // Bump 2026-05-13 : 10→12, w600→w700.
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.2,
                         color: Color(0xFF8A939D), // ink-400
@@ -1782,7 +1782,7 @@ class _PendingReportRow extends StatelessWidget {
                       subtitle,
                       style: const TextStyle(
                         // Bump 2026-05-13 : 12→14, ajout w600.
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF5C6670), // ink-500
                       ),
@@ -1889,7 +1889,7 @@ class _EmptyStatePlaceholder extends StatelessWidget {
                 subText!,
                 style: const TextStyle(
                   // Bump 2026-05-13 : 12→14, ajout w600.
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF8A939D),
                 ),
@@ -1968,7 +1968,7 @@ class _WeekAgendaPanel extends StatelessWidget {
                       'CETTE SEMAINE',
                       style: TextStyle(
                         // Bump 2026-05-13 : 10→12, w600→w700.
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.2,
                         color: Color(0xFF8A939D), // ink-400
@@ -2115,7 +2115,7 @@ class _AgendaRow extends StatelessWidget {
                       monthLabel,
                       style: TextStyle(
                         // Bump 2026-05-13 : 10→12, w600→w700 / w400→w600.
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: isHighlighted
                             ? FontWeight.w700
                             : FontWeight.w600,
@@ -2135,7 +2135,7 @@ class _AgendaRow extends StatelessWidget {
                       '${p.firstName} ${p.lastName}'.trim(),
                       style: const TextStyle(
                         // Bump 2026-05-13 : 13→15, w500→w600.
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF0E1116),
                       ),
@@ -2147,7 +2147,7 @@ class _AgendaRow extends StatelessWidget {
                       subtitle,
                       style: const TextStyle(
                         // Bump 2026-05-13 : 12→14, ajout w600.
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF5C6670),
                       ),
@@ -2165,7 +2165,7 @@ class _AgendaRow extends StatelessWidget {
                 timeLabel,
                 style: const TextStyle(
                   // Bump 2026-05-13 : 12→14, w500→w600.
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   fontFeatures: [FontFeature.tabularFigures()],
                   color: Color(0xFF2B323A), // ink-700

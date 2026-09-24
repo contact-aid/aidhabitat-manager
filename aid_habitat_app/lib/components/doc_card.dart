@@ -371,7 +371,7 @@ class _DocCardState extends State<DocCard> {
                           Text(
                             dateLabel,
                             style: GoogleFonts.nunito(
-                              fontSize: 16,
+                              fontSize: 14,
                               fontWeight: FontWeight.w300,
                               color: Colors.grey,
                             ),

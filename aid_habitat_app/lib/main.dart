@@ -814,13 +814,13 @@ TextTheme _buildAppTextTheme() {
     // bodyLarge / bodyMedium / bodySmall : Quicksand 500.
     // labelLarge / labelMedium / labelSmall : Quicksand 600.
   );
-  // Material's bodySmall and labelSmall defaults are below 16 logical pixels.
+  // Keep small body and label styles readable without enlarging every caption.
   return readable.copyWith(
-    bodySmall: readable.bodySmall?.copyWith(fontSize: 16),
-    bodyMedium: readable.bodyMedium?.copyWith(fontSize: 16),
-    labelSmall: readable.labelSmall?.copyWith(fontSize: 16),
-    labelMedium: readable.labelMedium?.copyWith(fontSize: 16),
-    labelLarge: readable.labelLarge?.copyWith(fontSize: 16),
-    titleSmall: readable.titleSmall?.copyWith(fontSize: 16),
+    bodySmall: readable.bodySmall?.copyWith(fontSize: 14),
+    bodyMedium: readable.bodyMedium?.copyWith(fontSize: 14),
+    labelSmall: readable.labelSmall?.copyWith(fontSize: 14),
+    labelMedium: readable.labelMedium?.copyWith(fontSize: 14),
+    labelLarge: readable.labelLarge?.copyWith(fontSize: 14),
+    titleSmall: readable.titleSmall?.copyWith(fontSize: 14),
   );
 }

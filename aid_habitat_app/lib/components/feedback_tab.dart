@@ -237,7 +237,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                           },
                     selectedColor: const Color(0xFFF0E4F4),
                     labelStyle: TextStyle(
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w800,
                       color: _type == type
                           ? kBrandDarkPurple
@@ -271,7 +271,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                   hintText: 'Décris le bug, la difficulté ou l’idée…',
                   filled: true,
                   fillColor: const Color(0xFFFDFCFB),
-                  hintStyle: const TextStyle(fontSize: 16),
+                  hintStyle: const TextStyle(fontSize: 14),
                   contentPadding: const EdgeInsets.all(14),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
@@ -289,7 +289,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                     ),
                   ),
                 ),
-                style: const TextStyle(fontSize: 16),
+                style: const TextStyle(fontSize: 14),
               ),
             ),
             if (_status != null) ...[
@@ -300,7 +300,7 @@ class _FeedbackTabState extends State<FeedbackTab> {
                   color: _statusIsError
                       ? const Color(0xFFB91C1C)
                       : const Color(0xFF047857),
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w800,
                 ),
               ),

@@ -440,7 +440,7 @@ class _SummaryModeSegment extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: color,
               ),
@@ -481,7 +481,7 @@ class _SummaryTextTab extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w800,
                   color: const Color(0xFF0E1116),
                 ),

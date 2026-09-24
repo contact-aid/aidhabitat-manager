@@ -2533,7 +2533,7 @@ class _NotesWidgetState extends State<NotesWidget> {
                       maxLines: null,
                       expands: true,
                       textAlignVertical: TextAlignVertical.top,
-                      style: const TextStyle(fontSize: 16),
+                      style: const TextStyle(fontSize: 14),
                       // Scribble (Apple Pencil) — écriture directe sur iPad.
                       stylusHandwritingEnabled: true,
                       autocorrect: false,
@@ -2723,7 +2723,7 @@ class _NotesWidgetState extends State<NotesWidget> {
           child: Text(
             '${_currentPage + 1}/${math.max(_totalPages, 1)}',
             style: const TextStyle(
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: kBrandPurple,
               letterSpacing: 0.2,
@@ -2873,7 +2873,7 @@ class _NotesWidgetState extends State<NotesWidget> {
                   child: Text(
                     '${_currentPage + 1}/${math.max(_totalPages, 1)}',
                     style: const TextStyle(
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.4,
                     ),
@@ -2948,7 +2948,7 @@ class _NotesWidgetState extends State<NotesWidget> {
               child: Text(
                 '${_currentPage + 1}/${math.max(_totalPages, 1)}',
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.4,
                 ),
@@ -3022,7 +3022,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       expands: true,
       textAlign: TextAlign.left,
       textAlignVertical: TextAlignVertical.top,
-      style: const TextStyle(fontSize: 16),
+      style: const TextStyle(fontSize: 14),
       stylusHandwritingEnabled: true,
       autocorrect: false,
       enableSuggestions: false,
@@ -3185,7 +3185,7 @@ class _NotesWidgetState extends State<NotesWidget> {
           child: DefaultTextStyle(
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 16,
+              fontSize: 14,
               height: 1.32,
               fontFamily: 'monospace',
             ),
@@ -3709,7 +3709,7 @@ class _NotesWidgetState extends State<NotesWidget> {
                 Text(
                   label,
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: disabled ? Color(0xFF8A939D) : Color(0xFF1A1E24),
                   ),
@@ -4333,7 +4333,7 @@ class _AiRewritePreviewDialogState extends State<_AiRewritePreviewDialog> {
             Text(
               label,
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF374151),
               ),
@@ -4361,7 +4361,7 @@ class _AiRewritePreviewDialogState extends State<_AiRewritePreviewDialog> {
                       text,
                       style: const TextStyle(
                         height: 1.45,
-                        fontSize: 16,
+                        fontSize: 14,
                         color: Color(0xFF111827),
                       ),
                     ),
@@ -4378,7 +4378,7 @@ class _AiRewritePreviewDialogState extends State<_AiRewritePreviewDialog> {
                     ),
                     style: const TextStyle(
                       height: 1.45,
-                      fontSize: 16,
+                      fontSize: 14,
                       color: Color(0xFF111827),
                     ),
                   ),
@@ -4436,7 +4436,7 @@ class _AiRewritePreviewDialogState extends State<_AiRewritePreviewDialog> {
               const SizedBox(height: 6),
               const Text(
                 'Relisez et ajustez la proposition avant de remplacer votre note.',
-                style: TextStyle(fontSize: 16, color: Color(0xFF5C6670)),
+                style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
               ),
               const SizedBox(height: 18),
               Expanded(
@@ -4695,7 +4695,7 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
                               Text(
                                 widget.title,
                                 style: const TextStyle(
-                                  fontSize: 16,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),

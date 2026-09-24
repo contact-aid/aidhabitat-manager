@@ -825,7 +825,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
                       style: TextStyle(
                         // 10 → 12 (demande user 2026-05-13 : « 2px plus
                         // grand »).
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                         color: labelColor,
                       ),
@@ -888,7 +888,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           // Uniformisé 2026-05-13 : w700 14px ink-900 noir.
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 16,
+            fontSize: 14,
             color: Color(0xFF0E1116),
           ),
         ),
@@ -915,7 +915,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
                   child: Text(
                     ageLabel,
                     style: const TextStyle(
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF554265),
                     ),
@@ -944,7 +944,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               padding: EdgeInsets.only(top: 8),
               child: Text(
                 'Un GIR sera requis. Une grille AGGIR est disponible dans l’espace Documents.',
-                style: TextStyle(fontSize: 16, color: Color(0xFF554265)),
+                style: TextStyle(fontSize: 14, color: Color(0xFF554265)),
               ),
             ),
         ],
@@ -1488,7 +1488,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           // Uniformisé 2026-05-13 : w700 14px ink-900 noir.
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 16,
+            fontSize: 14,
             color: Color(0xFF0E1116),
           ),
         ),
@@ -1802,7 +1802,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               style: TextStyle(
                 color: Color(0xFF554265),
                 fontWeight: FontWeight.w600,
-                fontSize: 16,
+                fontSize: 14,
               ),
             ),
           ],
@@ -2501,7 +2501,7 @@ class _RetirementFundKindTile extends StatelessWidget {
                     Text(
                       title,
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                         color: Color(0xFF2B323A),
                       ),
@@ -2510,7 +2510,7 @@ class _RetirementFundKindTile extends StatelessWidget {
                     Text(
                       subtitle,
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF7A6A86),
                       ),
@@ -2737,7 +2737,7 @@ class _DateOfBirthField extends StatelessWidget {
                           // `decoration`/`decorationColor`, donc un style
                           // ambiant avec underline polluait les cellules).
                           style: DefaultTextStyle.of(ctx).style.copyWith(
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w400,
                             color: isSelected
                                 ? Colors.white
@@ -2837,7 +2837,7 @@ class _DateOfBirthField extends StatelessWidget {
                           child: Text(
                             l,
                             style: const TextStyle(
-                              fontSize: 16,
+                              fontSize: 14,
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF5C6670),
                             ),
@@ -2875,7 +2875,7 @@ class _DateOfBirthField extends StatelessWidget {
                         child: Text(
                           '$dayNumber',
                           style: TextStyle(
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w400,
                             color: isSelected
                                 ? Colors.white
@@ -2922,7 +2922,7 @@ class _DateOfBirthField extends StatelessWidget {
             'Date de naissance',
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 16,
+              fontSize: 14,
               color: Color(0xFF0E1116),
             ),
           ),
@@ -2947,7 +2947,7 @@ class _DateOfBirthField extends StatelessWidget {
                   child: Text(
                     display.isEmpty ? 'JJ / MM / AAAA' : display,
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 14,
                       color: display.isEmpty
                           ? const Color(0xFF8A939D)
                           : const Color(0xFF2B323A),
@@ -3019,7 +3019,7 @@ class _RoundCheckRow extends StatelessWidget {
               child: Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   color: Color(0xFF2B323A),
                   fontWeight: FontWeight.w500,
                 ),
@@ -3094,7 +3094,7 @@ class _RetirementFundFieldButton extends StatelessWidget {
                   // aligné sur les autres labels de champ (Téléphone,
                   // etc.).
                   style: const TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF0E1116),
                   ),
@@ -3145,7 +3145,7 @@ class _RetirementFundFieldButton extends StatelessWidget {
                       style: TextStyle(
                         // 12 → 14 : aligné sur la fontSize des pills
                         // Occupation (FormToggleGroup).
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: hasValue
                             ? FontWeight.w600
                             : FontWeight.w400,
@@ -3396,7 +3396,7 @@ class _RetirementFundPickerDialogState
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF1E293B),
                       height: 1.15,
@@ -3409,7 +3409,7 @@ class _RetirementFundPickerDialogState
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 14,
                         color: Color(0xFF5C6670),
                         height: 1.15,
                       ),
@@ -3458,7 +3458,7 @@ class _RetirementFundPickerDialogState
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF1E293B),
                     height: 1.15,

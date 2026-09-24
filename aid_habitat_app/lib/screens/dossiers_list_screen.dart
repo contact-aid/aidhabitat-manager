@@ -413,14 +413,14 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // L'action reste en haut à gauche, au-dessus des filtres.
+          // L'action reste en haut à droite, au-dessus des filtres.
           LayoutBuilder(
             builder: (context, constraints) => constraints.maxWidth < 460
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Align(
-                        alignment: Alignment.centerLeft,
+                        alignment: Alignment.centerRight,
                         child: refreshButton,
                       ),
                       const SizedBox(height: 12),
@@ -430,9 +430,9 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                 : Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      refreshButton,
-                      const SizedBox(width: 16),
                       Expanded(child: heading),
+                      const SizedBox(width: 16),
+                      refreshButton,
                     ],
                   ),
           ),
@@ -552,7 +552,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                           child: Text(
                             '${dossiers.length}',
                             style: const TextStyle(
-                              fontSize: 16,
+                              fontSize: 14,
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF2B323A),
                             ),
@@ -603,7 +603,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                                   child: Text(
                                     'Aucun dossier dans cette catégorie.',
                                     style: TextStyle(
-                                      fontSize: 16,
+                                      fontSize: 14,
                                       color: Color(0xFF5C6670),
                                     ),
                                   ),
@@ -792,7 +792,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
       overflow: TextOverflow.ellipsis,
       textAlign: alignRight ? TextAlign.right : TextAlign.left,
       style: TextStyle(
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: FontWeight.w700,
         letterSpacing: 0.6,
         color: isActive ? kBrandPurple : const Color(0xFF8A939D),
@@ -891,7 +891,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                        fontSize: 14,
                         color: Color(0xFF0E1116),
                       ),
                     ),
@@ -900,7 +900,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                       Text(
                         meta.join(' · '),
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           color: Color(0xFF8A939D),
                         ),
                       ),
@@ -920,7 +920,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF0E1116),
                       ),
@@ -930,7 +930,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                       Text(
                         p.zipCode,
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           color: Color(0xFF8A939D),
                         ),
                       ),
@@ -974,7 +974,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                   visitDate.isEmpty ? '—' : visitDate,
                   textAlign: TextAlign.right,
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: visitDate.isEmpty
                         ? const Color(0xFF8A939D)
@@ -1114,7 +1114,7 @@ class _EpciMenuEntryState extends State<_EpciMenuEntry> {
                         // inserting its own vertical padding, so the hint
                         // baseline aligns with the icon center.
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           height: 1.0,
                           color: Color(0xFF0E1116),
                         ),
@@ -1205,7 +1205,7 @@ class _EpciMenuTile extends StatelessWidget {
               child: Text(
                 label,
                 style: TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                   color: const Color(0xFF1E293B),
                 ),

@@ -207,7 +207,7 @@ class FormSubSectionChips extends StatelessWidget {
                   color: selected ? Colors.white : Colors.black87,
                   // 13 → 15, w600 → w700 : lisibilité accrue sans
                   // déséquilibrer la hauteur de la pill.
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -336,7 +336,7 @@ class _FormTextFieldState extends State<FormTextField> {
           widget.label,
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: (widget.labelSize ?? 16).clamp(16, double.infinity),
+            fontSize: (widget.labelSize ?? 14).clamp(14, double.infinity),
             color: widget.labelColor ?? const Color(0xFF0E1116),
           ),
         ),
@@ -358,7 +358,7 @@ class _FormTextFieldState extends State<FormTextField> {
               maxLines: widget.maxLines,
               minLines: widget.minLines ?? (isMultiline ? 2 : 1),
               style: TextStyle(
-                fontSize: (widget.valueSize ?? 16).clamp(16, double.infinity),
+                fontSize: (widget.valueSize ?? 14).clamp(14, double.infinity),
                 color: const Color(0xFF2B323A),
               ),
               stylusHandwritingEnabled: true,
@@ -394,7 +394,7 @@ class _FormTextFieldState extends State<FormTextField> {
                 suffixText: widget.suffix,
                 suffixStyle: const TextStyle(
                   color: Color(0xFF8A939D),
-                  fontSize: 16,
+                  fontSize: 14,
                 ),
               ),
               onChanged: widget.onChanged,
@@ -508,7 +508,7 @@ class _FormNumberFieldState extends State<FormNumberField> {
           widget.label,
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: (widget.labelSize ?? 16).clamp(16, double.infinity),
+            fontSize: (widget.labelSize ?? 14).clamp(14, double.infinity),
             color: widget.labelColor ?? const Color(0xFF0E1116),
           ),
         ),
@@ -522,7 +522,7 @@ class _FormNumberFieldState extends State<FormNumberField> {
             FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
           ],
           style: TextStyle(
-            fontSize: (widget.valueSize ?? 16).clamp(16, double.infinity),
+            fontSize: (widget.valueSize ?? 14).clamp(14, double.infinity),
             color: const Color(0xFF2B323A),
           ),
           stylusHandwritingEnabled: true,
@@ -558,7 +558,7 @@ class _FormNumberFieldState extends State<FormNumberField> {
             suffixText: widget.unit,
             suffixStyle: const TextStyle(
               color: Color(0xFF8A939D),
-              fontSize: 16,
+              fontSize: 14,
             ),
           ),
           onChanged: (text) {
@@ -660,7 +660,7 @@ class TogglePillButton extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: kBrandPurple,
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     height: 1.0,
                   ),
@@ -697,7 +697,7 @@ class CollapsedValueRow extends StatelessWidget {
         labelStyle ??
         const TextStyle(
           fontWeight: FontWeight.w600,
-          fontSize: 16,
+          fontSize: 14,
           color: Color(0xFF8A939D),
         );
     return GestureDetector(
@@ -821,7 +821,7 @@ class FormToggleGroup extends StatelessWidget {
               color: isSelected
                   ? Colors.white
                   : const Color(0xFF2B323A), // ink-700
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: isSelected ? FontWeight.w500 : FontWeight.w400,
             ),
             child: Text(opt, textAlign: TextAlign.center),
@@ -841,7 +841,7 @@ class FormToggleGroup extends StatelessWidget {
             label,
             style: const TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 16,
+              fontSize: 14,
               color: Color(0xFF0E1116), // ink-900 (noir)
             ),
           ),
@@ -978,7 +978,7 @@ class FormMultiToggleGroup extends StatelessWidget {
               color: isSelected
                   ? Colors.white
                   : const Color(0xFF2B323A), // ink-700
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: isSelected ? FontWeight.w500 : FontWeight.w400,
             ),
             child: Text(opt, textAlign: TextAlign.center),
@@ -1013,7 +1013,7 @@ class FormMultiToggleGroup extends StatelessWidget {
             label,
             style: const TextStyle(
               fontWeight: FontWeight.w600,
-              fontSize: 16,
+              fontSize: 14,
               color: Color(0xFF8A939D),
             ),
           ),
@@ -1067,7 +1067,7 @@ class FormCheckbox extends StatelessWidget {
             Flexible(
               child: Text(
                 label,
-                style: const TextStyle(fontSize: 16, color: Color(0xFF2B323A)),
+                style: const TextStyle(fontSize: 14, color: Color(0xFF2B323A)),
               ),
             ),
           ],
@@ -1103,7 +1103,7 @@ class FormMultiSelect extends StatelessWidget {
           label,
           style: const TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 16,
+            fontSize: 14,
             color: Color(0xFF0E1116),
           ),
         ),
@@ -1170,7 +1170,7 @@ class FormSection extends StatelessWidget {
       title: Text(
         titleText,
         style: const TextStyle(
-          fontSize: 16,
+          fontSize: 14,
           fontWeight: FontWeight.w700,
           color: Color(0xFF2B323A),
           letterSpacing: 0.2,
@@ -1273,7 +1273,7 @@ class _FormTextFieldWithWarningState extends State<FormTextFieldWithWarning> {
           widget.label,
           style: const TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 16,
+            fontSize: 14,
             color: Color(0xFF0E1116),
           ),
         ),
@@ -1282,7 +1282,7 @@ class _FormTextFieldWithWarningState extends State<FormTextFieldWithWarning> {
           controller: _controller,
           focusNode: _focusNode,
           keyboardType: widget.keyboardType,
-          style: const TextStyle(fontSize: 16, color: Color(0xFF2B323A)),
+          style: const TextStyle(fontSize: 14, color: Color(0xFF2B323A)),
           stylusHandwritingEnabled: true,
           onFieldSubmitted: widget.onSubmitted,
           onTapOutside: widget.onTapOutside == null
@@ -1316,7 +1316,7 @@ class _FormTextFieldWithWarningState extends State<FormTextFieldWithWarning> {
                   : const BorderSide(color: kBrandPurple, width: 1.5),
             ),
             hintText: widget.placeholder,
-            hintStyle: const TextStyle(color: Color(0xFF8A939D), fontSize: 16),
+            hintStyle: const TextStyle(color: Color(0xFF8A939D), fontSize: 14),
             suffixIcon: widget.showWarning
                 ? Tooltip(
                     message: widget.warningText ?? 'Valeur invalide',
@@ -1336,7 +1336,7 @@ class _FormTextFieldWithWarningState extends State<FormTextFieldWithWarning> {
             child: Text(
               widget.warningText!,
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 color: Color(0xFFF59E0B),
                 fontWeight: FontWeight.w600,
               ),
@@ -1377,7 +1377,7 @@ class FormSelectDropdown<T> extends StatelessWidget {
             label,
             style: const TextStyle(
               fontWeight: FontWeight.w600,
-              fontSize: 16,
+              fontSize: 14,
               color: Color(0xFF8A939D),
             ),
           ),
@@ -1400,7 +1400,7 @@ class FormSelectDropdown<T> extends StatelessWidget {
               isDense: true,
               hint: Text(
                 placeholder,
-                style: const TextStyle(color: Color(0xFF8A939D), fontSize: 16),
+                style: const TextStyle(color: Color(0xFF8A939D), fontSize: 14),
               ),
               items: options
                   .map(
@@ -1408,7 +1408,7 @@ class FormSelectDropdown<T> extends StatelessWidget {
                       value: o.value,
                       child: Text(
                         o.label,
-                        style: const TextStyle(fontSize: 16),
+                        style: const TextStyle(fontSize: 14),
                       ),
                     ),
                   )
@@ -1472,7 +1472,7 @@ class _FormMultiSelectDropdownState extends State<FormMultiSelectDropdown> {
           widget.label,
           style: const TextStyle(
             fontWeight: FontWeight.w600,
-            fontSize: 16,
+            fontSize: 14,
             color: Color(0xFF8A939D),
           ),
         ),
@@ -1497,7 +1497,7 @@ class _FormMultiSelectDropdownState extends State<FormMultiSelectDropdown> {
                   child: Text(
                     _summarize(picked),
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 14,
                       color: picked.isNotEmpty
                           ? const Color(0xFF2B323A)
                           : const Color(0xFF8A939D),
@@ -1572,7 +1572,7 @@ class _FormMultiSelectDropdownState extends State<FormMultiSelectDropdown> {
                           Expanded(
                             child: Text(
                               opt,
-                              style: const TextStyle(fontSize: 16),
+                              style: const TextStyle(fontSize: 14),
                             ),
                           ),
                         ],
@@ -1614,7 +1614,7 @@ class OccupantSwitcher extends StatelessWidget {
         Text(
           title,
           style: const TextStyle(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             color: Color(0xFF2B323A),
             letterSpacing: 0.2,
@@ -1643,7 +1643,7 @@ class OccupantSwitcher extends StatelessWidget {
                   child: Text(
                     occupantLabels[i],
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.2,
                       color: active

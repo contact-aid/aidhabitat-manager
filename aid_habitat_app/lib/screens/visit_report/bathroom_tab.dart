@@ -632,7 +632,7 @@ class _BathroomTabState extends State<BathroomTab>
                     style: TextStyle(
                       color: Color(0xFF554265),
                       fontWeight: FontWeight.w600,
-                      fontSize: 16,
+                      fontSize: 14,
                     ),
                   ),
                 ],
@@ -705,7 +705,7 @@ class _BathroomTabState extends State<BathroomTab>
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: labelColor,
               ),
@@ -948,7 +948,7 @@ class _BathroomTabState extends State<BathroomTab>
                   'Sol glissant',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     fontWeight: a.sdbSolGlissant
                         ? FontWeight.w600
                         : FontWeight.w400,
@@ -981,7 +981,7 @@ class _BathroomTabState extends State<BathroomTab>
           // Uniformisé 2026-05-13 : w700 14px ink-900 noir.
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 16,
+            fontSize: 14,
             color: Color(0xFF0E1116),
           ),
         ),
@@ -1373,7 +1373,7 @@ class _Pill extends StatelessWidget {
             color: isSelected
                 ? Colors.white
                 : const Color(0xFF2B323A), // ink-700
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: isSelected ? FontWeight.w500 : FontWeight.w400,
           ),
         ),

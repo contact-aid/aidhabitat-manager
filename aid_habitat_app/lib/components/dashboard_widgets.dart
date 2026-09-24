@@ -186,7 +186,7 @@ class _ReportItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Text(name, style: const TextStyle(fontSize: 16)),
+      child: Text(name, style: const TextStyle(fontSize: 14)),
     );
   }
 }

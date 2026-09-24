@@ -173,7 +173,7 @@ class AppConfirmationDialog<T> extends StatelessWidget {
                 const SizedBox(height: 4),
                 DefaultTextStyle(
                   style: const TextStyle(
-                    fontSize: 16,
+                    fontSize: 14,
                     height: 1.35,
                     color: Color(0xFF5C6670),
                   ),

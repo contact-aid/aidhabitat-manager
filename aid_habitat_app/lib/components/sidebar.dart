@@ -297,7 +297,7 @@ class _SidebarState extends State<Sidebar> {
                                                 0xFF554265,
                                               ), // mauve-700
                                               fontWeight: FontWeight.w600,
-                                              fontSize: 16,
+                                              fontSize: 14,
                                             ),
                                           ),
                                         ),
@@ -310,7 +310,7 @@ class _SidebarState extends State<Sidebar> {
                                               0xFF554265,
                                             ), // mauve-700
                                             fontWeight: FontWeight.w600,
-                                            fontSize: 16,
+                                            fontSize: 14,
                                           ),
                                         ),
                                       ),
@@ -395,7 +395,7 @@ class _SidebarSideTooltipState extends State<_SidebarSideTooltip> {
         color: Colors.black,
         borderRadius: BorderRadius.circular(4),
       ),
-      textStyle: const TextStyle(color: Colors.white, fontSize: 16),
+      textStyle: const TextStyle(color: Colors.white, fontSize: 14),
       child: widget.child,
     );
   }

@@ -635,7 +635,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                         child: Text(
                           'Note — $sourceTab',
                           style: const TextStyle(
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w700,
                             color: Color(0xFF2B323A),
                           ),
@@ -658,7 +658,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                       expands: true,
                       autofocus: true,
                       textAlignVertical: TextAlignVertical.top,
-                      style: const TextStyle(fontSize: 16, height: 1.5),
+                      style: const TextStyle(fontSize: 14, height: 1.5),
                       decoration: const InputDecoration(
                         border: InputBorder.none,
                         hintText: 'Écrivez votre note…',
@@ -2413,7 +2413,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   'remplies. Tu peux générer le rapport quand même '
                   '(les champs vides seront laissés blancs dans le PDF) '
                   'ou compléter d\'abord :',
-                  style: TextStyle(fontSize: 16, color: Color(0xFF5C6670)),
+                  style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
                 ),
                 const SizedBox(height: 12),
                 Flexible(
@@ -2442,7 +2442,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                                     child: Text(
                                       m.label,
                                       style: const TextStyle(
-                                        fontSize: 16,
+                                        fontSize: 14,
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),

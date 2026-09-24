@@ -226,6 +226,9 @@ void main() {
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(screen(online: true));
+      final refresh = tester.getTopLeft(find.byType(OutlinedButton));
+      final title = tester.getTopLeft(find.text('Mes dossiers'));
+      expect(refresh.dx, greaterThan(title.dx));
       await tester.tap(find.text('Actualiser'));
       await tester.pump();
       expect(refreshCount, 1);

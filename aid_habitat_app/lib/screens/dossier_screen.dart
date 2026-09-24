@@ -504,7 +504,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       'Date de visite',
                       style: GoogleFonts.nunito(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: const Color(0xFF8A7A95),
                         height: 1,
@@ -514,7 +514,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       label,
                       style: GoogleFonts.nunito(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: const Color(0xFF2B323A),
                         height: 1,
@@ -1036,7 +1036,7 @@ class _DossierScreenState extends State<DossierScreen> {
                         Text(
                           'Communauté de communes',
                           style: GoogleFonts.nunito(
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: kBrandPurple,
                             letterSpacing: 0.2,
@@ -1062,7 +1062,7 @@ class _DossierScreenState extends State<DossierScreen> {
                           const Text(
                             '—',
                             style: TextStyle(
-                              fontSize: 16,
+                              fontSize: 14,
                               // Bumpé w400 → w500 (uniformisation 2026-05-13).
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF8A939D),
@@ -1197,7 +1197,7 @@ class _DossierScreenState extends State<DossierScreen> {
                         Text(
                           'Communauté de communes',
                           style: GoogleFonts.nunito(
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: kBrandPurple,
                             letterSpacing: 0.2,
@@ -1212,7 +1212,7 @@ class _DossierScreenState extends State<DossierScreen> {
                           const Text(
                             '—',
                             style: TextStyle(
-                              fontSize: 16,
+                              fontSize: 14,
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF8A939D),
                             ),
@@ -1322,7 +1322,7 @@ class _DossierScreenState extends State<DossierScreen> {
           // relevé de visite (demande utilisateur 2026-05-13).
           style: GoogleFonts.nunito(
             fontWeight: FontWeight.w600,
-            fontSize: 16,
+            fontSize: 14,
             color: kBrandPurple,
           ),
         ),
@@ -1349,7 +1349,7 @@ class _DossierScreenState extends State<DossierScreen> {
                         // aligné sur l'épaisseur des autres valeurs
                         // du bloc Bénéficiaire (demande user 2026-05-13).
                         style: GoogleFonts.nunito(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1444,7 +1444,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       items[index].label,
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                         color: color,
                       ),
@@ -1499,7 +1499,7 @@ class _PlainField extends StatelessWidget {
           // (14 px) pour équilibrer la lecture du bloc Bénéficiaire en
           // preview — demande utilisateur.
           style: GoogleFonts.nunito(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
             color: kBrandPurple,
             letterSpacing: 0.2,
@@ -1513,7 +1513,7 @@ class _PlainField extends StatelessWidget {
           maxLines: multiline ? null : 1,
           overflow: multiline ? TextOverflow.visible : TextOverflow.ellipsis,
           style: GoogleFonts.nunito(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
             color: const Color(0xFF0E1116),
             height: multiline ? 1.4 : 1.2,
@@ -1585,7 +1585,7 @@ class _QuickActionButton extends StatelessWidget {
               // pour rester lisible avec l'épaisseur générale du
               // dossier (demande user 2026-05-13).
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: Colors.grey,
               ),

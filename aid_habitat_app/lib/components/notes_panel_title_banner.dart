@@ -47,7 +47,7 @@ class NotesPanelTitleBanner extends StatelessWidget {
           child: Text(
             title,
             style: const TextStyle(
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: Color(0xFF554265), // mauve-700
               letterSpacing: 0.1,

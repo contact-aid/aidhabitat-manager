@@ -273,7 +273,7 @@ class _CreateBeneficiaryScreenState extends State<CreateBeneficiaryScreen> {
                                     'Tous les champs sont obligatoires. '
                                     'Les autres infos s\'éditent dans le dossier.',
                                     style: TextStyle(
-                                      fontSize: 16,
+                                      fontSize: 14,
                                       color: Color(0xFF5C6670),
                                     ),
                                   ),
@@ -430,7 +430,7 @@ class _CreateBeneficiaryScreenState extends State<CreateBeneficiaryScreen> {
                                     _error!,
                                     style: TextStyle(
                                       color: Colors.red.shade700,
-                                      fontSize: 16,
+                                      fontSize: 14,
                                     ),
                                   ),
                                 ),
@@ -474,7 +474,7 @@ class _CreateBeneficiaryScreenState extends State<CreateBeneficiaryScreen> {
                                         'Créer le dossier',
                                         style: TextStyle(
                                           fontWeight: FontWeight.w600,
-                                          fontSize: 16,
+                                          fontSize: 14,
                                         ),
                                       ),
                                     ],
@@ -504,7 +504,7 @@ class _CreateBeneficiaryScreenState extends State<CreateBeneficiaryScreen> {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
             color: Colors.black54,
           ),
@@ -588,7 +588,7 @@ class _CreateBeneficiaryScreenState extends State<CreateBeneficiaryScreen> {
             child: Text(
               opt.$2,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 color: selected
                     ? kBrandPurple

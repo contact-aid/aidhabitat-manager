@@ -20,6 +20,29 @@ function checkbox(value) {
 }
 
 const structuredColumns = new Set(['sdb_instances_json', 'wc_instances_json', 'occupants_json']);
+const levelDescriptions = new Set(['description_sous_sol', 'description_rdc', 'description_etage']);
+const presetRooms = new Set(['Salle de bain', 'WC', 'Garage', 'Buanderie', 'Cuisine', 'Chambre', 'Salon', 'Bureau']);
+
+function sameRoomBreakdown(a, b) {
+  try {
+    const left = JSON.parse(a);
+    const right = JSON.parse(b);
+    if (!left || !right || Array.isArray(left) || Array.isArray(right)
+        || typeof left !== 'object' || typeof right !== 'object') return false;
+    if (!isDeepStrictEqual(Object.keys(left).sort(), Object.keys(right).sort())) return false;
+    return Object.keys(left).every((level) => Array.isArray(left[level]) && Array.isArray(right[level])
+      && left[level].every((room) => typeof room === 'string')
+      && right[level].every((room) => typeof room === 'string')
+      && isDeepStrictEqual([...left[level]].sort(), [...right[level]].sort()));
+  } catch { return false; }
+}
+
+function roomDescriptionParts(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const parts = value.split(',').map((part) => part.trim());
+  if (!parts.every((part) => presetRooms.has(part.replace(/ (?:²|³|⁴)$/, '')))) return null;
+  return parts.sort();
+}
 
 // These fields are exposed as false by the read contract when an old NocoDB
 // row contains null/empty. The list is deliberately explicit: nullable
@@ -115,6 +138,14 @@ export function createDatabaseValueComparator(columns = []) {
         const right = JSON.parse(b);
         return Array.isArray(left) && Array.isArray(right) && isDeepStrictEqual(left, right);
       } catch { return false; }
+    }
+    if (key === 'rooms_breakdown_json' && typeof a === 'string' && typeof b === 'string') {
+      return sameRoomBreakdown(a, b);
+    }
+    if (levelDescriptions.has(key)) {
+      const left = roomDescriptionParts(a);
+      const right = roomDescriptionParts(b);
+      if (left && right) return isDeepStrictEqual(left, right);
     }
     if (legacyDefaultEmptyStringColumns.has(key)
         && (a == null || a === '') && (b == null || b === '')) return true;

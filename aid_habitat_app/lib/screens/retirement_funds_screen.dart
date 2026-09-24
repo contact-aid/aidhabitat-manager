@@ -201,7 +201,7 @@ class _RetirementFundsScreenState extends State<RetirementFundsScreen> {
                         'Ajouter une caisse de retraite',
                         style: GoogleFonts.nunito(
                           color: Colors.white,
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -479,7 +479,7 @@ class _FundCardState extends State<_FundCard> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF8A939D),
                           letterSpacing: 1.2,
@@ -514,7 +514,7 @@ class _FundCardState extends State<_FundCard> {
                                     fund.phone,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
-                                      fontSize: 16,
+                                      fontSize: 14,
                                       fontWeight: FontWeight.w700,
                                       color: Color(0xFF5C6670),
                                     ),
@@ -661,7 +661,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
       child: Text(
         text.isEmpty ? '—' : text,
         style: TextStyle(
-          fontSize: 16,
+          fontSize: 14,
           fontWeight: FontWeight.w500,
           color: text.isEmpty ? Color(0xFF8A939D) : const Color(0xFF0E1116),
           height: 1.45,
@@ -858,7 +858,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 16,
+                            fontSize: 14,
                             fontWeight: FontWeight.w700,
                             color: Color(0xFF2B323A),
                           ),
@@ -1042,7 +1042,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
       return const Text(
         'ENREGISTRÉ',
         style: TextStyle(
-          fontSize: 16,
+          fontSize: 14,
           fontWeight: FontWeight.w700,
           letterSpacing: 1,
           color: Color(0xFF059669),
@@ -1052,7 +1052,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
     return const Text(
       "ERREUR D'ENREGISTREMENT",
       style: TextStyle(
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: FontWeight.w700,
         letterSpacing: 1,
         color: Color(0xFFDC2626),
@@ -1087,7 +1087,7 @@ class _SectionTitle extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             color: Color(0xFF0E1116),
             letterSpacing: -0.2,
@@ -1127,7 +1127,7 @@ class _FieldRow extends StatelessWidget {
             Text(
               label.toUpperCase(),
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.9,
                 color: Color(0xFF8A939D),
@@ -1171,7 +1171,7 @@ class _TherapistNoteCard extends StatelessWidget {
               Text(
                 'NOTE ERGOTHÉRAPEUTE',
                 style: TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.8,
                   color: Color(0xFF8A6A00),
@@ -1184,7 +1184,7 @@ class _TherapistNoteCard extends StatelessWidget {
             Text(
               text.isEmpty ? 'Aucune note pour cette caisse.' : text,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 color: text.isEmpty
                     ? const Color(0xFFA88A3F)
                     : const Color(0xFF5C4300),
@@ -1199,7 +1199,7 @@ class _TherapistNoteCard extends StatelessWidget {
               maxLines: null,
               minLines: 2,
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 color: Color(0xFF5C4300),
                 fontWeight: FontWeight.w600,
                 height: 1.35,
@@ -1208,7 +1208,7 @@ class _TherapistNoteCard extends StatelessWidget {
                 border: InputBorder.none,
                 isCollapsed: true,
                 hintText: 'Consignes internes, astuces, points de vigilance…',
-                hintStyle: TextStyle(color: Color(0xFFA88A3F), fontSize: 16),
+                hintStyle: TextStyle(color: Color(0xFFA88A3F), fontSize: 14),
               ),
             ),
         ],
@@ -1232,7 +1232,7 @@ class _Textarea extends StatelessWidget {
       maxLines: null,
       minLines: 2,
       style: const TextStyle(
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: FontWeight.w600,
         color: Color(0xFF0E1116),
         height: 1.35,
@@ -1268,7 +1268,7 @@ class _Input extends StatelessWidget {
     return TextField(
       controller: controller,
       style: const TextStyle(
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: FontWeight.w600,
         color: Color(0xFF0E1116),
       ),
@@ -1456,7 +1456,7 @@ class _ContactActionButton extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: Colors.white.withValues(alpha: 0.85),
                         ),
@@ -1726,7 +1726,7 @@ class _NewRetirementFundDialogState extends State<_NewRetirementFundDialog> {
                   _errorMessage!,
                   style: const TextStyle(
                     color: Color(0xFFB91C1C),
-                    fontSize: 16,
+                    fontSize: 14,
                   ),
                 ),
               ],
@@ -1792,7 +1792,7 @@ class _LabeledField extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             color: kBrandPurple,
           ),

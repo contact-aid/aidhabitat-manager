@@ -108,7 +108,7 @@ class _RecommendationsTabState extends State<RecommendationsTab> {
               const Text(
                 'Pr\u00e9conisations',
                 style: TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                   color: kBrandDarkPurple,
                 ),
@@ -133,7 +133,7 @@ class _RecommendationsTabState extends State<RecommendationsTab> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: kBrandPurple,
-                      fontSize: 16,
+                      fontSize: 14,
                     ),
                   ),
                 )
@@ -159,7 +159,7 @@ class _RecommendationsTabState extends State<RecommendationsTab> {
               child: Text(
                 'Pr\u00e9conisation ${index + 1}',
                 style: const TextStyle(
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: kBrandDarkPurple,
                 ),

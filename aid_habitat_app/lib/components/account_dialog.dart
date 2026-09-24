@@ -218,7 +218,7 @@ class _AccountDialogState extends State<AccountDialog> {
                       'Mode hors-ligne',
                       style: TextStyle(
                         color: Color(0xFFC2410C),
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.2,
                       ),
@@ -342,7 +342,7 @@ class _AccountDialogState extends State<AccountDialog> {
                         _photoError!,
                         style: const TextStyle(
                           color: Color(0xFFB91C1C),
-                          fontSize: 16,
+                          fontSize: 14,
                         ),
                       ),
                   ],

@@ -367,7 +367,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
                     style: TextStyle(
                       color: Color(0xFF554265),
                       fontWeight: FontWeight.w600,
-                      fontSize: 16,
+                      fontSize: 14,
                     ),
                   ),
                 ],
@@ -440,7 +440,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: labelColor,
               ),
@@ -639,7 +639,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
             'Cuvette',
             // Uniformisé 2026-05-13 : w700 14px ink-900 noir.
             style: TextStyle(
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: Color(0xFF0E1116),
             ),
@@ -779,7 +779,7 @@ class _CuvettePill extends StatelessWidget {
           label,
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: active ? FontWeight.w500 : FontWeight.w400,
             color: active ? Colors.white : const Color(0xFF2B323A), // ink-700
           ),

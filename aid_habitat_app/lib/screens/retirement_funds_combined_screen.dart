@@ -199,7 +199,7 @@ class _SwitchSegment extends StatelessWidget {
         child: Text(
           label,
           style: GoogleFonts.nunito(
-            fontSize: 16,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             color: _CaissesSwitch._textColor,
           ),

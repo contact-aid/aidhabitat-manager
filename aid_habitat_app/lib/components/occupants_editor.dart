@@ -246,7 +246,7 @@ class _OccupantSwitcher extends StatelessWidget {
               '${i + 1}',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                fontSize: 16,
+                fontSize: 14,
                 color: selected ? Colors.white : const Color(0xFF2B323A),
               ),
             ),
