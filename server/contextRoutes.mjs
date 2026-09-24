@@ -3,7 +3,8 @@ import { createContextGuardedSync, contextRecordToSections, contextServerReferen
 import { SyncMutationError } from './guardedMutation.mjs';
 
 export function registerContextRoutes(app, {
-  requireAuth, enabled, creationReady = false, tableId, writer, createRecord, queryAll,
+  requireAuth, enabled, creationReady = false, preferLocal = false,
+  tableId, writer, createRecord, queryAll,
   ensureDossierRecord, canAccessDossierRecord, field,
 }) {
   const read = async (dossierId) => {
@@ -16,6 +17,7 @@ export function registerContextRoutes(app, {
     return records[0] ?? null;
   };
   const mutate = enabled ? createContextGuardedSync({ tableId,
+    preferLocal,
     readByDossierId: read, writer, createRecord: (...args) => {
       if (!creationReady) throw new SyncMutationError(503, 'CONTEXT_CREATION_NOT_PREPARED');
       return createRecord(...args);

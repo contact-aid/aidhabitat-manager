@@ -374,31 +374,44 @@ void main() {
     );
 
     test(
-      '$table missing captured timestamp is a conflict, never dossier fallback',
+      '$table sends a durable local-priority write without borrowing the dossier clock',
       () async {
+        final updates = table == 'diagnostic_sanitaires'
+            ? <String, dynamic>{'sdbInstances': [], 'wcInstances': []}
+            : <String, dynamic>{'observations': 'local'};
         await seed(
           table,
+          dossierId: 'remote-dossier',
           status: 'pending',
           payload: {
-            'dossierId': 'local_dossier',
-            'updates': <String, dynamic>{},
+            'dossierId': 'remote-dossier',
+            'updates': updates,
             'concurrency': {..._guard, 'expectedUpdatedAt': null},
           },
         );
         var requests = 0;
         final client = NocodbApiClient(
-          client: MockClient((_) async {
+          client: MockClient((request) async {
             requests++;
-            return http.Response('{}', 200);
+            final body = jsonDecode(request.body) as Map<String, dynamic>;
+            expect(body['expectedUpdatedAt'], isNull);
+            expect(body['concurrency']['writeId'], _guard['writeId']);
+            return http.Response(
+              jsonEncode({
+                'data': {'updatedAt': _new},
+              }),
+              200,
+            );
           }),
         );
         final result = await NocodbSyncService(
           apiClient: client,
           syncRepository: repository,
         ).pushPendingChanges();
-        expect(requests, 0);
-        expect(result.conflictCount, 1);
-        expect((await db.query(table)).single['sync_state'], 'conflict');
+        expect(requests, 1);
+        expect(result.pushedOperations, 1);
+        expect(result.conflictCount, 0);
+        expect((await db.query(table)).single['remote_updated_at'], _new);
       },
     );
   }

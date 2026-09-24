@@ -33,6 +33,7 @@ function fixture({
   initial = true,
   loseCreateResponse = false,
   loseWriteResponse = false,
+  preferLocal = false,
 } = {}) {
   const dossierId = 'dossier-1';
   const dossier = { Id: 70, app_sync_revision: randomUUID(), status: 'À visiter' };
@@ -85,6 +86,7 @@ function fixture({
     readByDossierId,
     writer,
     createRecord,
+    preferLocal,
   });
   const reference = () => row && ({
     recordId: row.Id,
@@ -183,6 +185,22 @@ test('un conflit de section est explicite et ne déclenche aucune écriture', as
       && error.observed.medicalContext.pathology === 'modification distante',
   );
   assert.equal(f.writes(), 0);
+});
+
+test('la priorité locale remplace la section modifiée et préserve les autres', async () => {
+  const f = fixture({ preferLocal: true });
+  f.row().nom_pathologie = 'modification distante';
+  const beforeAutonomy = contextRecordToSections(f.row()).autonomy;
+  const result = await f.mutate({
+    dossierId: f.dossierId,
+    updates: { medicalContext: medical('modification locale') },
+    concurrency: f.guard({ baseValues: {}, ref: null }),
+    authorizeObserved: () => true,
+  });
+  assert.equal(result.applied, true);
+  assert.equal(contextRecordToSections(f.row()).medicalContext.pathology, 'modification locale');
+  assert.deepEqual(contextRecordToSections(f.row()).autonomy, beforeAutonomy);
+  assert.equal(f.writes(), 1);
 });
 
 test('une modification distante pendant la comparaison fait échouer la condition puis recompare', async () => {

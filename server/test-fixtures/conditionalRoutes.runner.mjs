@@ -31,10 +31,35 @@ const mock = createRestMock({ referenceRows: {
 } });
 const nativeFetch = globalThis.fetch;
 let apiOrigin;
+const airtableCalls = [];
 globalThis.fetch = (input, init = {}) => {
   const url = new URL(input instanceof Request ? input.url : input);
   if (apiOrigin && url.origin === apiOrigin) {
     return nativeFetch(input, { ...init, redirect: 'error' });
+  }
+  if (url.origin === 'https://api.airtable.com') {
+    airtableCalls.push({ url, init });
+    assert.equal(init.method, 'GET');
+    assert.equal(init.headers?.Authorization, 'Bearer synthetic-airtable-read-only-token');
+    if (url.pathname.endsWith('/tbl7qYd2ZKgwQVNU1')) {
+      return Promise.resolve(Response.json({ records: [
+        { id: 'recAAAAAAAAAAAAAA', fields: {
+          'Dossier ID': 'FICTIF-1', 'Adaptation ou énergie': ['Adaptation'],
+          'Intervenant couleur': ['Test'], 'Nom intervenant': ['Test Owner'],
+          'No Client': ['recCCCCCCCCCCCCCC'], Commentaires: 'Note fictive',
+        } },
+        { id: 'recBBBBBBBBBBBBBB', fields: {
+          'Dossier ID': 'AUTRE-2', 'Adaptation ou énergie': ['Adaptation'],
+          'Intervenant couleur': ['Test'], 'Nom intervenant': ['Test Other'],
+          'No Client': [],
+        } },
+      ] }));
+    }
+    return Promise.resolve(Response.json({ records: [
+      { id: 'recCCCCCCCCCCCCCC', fields: {
+        'Prénom': 'Camille', Nom: 'Fictif', 'Nb du foyer': 2,
+      } },
+    ] }));
   }
   // No URL except this process's exact Express origin ever reaches native fetch.
   return mock.fetch(input, init);
@@ -109,6 +134,22 @@ try {
       method: 'POST', body: { email: ownerEmail, password: 'wrong-synthetic-password' },
     }), 401);
   });
+
+  if (entity === 'dossier') {
+    await check('read-only Airtable route scopes Adaptation to the authenticated intervenant', async () => {
+      airtableCalls.length = 0;
+      expectStatus(await request('/api/airtable/adaptation-dossiers'), 401);
+      const response = expectStatus(await request('/api/airtable/adaptation-dossiers', {
+        token: clientA,
+      }), 200);
+      assert.equal(response.data.records.length, 1);
+      assert.equal(response.data.records[0].airtableRecordId, 'recAAAAAAAAAAAAAA');
+      assert.equal(response.data.records[0].beneficiary.nombre_personnes, 2);
+      assert(airtableCalls.length === 2);
+      assert(airtableCalls.every((call) => call.init.method === 'GET'));
+      assert.equal(mock.patches().length, 0);
+    });
+  }
 
   await check('unauthenticated and forged sessions return 401 without PATCH', async () => {
     const body = mutation({ [definition.key]: definition.first }, { [definition.key]: 'initial' });
@@ -187,7 +228,7 @@ try {
     }
   });
 
-  await check('two clients editing same field: guarded success, replay, then 409', async () => {
+  await check('two clients editing same field: guarded success, replay, then local priority', async () => {
     const baselineA = await read(clientA);
     const baselineB = await read(clientB);
     assert.equal(baselineA[definition.key], baselineB[definition.key]);
@@ -202,18 +243,14 @@ try {
     assert(mock.calls.some((call) => call.path === `/api/v2/meta/tables/${tables[entity]}`));
     expectStatus(await patch(clientA, body), 200);
     assert.equal(mock.patches().length, 1, 'Exact replay must not send another PATCH');
-    const conflict = expectStatus(await patch(clientB, mutation({ [definition.key]: definition.second }, {
+    const second = mutation({ [definition.key]: definition.second }, {
       [definition.key]: baselineB[definition.key],
-    })), 409);
-    assert.equal(conflict.error, 'SYNC_FIELD_CONFLICT');
-    assert.equal(conflict.conflict, true);
-    assert.deepEqual(conflict.conflictFields, [definition.dbKey]);
-    assert.deepEqual(conflict.retainedFields, []);
-    assert.match(conflict.writeId, /^[0-9a-f-]{36}$/);
-    assert.equal(conflict.remoteData[definition.dbKey], definition.first);
-    assert.equal(conflict.remoteData.app_sync_revision, body.concurrency.writeId);
-    assert.equal(mock.patches().length, 1);
-    assert.equal((await read(clientB))[definition.key], definition.first);
+    });
+    expectStatus(await patch(clientB, second), 200);
+    assert.equal(mock.patches().length, 2);
+    assertGuard(mock.patches()[1], body.concurrency.writeId,
+      second.concurrency.writeId, { [definition.dbKey]: definition.second });
+    assert.equal((await read(clientB))[definition.key], definition.second);
   });
 
   await check('two clients editing independent fields preserve both changes', async () => {
@@ -268,15 +305,15 @@ try {
       }
       const loser = outcomes.findIndex((result) => result.status === 503);
       const retry = await patch(loser === 0 ? clientA : clientB, bodies[loser]);
-      expectStatus(retry, independent ? 200 : 409);
-      assert.equal(mock.patches().length, independent ? 3 : 2);
+      expectStatus(retry, 200);
+      assert.equal(mock.patches().length, 3);
+      assert.equal(mock.patches()[2].body.app_sync_revision, bodies[loser].concurrency.writeId);
+      const final = await read(clientA);
       if (independent) {
-        assert.equal(mock.patches()[2].body.app_sync_revision, bodies[loser].concurrency.writeId);
-        const final = await read(clientA);
         assert.equal(final[definition.key], definition.first);
         assert.equal(final[definition.other], definition.independent);
       } else {
-        assert.equal(retry.body.error, 'SYNC_FIELD_CONFLICT');
+        assert.equal(final[definition.key], bodies[loser][definition.key]);
       }
     });
   }
@@ -302,6 +339,19 @@ try {
   }
 
   if (entity === 'beneficiaire') {
+    await check('synthetic APA edit survives sync, reload, and another edit', async () => {
+      const baseline = await read(clientA);
+      mock.row(entity).beneficiaire_apa = true;
+      mock.row(entity).app_sync_revision = randomUUID();
+      expectStatus(await patch(clientA, mutation({ apa: false }, { apa: baseline.apa })), 200);
+      assert.equal(mock.row(entity).beneficiaire_apa, false);
+      const reloaded = await read(clientB);
+      assert.equal(reloaded.apa, false);
+      expectStatus(await patch(clientB, mutation({ apa: true }, { apa: reloaded.apa })), 200);
+      assert.equal((await read(clientA)).apa, true);
+      assert.equal(mock.patches().length, 2);
+    });
+
     await check('legacy scalar occupants accept a birth date and persist scalar plus JSON', async () => {
       const baseline = await read(clientA);
       assert.equal(mock.row(entity).occupants_json, null);
@@ -318,17 +368,17 @@ try {
       assert.equal((await read(clientB)).occupants[0].birthDate, '1948-04-12');
     });
 
-    await check('a real concurrent occupants change still returns field-level 409', async () => {
+    await check('a real concurrent occupants change yields to the local occupant edit', async () => {
       const baseline = await read(clientA);
       mock.row(entity).occupants_json = JSON.stringify([{ ...baseline.occupants[0], birthDate: '1930-01-01' }]);
       mock.row(entity).app_sync_revision = randomUUID();
       const occupants = structuredClone(baseline.occupants);
       occupants[0].birthDate = '1948-04-12';
-      const conflict = expectStatus(await patch(clientA, mutation({
+      expectStatus(await patch(clientA, mutation({
         occupant1BirthDate: '1948-04-12', occupants,
-      }, { occupant1BirthDate: baseline.occupant1BirthDate, occupants: baseline.occupants })), 409);
-      assert(conflict.conflictFields.includes('occupants_json'));
-      assert.equal(mock.patches().length, 0);
+      }, { occupant1BirthDate: baseline.occupant1BirthDate, occupants: baseline.occupants })), 200);
+      assert.equal(JSON.parse(mock.row(entity).occupants_json)[0].birthDate, '1948-04-12');
+      assert.equal(mock.patches().length, 1);
     });
 
     await check('legacy null beneficiary checkbox accepts the exposed false baseline', async () => {

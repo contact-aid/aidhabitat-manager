@@ -22,6 +22,7 @@ import { registerContextRoutes } from './contextRoutes.mjs';
 import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
+import { createAirtableAdaptationReader, projectAirtableDossier } from './airtableAdaptation.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
 } from './resyncLegacyNames.mjs';
@@ -491,6 +492,7 @@ const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter
 }) : null;
 const serializeHousingMutation = createKeyedSerialExecutor();
 const guardedMutation = conditionalWriter ? createGuardedMutation({
+  preferLocal: true,
   writer: conditionalWriter,
   readColumns: async (tableId) => {
     if (!conditionalTables.includes(tableId)) throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
@@ -1183,7 +1185,7 @@ const parseSyntheticBeneficiaryId = (value) => {
   const match = String(value || '').match(/^nocodb-beneficiaire-(\d+)$/);
   return match ? Number(match[1]) : null;
 };
-const mobileSyncStore = createMobileSyncStore({ absoluteUrl });
+const mobileSyncStore = createMobileSyncStore({ absoluteUrl, preferLocal: true });
 const deriveBeneficiaryAppId = ({ beneficiaryRecord, dossierRecords = [], housingRecords = [], contextRecords = [], infoRecords = [] }) => {
   const relatedExternalId = [
     latestRecord(dossierRecords) ? field(latestRecord(dossierRecords), 'patient_id') : undefined,
@@ -5642,6 +5644,30 @@ app.get('/api/dossiers', requireAuth, async (req, res, next) => {
   }
 });
 
+// Explicit read-only Airtable source for the "Actualiser" action. The API
+// never sends a write to Airtable; Flutter decides which already-known local
+// dossier can be matched before enqueuing any NocoDB update.
+app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next) => {
+  try {
+    const fullName = stringValue(req.appUser?.ergoLabel).trim();
+    if (req.appUser?.role !== 'ERGO' || !fullName) {
+      res.status(403).json({ success: false, error: 'Intervenant requis' });
+      return;
+    }
+    if (!process.env.AIRTABLE_TOKEN) {
+      res.status(503).json({ success: false, error: 'Lecture Airtable indisponible' });
+      return;
+    }
+    const firstName = fullName.split(/\s+/)[0];
+    const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
+    const records = (await read(firstName, { fullName }))
+      .map(projectAirtableDossier);
+    res.json({ success: true, error: null, data: { records } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /// Génère le rapport de visite PDF pour un dossier donné. Retourne
 /// directement les bytes du PDF en `application/pdf` avec un
 /// `Content-Disposition: attachment` — le client n'a qu'à streamer
@@ -7434,6 +7460,7 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
 });
 
 registerContextRoutes(app, { requireAuth, enabled: conditionalSyncEnabled,
+  preferLocal: true,
   creationReady: conditionalCreatesReady,
   tableId: TABLES.contexteDeVie, writer: conditionalWriter, createRecord, queryAll,
   ensureDossierRecord, canAccessDossierRecord, field });
@@ -9250,6 +9277,7 @@ app.put('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
     const dossierId = field(dossierRecord, 'uuid_source');
     const result = await createVisitRecommendationsPublisher({
       store: await getVisitRecommendationsSnapshotStore(),
+      preferLocal: true,
       resolveWikiItem: async (wikiItemId) => resolveRecommendationWikiItem(
         { wikiItemId },
         wikiLookup,

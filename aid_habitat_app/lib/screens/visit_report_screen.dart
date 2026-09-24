@@ -1202,6 +1202,17 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           Expanded(
             child: TabBar(
               controller: _tabController,
+              onTap: (index) {
+                if ((index == _tabs.indexOf('Salle de bain') ||
+                        index == _tabs.indexOf('WC')) &&
+                    _tabController.previousIndex ==
+                        _tabs.indexOf('Accessibilité')) {
+                  // Persist level/room choices before the sanitary tabs read
+                  // them from SQLite. The save callback bumps _housingVersion
+                  // and triggers their reload when it completes.
+                  unawaited(_accessibilityController.flushPendingSave());
+                }
+              },
               isScrollable: true,
               // Indicateur d'onglet actif : SIMPLE TRAIT VIOLET FONCÉ en
               // bas, qui s'étend sur TOUTE la largeur cliquable du

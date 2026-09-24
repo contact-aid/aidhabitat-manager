@@ -974,13 +974,8 @@ class DossierRepository {
                 existingRows.first['sync_state'] as String,
               );
 
-        // NOTE 2026-05-07 : ce chemin LEGACY n'est plus appelé (cf.
-        // commentaire de la fonction). Le chemin courant est
-        // `mergeRemoteDossierPayloads` qui a son propre LWW. Si on
-        // réactive cette fonction un jour, ajouter ici la stratégie
-        // LWW (comparer remote_updated_at) — actuellement le modèle
-        // `Dossier` Flutter n'expose pas l'updated_at, donc skip
-        // simple sur `pendingSync` pour rester safe.
+        // Chemin legacy : comme le merge principal, il garde une saisie
+        // locale non acquittée quelle que soit la date du serveur.
         if (existingRows.isNotEmpty && existingSyncState != SyncState.synced) {
           continue;
         }
@@ -1080,13 +1075,18 @@ class DossierRepository {
 
     await db.transaction((txn) async {
       // A newer remote snapshot is not an acknowledgement of a local write.
-      // Keep the whole dossier bundle (including its concurrency baseline)
-      // while a real mutation is outstanding, even if sync_state is stale.
+      // Protect the whole bundle when an operation is outstanding OR a local
+      // row still says unsynced, including if its operation is missing.
       // Only identifiers are loaded; queued PDFs/JSON payloads stay on disk.
       final protectedBundles = await txn.rawQuery('''
         SELECT d.local_id, d.patient_local_id, d.housing_local_id
         FROM dossiers AS d
-        WHERE EXISTS (
+        LEFT JOIN patients AS p ON p.local_id = d.patient_local_id
+        LEFT JOIN housings AS h ON h.local_id = d.housing_local_id
+        WHERE d.sync_state != 'synced'
+          OR (p.sync_state IS NOT NULL AND p.sync_state != 'synced')
+          OR (h.sync_state IS NOT NULL AND h.sync_state != 'synced')
+          OR EXISTS (
           SELECT 1 FROM sync_operations AS op
           WHERE op.status IN ('pending', 'running', 'failed', 'conflict')
             AND (
@@ -1147,51 +1147,17 @@ class DossierRepository {
                 existingDossier.first['sync_state'] as String,
               );
 
-        // Pré-calcule "remote strictement plus récent que local" — utilisé
-        // par les gardes 1 et 2 ci-dessous pour échapper au skip aveugle
-        // sur `pendingSync`. Fix 2026-05-07 (parité avec note_repository
-        // et document_repository) : avant ce fix, dès qu'une op
-        // `pendingSync` orpheline existait sur le dossier/patient/housing,
-        // toute mise à jour cross-device était bloquée indéfiniment —
-        // l'utilisateur ne voyait JAMAIS les modifs faites sur l'autre
-        // device tant qu'il n'avait pas resolu l'op.
-        //
-        // This recovery now applies only to orphaned states: bundles with
-        // actual outstanding operations were excluded above. Updating their
-        // remote_updated_at here would bypass the next push's version check.
-        bool remoteIsStrictlyNewer = false;
-        final remoteUpdatedAtForLww = _extractWorkspaceUpdatedAt(raw);
-        if (remoteUpdatedAtForLww != null && existingDossier.isNotEmpty) {
-          final localWorkspaceUpdated =
-              existingDossier.first['workspace_updated_at'] as String?;
-          remoteIsStrictlyNewer =
-              localWorkspaceUpdated == null ||
-              localWorkspaceUpdated.isEmpty ||
-              _isRemoteTimestampNewer(
-                remoteUpdatedAtForLww,
-                localWorkspaceUpdated,
-              );
-        }
-
         if (existingDossier.isNotEmpty &&
-            existingSyncState != SyncState.synced &&
-            !remoteIsStrictlyNewer) {
-          // User has unsync'd local edits ET le remote n'est pas plus
-          // récent → on préserve la version locale.
+            existingSyncState != SyncState.synced) {
+          // Une date serveur plus récente ne prouve jamais que la saisie
+          // locale a été envoyée. Le relevé reste prioritaire jusqu'à
+          // l'acquittement de sa mutation ou au choix explicite du serveur.
           continue;
         }
 
-        // Garde de second niveau : on regarde aussi le `patients.sync_state`
-        // ET le `housings.sync_state` du dossier. Avant cette garde, un
-        // pull NocoDB pouvait écraser un patient ou un housing en cours
-        // de push, parce que `dossiers.sync_state` était à `synced` mais
-        // `patients.sync_state` était à `pendingSync`. Symptôme côté UI :
-        // « le nom modifié disparaît pendant quelques secondes » — le
-        // serveur renvoyait l'ancien nom (eventual consistency) et le
-        // merge l'écrivait par-dessus le nouveau nom local.
-        //
-        // 2026-05-07 : LWW également appliqué ici (cf. garde 1).
-        if (existingDossier.isNotEmpty && !remoteIsStrictlyNewer) {
+        // Une saisie patient ou logement non acquittée protège également
+        // le dossier entier, même si le serveur annonce un timestamp récent.
+        if (existingDossier.isNotEmpty) {
           final patientLocalIdExisting =
               existingDossier.first['patient_local_id'] as String?;
           final housingLocalIdExisting =
@@ -1436,15 +1402,6 @@ class DossierRepository {
       return remoteValue.compareTo(localValue) < 0;
     }
     return remote.isBefore(local);
-  }
-
-  bool _isRemoteTimestampNewer(String remoteValue, String localValue) {
-    final remote = DateTime.tryParse(remoteValue);
-    final local = DateTime.tryParse(localValue);
-    if (remote == null || local == null) {
-      return remoteValue.compareTo(localValue) > 0;
-    }
-    return remote.isAfter(local);
   }
 
   Future<void> _mergeRemoteContexteDeVie({

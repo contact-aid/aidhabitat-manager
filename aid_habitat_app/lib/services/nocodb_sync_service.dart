@@ -614,6 +614,19 @@ class NocodbSyncService {
     }
     final expected = guard['expectedUpdatedAt'];
     if (expected == null && guard['createIfAbsent'] == true) return null;
+    // The conditional API checks the durable write ID and the current row
+    // revision before applying local-priority updates. A queued mutation with
+    // no historical timestamp can therefore be sent only when its durable
+    // identity and captured field map are intact. Never invent a timestamp.
+    if (expected == null &&
+        guard['baseValues'] is Map &&
+        guard['writeId'] is String &&
+        RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(guard['writeId'] as String)) {
+      return null;
+    }
     if (expected is! String || DateTime.tryParse(expected) == null) {
       throw ConflictException('La version de reference doit etre verifiee.');
     }

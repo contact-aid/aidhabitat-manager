@@ -175,6 +175,14 @@ void main() {
       );
       expect(tester.takeException(), isNull);
       expect(find.text('Démarrer le relevé'), findsOneWidget);
+      final startButton = tester.widget<ElevatedButton>(
+        find.ancestor(
+          of: find.text('Démarrer le relevé'),
+          matching: find.byWidgetPredicate((widget) => widget is ElevatedButton),
+        ),
+      );
+      final startShape = startButton.style!.shape!.resolve({}) as RoundedRectangleBorder;
+      expect(startShape.borderRadius, BorderRadius.circular(999));
     });
 
     testWidgets('populated dossiers fit at $width px', (tester) async {
@@ -217,16 +225,20 @@ void main() {
               ),
             ),
           );
+      final refreshButton = find.byWidgetPredicate((widget) => widget is ElevatedButton);
 
       await tester.pumpWidget(screen(online: false));
       expect(
-        tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed,
+        tester.widget<ElevatedButton>(refreshButton).onPressed,
         isNull,
       );
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(screen(online: true));
-      final refresh = tester.getTopLeft(find.byType(OutlinedButton));
+      final refresh = tester.getTopLeft(refreshButton);
+      final refreshShape = tester.widget<ElevatedButton>(refreshButton)
+          .style!.shape!.resolve({}) as RoundedRectangleBorder;
+      expect(refreshShape.borderRadius, BorderRadius.circular(999));
       final title = tester.getTopLeft(find.text('Mes dossiers'));
       expect(refresh.dx, greaterThan(title.dx));
       await tester.tap(find.text('Actualiser'));
@@ -236,7 +248,7 @@ void main() {
 
       await tester.pumpWidget(screen(online: true, refreshing: true));
       expect(
-        tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed,
+        tester.widget<ElevatedButton>(refreshButton).onPressed,
         isNull,
       );
       expect(tester.takeException(), isNull);

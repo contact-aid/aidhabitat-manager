@@ -281,6 +281,7 @@ export function createContextGuardedSync({
   readByDossierId,
   writer,
   createRecord,
+  preferLocal = false,
 }) {
   if (!tableId || typeof readByDossierId !== 'function'
       || typeof writer !== 'function' || typeof createRecord !== 'function') {
@@ -361,16 +362,19 @@ export function createContextGuardedSync({
         }
         throw conflict('CONTEXT_WRITE_ID_MISMATCH', observed);
       }
-      if (!guard.reference) throw conflict('CONTEXT_REFERENCE_REQUIRED', observed);
-      if (guard.reference.recordId !== reference.recordId) {
+      if (!preferLocal && !guard.reference) throw conflict('CONTEXT_REFERENCE_REQUIRED', observed);
+      if (guard.reference && guard.reference.recordId !== reference.recordId) {
         throw conflict('CONTEXT_REFERENCE_CHANGED', observed);
       }
 
-      const plan = planDatabaseMutation({
-        fields: desired,
-        baseFields: baseline,
-        observed: remote,
-      });
+      const plan = preferLocal
+        ? { patch: Object.fromEntries(Object.entries(desired).filter(([key, value]) =>
+            !isDeepStrictEqual(remote[key], value))), conflicts: [], retainedFields: [] }
+        : planDatabaseMutation({
+          fields: desired,
+          baseFields: baseline,
+          observed: remote,
+        });
       if (plan.conflicts.length) throw conflict('CONTEXT_FIELD_CONFLICT', observed);
       if (plan.retainedFields.length) {
         throw conflict('CONTEXT_REMOTE_VALUES_REQUIRE_REVIEW', observed);

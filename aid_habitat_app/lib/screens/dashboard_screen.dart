@@ -1147,7 +1147,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                       vertical: 17,
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(999),
                     ),
                     elevation: 0,
                   ),

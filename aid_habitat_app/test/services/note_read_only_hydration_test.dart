@@ -21,7 +21,7 @@ void main() {
 
       final merged = await repository.mergeRemoteNotePage(
         patientId: 'nocodb-beneficiaire-62',
-        dossierId: 'andasse-martine',
+        dossierId: 'dossier-fictif',
         tabKey: 'notes_rapides',
         pageNumber: 0,
         drawingJson: '{"version":1,"text":"note serveur","strokes":[]}',
@@ -75,6 +75,37 @@ void main() {
 
     expect(await db.query('sync_operations'), isEmpty);
     expect(await db.query('note_pages'), hasLength(1));
+  });
+
+  test('a newer server note cannot erase an unsent local edit', () async {
+    final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+    addTearDown(db.close);
+    final local = LocalDatabase.forTesting(db);
+    await local.createSchemaForTesting();
+    final repository = NoteRepository(database: local);
+    const base = '{"version":1,"text":"base","strokes":[]}';
+    const localDrawing = '{"version":1,"text":"saisie locale","strokes":[]}';
+    const remoteDrawing = '{"version":1,"text":"autre appareil","strokes":[]}';
+    await repository.mergeRemoteNotePage(
+      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides', pageNumber: 0, drawingJson: base,
+      revision: 'revision-base', updatedAt: '2026-09-23T08:00:00.000Z',
+    );
+    await repository.saveDrawingJson(
+      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides', drawingJson: localDrawing,
+      mutationOrigin: SyncMutationOrigin.userEdit,
+    );
+    final merged = await repository.mergeRemoteNotePage(
+      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides', pageNumber: 0, drawingJson: remoteDrawing,
+      revision: 'revision-newer', updatedAt: '2026-09-24T08:00:00.000Z',
+    );
+    expect(merged, isFalse);
+    expect(await repository.fetchDrawingJson(
+      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides'), localDrawing);
+    expect((await db.query('sync_operations')).single['status'], 'pending');
   });
 
   test(

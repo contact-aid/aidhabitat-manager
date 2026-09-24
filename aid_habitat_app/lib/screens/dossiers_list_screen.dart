@@ -403,7 +403,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(999),
           ),
         ),
         icon: widget.isRefreshingDossiers

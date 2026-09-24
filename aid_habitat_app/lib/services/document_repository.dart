@@ -1704,11 +1704,7 @@ class DocumentRepository {
               continue;
             }
           }
-          if (existingSyncState != SyncState.synced.name &&
-              !_isRemoteUpdatedAtNewer(
-                remoteUpdatedAt: remote['updatedAt']?.toString(),
-                localUpdatedAt: existing['updated_at'] as String?,
-              )) {
+          if (existingSyncState != SyncState.synced.name) {
             continue;
           }
         }
@@ -2045,23 +2041,6 @@ class DocumentRepository {
     }
   }
 
-  /// Compare deux timestamps ISO-8601 (ex. `2026-05-07T14:30:00Z`)
-  /// pour décider si la version remote est strictement plus récente
-  /// que la version locale. Utilisé par `mergeRemoteDocuments` pour
-  /// décider si on rattrape une row locale `pendingSync` orpheline.
-  /// En cas de timestamp manquant ou invalide, renvoie `false` (= refuse
-  /// le merge) pour rester safe.
-  bool _isRemoteUpdatedAtNewer({
-    required String? remoteUpdatedAt,
-    required String? localUpdatedAt,
-  }) {
-    if (remoteUpdatedAt == null || remoteUpdatedAt.isEmpty) return false;
-    if (localUpdatedAt == null || localUpdatedAt.isEmpty) return true;
-    final remote = DateTime.tryParse(remoteUpdatedAt);
-    final local = DateTime.tryParse(localUpdatedAt);
-    if (remote == null || local == null) return false;
-    return remote.isAfter(local);
-  }
 }
 
 /// Container plat pour un document à embarquer **inline** dans la

@@ -106,6 +106,18 @@ void main() {
     await root.delete(recursive: true);
   });
 
+  test('a newer remote document cannot replace unsent local content', () async {
+    await db.update('documents', {
+      'title': 'Titre local fictif', 'sync_state': 'pendingSync',
+    });
+    await repository.mergeRemoteDocuments('patient', [
+      remote(revision: 'v2', timestamp: third),
+    ]);
+    expect((await row())['title'], 'Titre local fictif');
+    expect((await row())['remote_file_path'], url('v1'));
+    expect((await row())['sync_state'], 'pendingSync');
+  });
+
   for (final state in ['synced', 'pendingSync', 'error']) {
     test(
       'delete remotely bound document in $state enqueues remote delete',

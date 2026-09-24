@@ -223,6 +223,7 @@ export const createVisitRecommendationsPublisher = ({
   store,
   resolveWikiItem,
   now = () => new Date().toISOString(),
+  preferLocal = false,
 }) => {
   requireStore(store);
   if (typeof resolveWikiItem !== 'function') {
@@ -231,101 +232,106 @@ export const createVisitRecommendationsPublisher = ({
 
   return async ({ dossierId, envelope }) => {
     const mutation = validateVisitRecommendationsEnvelope({ dossierId, envelope });
-    const before = await store.read(mutation.dossierId);
-
-    if (before?.lastWriteId === mutation.writeId) {
-      if (!matchesAppliedWrite(before, mutation)) {
-        fail(409, 'VISIT_RECOMMENDATIONS_WRITE_ID_REUSED', {
-          observed: snapshotForClient(before),
-        });
-      }
-      return {
-        applied: true,
-        replay: true,
-        snapshot: snapshotForClient(before),
-      };
-    }
-
-    const currentRevision = before?.revision ?? null;
-    if (currentRevision !== mutation.expectedRevision) {
-      fail(409, 'VISIT_RECOMMENDATIONS_REVISION_CONFLICT', {
-        observed: snapshotForClient(before),
-      });
-    }
-
     const publishedItems = await normalizePublishedItems(
       mutation.items,
       resolveWikiItem,
     );
-    const next = {
-      dossierId: mutation.dossierId,
-      revision: mutation.writeId,
-      lastWriteId: mutation.writeId,
-      requestHash: mutation.requestHash,
-      items: publishedItems,
-      updatedAt: now(),
-    };
+    for (let attempt = 0; attempt < (preferLocal ? 2 : 1); attempt++) {
+      const before = await store.read(mutation.dossierId);
 
-    let outcome;
-    try {
-      outcome = await store.compareAndSwap({
-        dossierId: mutation.dossierId,
-        expectedRevision: mutation.expectedRevision,
-        next: cloneJson(next),
-      });
-    } catch (cause) {
-      let observed;
-      try {
-        observed = await store.read(mutation.dossierId);
-      } catch (readCause) {
-        fail(503, 'VISIT_RECOMMENDATIONS_WRITE_UNCONFIRMED', {
-          cause: new AggregateError([cause, readCause]),
+      if (before?.lastWriteId === mutation.writeId) {
+        if (!matchesAppliedWrite(before, mutation)) {
+          fail(409, 'VISIT_RECOMMENDATIONS_WRITE_ID_REUSED', {
+            observed: snapshotForClient(before),
+          });
+        }
+        return {
+          applied: true,
+          replay: true,
+          snapshot: snapshotForClient(before),
+        };
+      }
+
+      const currentRevision = before?.revision ?? null;
+      if (!preferLocal && currentRevision !== mutation.expectedRevision) {
+        fail(409, 'VISIT_RECOMMENDATIONS_REVISION_CONFLICT', {
+          observed: snapshotForClient(before),
         });
       }
-      if (matchesAppliedSnapshot(observed, next)) {
-        return {
-          applied: true,
-          replay: true,
-          snapshot: snapshotForClient(observed),
-        };
+
+      const next = {
+        dossierId: mutation.dossierId,
+        revision: mutation.writeId,
+        lastWriteId: mutation.writeId,
+        requestHash: mutation.requestHash,
+        items: publishedItems,
+        updatedAt: now(),
+      };
+
+      let outcome;
+      try {
+        outcome = await store.compareAndSwap({
+          dossierId: mutation.dossierId,
+          expectedRevision: preferLocal ? currentRevision : mutation.expectedRevision,
+          next: cloneJson(next),
+        });
+      } catch (cause) {
+        let observed;
+        try {
+          observed = await store.read(mutation.dossierId);
+        } catch (readCause) {
+          fail(503, 'VISIT_RECOMMENDATIONS_WRITE_UNCONFIRMED', {
+            cause: new AggregateError([cause, readCause]),
+          });
+        }
+        if (matchesAppliedSnapshot(observed, next)) {
+          return {
+            applied: true,
+            replay: true,
+            snapshot: snapshotForClient(observed),
+          };
+        }
+        fail(503, 'VISIT_RECOMMENDATIONS_WRITE_UNCONFIRMED', {
+          observed: snapshotForClient(observed),
+          cause,
+        });
       }
+
+      if (outcome?.status === 'applied') {
+        const observed = outcome.snapshot ?? await store.read(mutation.dossierId);
+        if (matchesAppliedSnapshot(observed, next)) {
+          return {
+            applied: true,
+            replay: Boolean(outcome.replay),
+            snapshot: snapshotForClient(observed),
+          };
+        }
+        fail(503, 'VISIT_RECOMMENDATIONS_WRITE_UNCONFIRMED', {
+          observed: snapshotForClient(observed),
+        });
+      }
+
+      if (outcome?.status === 'revision_changed') {
+        const observed = outcome.snapshot ?? await store.read(mutation.dossierId);
+        if (matchesAppliedWrite(observed, mutation)) {
+          return {
+            applied: true,
+            replay: true,
+            snapshot: snapshotForClient(observed),
+          };
+        }
+        if (preferLocal && attempt === 0) continue;
+        fail(preferLocal ? 503 : 409,
+          preferLocal ? 'VISIT_RECOMMENDATIONS_COMPETING_WRITE_RETRY'
+            : 'VISIT_RECOMMENDATIONS_REVISION_CONFLICT', {
+            observed: snapshotForClient(observed),
+          });
+      }
+
       fail(503, 'VISIT_RECOMMENDATIONS_WRITE_UNCONFIRMED', {
-        observed: snapshotForClient(observed),
-        cause,
+        observed: snapshotForClient(outcome?.snapshot),
       });
     }
-
-    if (outcome?.status === 'applied') {
-      const observed = outcome.snapshot ?? await store.read(mutation.dossierId);
-      if (matchesAppliedSnapshot(observed, next)) {
-        return {
-          applied: true,
-          replay: Boolean(outcome.replay),
-          snapshot: snapshotForClient(observed),
-        };
-      }
-      fail(503, 'VISIT_RECOMMENDATIONS_WRITE_UNCONFIRMED', {
-        observed: snapshotForClient(observed),
-      });
-    }
-
-    if (outcome?.status === 'revision_changed') {
-      const observed = outcome.snapshot ?? await store.read(mutation.dossierId);
-      if (matchesAppliedWrite(observed, mutation)) {
-        return {
-          applied: true,
-          replay: true,
-          snapshot: snapshotForClient(observed),
-        };
-      }
-      fail(409, 'VISIT_RECOMMENDATIONS_REVISION_CONFLICT', {
-        observed: snapshotForClient(observed),
-      });
-    }
-
-    fail(503, 'VISIT_RECOMMENDATIONS_WRITE_UNCONFIRMED', {
-      observed: snapshotForClient(outcome?.snapshot),
-    });
   };
 };
 

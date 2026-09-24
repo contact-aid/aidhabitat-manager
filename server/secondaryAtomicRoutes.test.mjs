@@ -123,8 +123,8 @@ async function run() {
       const loser = results.findIndex(r => r.status !== 200);
       assert([409, 503].includes(results[loser].status), JSON.stringify(results));
       // A mismatched post-write read is deliberately uncertain, not a false ACK.
-      assert.equal((await request(path, mutations[loser], token)).status, 409);
-      assert.equal(writes, 1);
+      assert.equal((await request(path, mutations[loser], token)).status, 200);
+      assert.equal(writes, 2);
       reset(); rows.delete(c.table);
       const creationReady = process.env.AIDHABITAT_UNIQUE_CHILDREN_READY === '1';
       const create = { ...body(), concurrency: { ...body().concurrency, createIfAbsent: true } };
@@ -181,10 +181,9 @@ async function run() {
     const sanitaryConflict = await request(sanitaryPath, { sdbInstances: competing, concurrency: {
       version: 1, writeId: randomUUID(), baseValues: { sdbInstances: stalePull.body.sdbInstances },
     } }, token);
-    assert.equal(sanitaryConflict.status, 409, JSON.stringify(sanitaryConflict));
-    assert(sanitaryConflict.body.conflictFields.includes('sdb_instances_json'));
-    assert(sanitaryConflict.body.conflictFields.includes('sdb_baignoire_hauteur'));
-    assert.equal(writes, writesBeforeConflict);
+    assert.equal(sanitaryConflict.status, 200, JSON.stringify(sanitaryConflict));
+    assert.equal(JSON.parse(rows.get(sanitaryTable).sdb_instances_json)[0].sdbBaignoireHauteur, 65);
+    assert.equal(writes, writesBeforeConflict + 1);
 
     rows.set(sanitaryTable, legacySanitaryRow());
     const corruptBaseline = await request(sanitaryPath, undefined, token, 'GET');
