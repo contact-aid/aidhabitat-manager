@@ -326,16 +326,16 @@ class MyApp extends StatelessWidget {
         // toutes les variantes (body/label/title), puis on surcharge
         // display/headline pour utiliser Nunito.
         textTheme: _buildAppTextTheme(),
-        textButtonTheme: const TextButtonThemeData(
+        textButtonTheme: TextButtonThemeData(
           style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
         ),
-        filledButtonTheme: const FilledButtonThemeData(
+        filledButtonTheme: FilledButtonThemeData(
           style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
         ),
-        elevatedButtonTheme: const ElevatedButtonThemeData(
+        elevatedButtonTheme: ElevatedButtonThemeData(
           style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
         ),
-        outlinedButtonTheme: const OutlinedButtonThemeData(
+        outlinedButtonTheme: OutlinedButtonThemeData(
           style: ButtonStyle(textStyle: WidgetStatePropertyAll(kCtaTextStyle)),
         ),
         cardTheme: CardThemeData(

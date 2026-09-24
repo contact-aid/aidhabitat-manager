@@ -1151,7 +1151,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                     ),
                     elevation: 0,
                   ),
-                  icon: const Text('Démarrer le relevé', style: kCtaTextStyle),
+                  icon: Text('Démarrer le relevé', style: kCtaTextStyle),
                   label: const Icon(LucideIcons.arrowRight, size: 16),
                 ),
               ),

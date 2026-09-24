@@ -1,6 +1,7 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/components/feedback_tab.dart';
+import 'package:aid_habitat_app/components/cta_text_style.dart';
 import 'package:aid_habitat_app/components/beneficiary_header.dart';
 import 'package:aid_habitat_app/services/feedback_activity_service.dart';
 import 'package:aid_habitat_app/services/auth_service.dart';
@@ -12,6 +13,7 @@ import 'package:aid_habitat_app/screens/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class _LayoutAuthService implements AuthService {
   @override
@@ -29,6 +31,36 @@ class _LayoutAuthService implements AuthService {
 }
 
 void main() {
+  testWidgets('CTA uses the former Signaler font variant at 16 px', (
+    tester,
+  ) async {
+    TextStyle? inheritedStyle;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(
+          textTheme: GoogleFonts.quicksandTextTheme(
+            ThemeData.light().textTheme,
+          ),
+        ),
+        home: Material(
+          child: Builder(
+            builder: (context) {
+              inheritedStyle = DefaultTextStyle.of(context).style;
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      ),
+    );
+    expect(kCtaTextStyle.fontFamily, inheritedStyle!.fontFamily);
+    expect(
+      kCtaTextStyle.fontFamilyFallback,
+      inheritedStyle!.fontFamilyFallback,
+    );
+    expect(kCtaTextStyle.fontSize, 16);
+    expect(kCtaTextStyle.fontWeight, FontWeight.w800);
+  });
+
   setUpAll(() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
