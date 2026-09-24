@@ -21,7 +21,14 @@ const definitions = {
 };
 const definition = definitions[entity];
 assert(definition, `Unknown test entity: ${entity}`);
-const mock = createRestMock();
+const mock = createRestMock({ referenceRows: {
+  portails: [
+    { Id: 1, libelle: 'Manuel' },
+    { Id: 2, libelle: 'Électrique' },
+    { Id: 3, libelle: 'Pas de portail' },
+    { Id: 4, libelle: 'Aucun' },
+  ],
+} });
 const nativeFetch = globalThis.fetch;
 let apiOrigin;
 globalThis.fetch = (input, init = {}) => {
@@ -334,6 +341,22 @@ try {
   }
 
   if (entity === 'logement') {
+    await check('a present portal without motorisation resolves the Aucun reference', async () => {
+      const baseline = await read(clientA);
+      assert.equal(baseline.motorisationPortail, '');
+      const values = { veranda: true, terrasse: true, jardin: true, motorisationPortail: 'Aucun' };
+      const baseValues = { veranda: false, terrasse: false, jardin: false, motorisationPortail: '' };
+      expectStatus(await patch(clientA, mutation(values, baseValues)), 200);
+      assert.equal(mock.patches().length, 1);
+      assert.equal(mock.row(entity).veranda, true);
+      assert.equal(mock.row(entity).terrasse, true);
+      assert.equal(mock.row(entity).jardin, true);
+      assert.equal(mock.row(entity).portail_id1, 4);
+      const confirmed = await read(clientA);
+      assert.equal(confirmed.motorisationPortail, 'Aucun');
+      assert.equal(confirmed.portailId, '4');
+    });
+
     await check('legacy null housing checkbox accepts the exposed false baseline', async () => {
       const baseline = await read(clientA);
       assert.equal(baseline.basement, false);

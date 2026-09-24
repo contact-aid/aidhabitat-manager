@@ -63,6 +63,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
   initial[tables.logement] = [{ Id: 301, uuid_source: 'synthetic-housing',
     beneficiaire_id: patientId, beneficiaires_id: 201, commentaire: 'initial',
     observation_accessibilite: 'initial', sous_sol: null, acces_facile_rue: null,
+    veranda: false, terrasse: false, jardin: false, portail_id1: null,
     type_de_logement_id: null, type_de_logement: null,
     app_sync_revision: revision, UpdatedAt: timestamp }];
   const schemas = {
@@ -76,7 +77,9 @@ export function createRestMock({ referenceRows = {} } = {}) {
       aide_a_domicile: 'Checkbox', dependance_particuliere_txt: 'LongText',
       dependances_particulieres_id: 'Number', situation_proprietaire_id1: 'Number' }),
     [tables.logement]: columns({ commentaire: 'LongText', observation_accessibilite: 'LongText',
-      sous_sol: 'Checkbox', acces_facile_rue: 'Checkbox', type_de_logement_id: 'Number' }),
+      sous_sol: 'Checkbox', acces_facile_rue: 'Checkbox', veranda: 'Checkbox',
+      terrasse: 'Checkbox', jardin: 'Checkbox', type_de_logement_id: 'Number',
+      portail_id1: 'Number' }),
     [tables.mobile_note_pages]: columns(Object.fromEntries([
       'uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom',
       'beneficiaire_nom_complet', 'dossier_libelle', 'scope_type', 'scope_id', 'tab_key',
@@ -162,7 +165,15 @@ export function createRestMock({ referenceRows = {} } = {}) {
             assert(Number.isSafeInteger(limit) && limit > 0);
             list = list.slice(offset, offset + limit);
             const fields = url.searchParams.get('fields')?.split(',');
-            if (fields) list = list.map((row) => Object.fromEntries(fields.map((key) => [key, row[key] ?? null])));
+            if (fields) list = list.map((row) => {
+              const relation = tableId === tables.logement && row.portail_id1 != null
+                ? rows[tables.portails].find((item) => item.Id === row.portail_id1)
+                : null;
+              const exposed = relation
+                ? { ...row, portail: { Id: relation.Id, libelle: relation.libelle } }
+                : row;
+              return Object.fromEntries(fields.map((key) => [key, exposed[key] ?? null]));
+            });
             return json({ list, pageInfo: { totalRows, isLastPage: offset + limit >= totalRows } });
           }
           if (method === 'POST') {

@@ -2428,7 +2428,9 @@ const mapHousing = (housingRecord) => {
     cheminementSeuilPorte: toBool(field(housingRecord, 'cheminement_seuil_porte')),
     difficultesCirculationInterieure: toBool(field(housingRecord, 'difficultes_circulation_interieure')),
     porteGarageId: field(housingRecord, 'porte_de_garage')?.id ? String(field(housingRecord, 'porte_de_garage').id) : '',
-    portailId: field(housingRecord, 'portail')?.id ? String(field(housingRecord, 'portail').id) : '',
+    portailId: stringValue(field(housingRecord, 'portail_id1')
+      ?? field(housingRecord, 'portail')?.id
+      ?? field(housingRecord, 'portail')?.Id),
     motorisationPorteGarage: refLabel(field(housingRecord, 'porte_de_garage')),
     motorisationPortail: refLabel(field(housingRecord, 'portail')),
     // Nullable : l'ergo doit pouvoir laisser le champ vide (le validateur
