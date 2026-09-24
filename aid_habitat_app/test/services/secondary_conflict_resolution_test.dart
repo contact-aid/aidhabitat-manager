@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:aid_habitat_app/models/types.dart';
+import 'package:aid_habitat_app/screens/visit_report/bathroom_tab.dart';
 import 'package:aid_habitat_app/services/dossier_repository.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/offline_vault.dart';
@@ -751,6 +752,43 @@ void main() {
     expect(compared.remoteValues, {'projetSouhaitUsage': null});
     await repository.resolveReviewedConflict(compared, keepLocal: false);
     expect((await db.query(_observations)).single['projet_souhait_usage'], '');
+  });
+
+  test('fictitious level rooms populate both sanitary submenus', () async {
+    await repository.updateHousing(_dossier, {
+      'rdc': true,
+      'floor': true,
+      'rdc_rooms_json': jsonEncode(['WC']),
+      'floor_rooms_json': jsonEncode(['Salle de bain']),
+    });
+    var housing = await repository.fetchHousingRaw(_dossier);
+    expect(buildSanitaryLevelSelections(housing, 'WC').map((e) => e.field), [
+      'rdc',
+    ]);
+    expect(
+      buildSanitaryLevelSelections(
+        housing,
+        'Salle de bain',
+      ).map((e) => e.field),
+      ['floor'],
+    );
+
+    await repository.updateHousing(_dossier, {
+      'rdc_rooms_json': jsonEncode(['WC', 'Salle de bain']),
+      'floor_rooms_json': jsonEncode(['Salle de bain', 'WC']),
+    });
+    housing = await repository.fetchHousingRaw(_dossier);
+    expect(buildSanitaryLevelSelections(housing, 'WC').map((e) => e.field), [
+      'rdc',
+      'floor',
+    ]);
+    expect(
+      buildSanitaryLevelSelections(
+        housing,
+        'Salle de bain',
+      ).map((e) => e.field),
+      ['rdc', 'floor'],
+    );
   });
 
   test(
