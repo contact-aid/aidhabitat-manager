@@ -7,6 +7,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../components/beneficiary_badges.dart';
 import '../components/beneficiary_palettes.dart';
 import '../components/brand_colors.dart';
+import '../components/cta_text_style.dart';
 import '../components/soft_transitions.dart';
 import '../models/types.dart';
 import '../services/references_service.dart';
@@ -392,10 +393,19 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
       message: widget.isOnline
           ? 'Actualiser les dossiers de ce profil'
           : 'Connexion Internet requise',
-      child: OutlinedButton.icon(
+      child: ElevatedButton.icon(
         onPressed: widget.isOnline && !widget.isRefreshingDossiers
             ? widget.onRefreshDossiers
             : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF866B9A),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
         icon: widget.isRefreshingDossiers
             ? const SizedBox(
                 width: 18,
@@ -405,6 +415,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
             : const Icon(Icons.refresh, size: 20),
         label: Text(
           widget.isRefreshingDossiers ? 'Actualisation…' : 'Actualiser',
+          style: kCtaTextStyle.copyWith(color: Colors.white),
         ),
       ),
     );

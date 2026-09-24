@@ -1140,18 +1140,21 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                 child: ElevatedButton.icon(
                   onPressed: widget.onStartReport ?? onTap,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: kBrandPurple, // mauve-500
+                    backgroundColor: const Color(0xFF866B9A),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 18,
-                      vertical: 14,
+                      vertical: 17,
                     ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                     elevation: 0,
                   ),
-                  icon: Text('Démarrer le relevé', style: kCtaTextStyle),
+                  icon: Text(
+                    'Démarrer le relevé',
+                    style: kCtaTextStyle.copyWith(color: Colors.white),
+                  ),
                   label: const Icon(LucideIcons.arrowRight, size: 16),
                 ),
               ),

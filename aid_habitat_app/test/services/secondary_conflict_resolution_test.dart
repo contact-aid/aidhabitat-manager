@@ -753,6 +753,41 @@ void main() {
     expect((await db.query(_observations)).single['projet_souhait_usage'], '');
   });
 
+  test(
+    'fictitious WC and bathroom edits retain a reviewed server baseline',
+    () async {
+      await edit(_diagnostic, 1);
+      await conflict(_diagnostic);
+      final server = _child(_diagnostic, n: 9, version: _reviewed);
+      final compared = (await repository.reviewSecondaryConflicts(_dossier, {
+        _diagnostic: server,
+      })).single;
+      await repository.resolveReviewedConflict(compared, keepLocal: false);
+      // A just-resolved row is read from SQLite on reopening. The brief
+      // read-replica guard deliberately rejects a fresh remote pull.
+      expect(await pull(_diagnostic, server), isFalse);
+
+      expect(
+        (await repository.fetchDiagnosticSanitaire(
+          _dossier,
+        ))!.sdbInstances.first.id,
+        'bath-9',
+      );
+      await edit(_diagnostic, 2);
+      final next = await payload(_diagnostic);
+      expect((await operation(_diagnostic))['status'], 'pending');
+      expect(next['concurrency']['expectedUpdatedAt'], _reviewed);
+      expect(
+        next['concurrency']['baseValues']['sdbInstances'],
+        server['sdbInstances'],
+      );
+      expect(
+        next['concurrency']['baseValues']['wcInstances'],
+        server['wcInstances'],
+      );
+    },
+  );
+
   for (final faulty in [
     null,
     '[]',

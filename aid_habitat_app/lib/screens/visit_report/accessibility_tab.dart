@@ -793,10 +793,24 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     final roomsChanged = _kLevelConfigs.any(
       (cfg) => dirtyAtStart.contains(cfg.roomsField),
     );
-    if (roomsChanged) {
+    // Never prune saved bathroom/WC details using a room selection that has
+    // already changed again while the first write was in flight.
+    final latestSnapshot = _buildHousingSaveMap();
+    final roomsStillMatch = _kLevelConfigs.every(
+      (cfg) => latestSnapshot[cfg.roomsField] == nextSnapshot[cfg.roomsField],
+    );
+    if (roomsChanged && roomsStillMatch) {
       await _pruneSanitaryRooms();
     }
-    _dirtyHousingKeys.removeAll(dirtyAtStart);
+    // A second edit may have changed the same field while updateHousing was
+    // awaiting SQLite. Keep that field dirty for the drain loop instead of
+    // silently dropping the newer room selection.
+    final currentSnapshot = _buildHousingSaveMap();
+    for (final key in dirtyAtStart) {
+      if (currentSnapshot[key] == nextSnapshot[key]) {
+        _dirtyHousingKeys.remove(key);
+      }
+    }
     widget.onHousingChanged?.call();
   }
 
