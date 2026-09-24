@@ -741,3 +741,109 @@ public sert encore l'ancien build. La prochaine action requiert une
 confirmation technique de la cible et du mécanisme de déploiement Easypanel,
 puis le déploiement de l'image construite depuis le SHA testé et la recette
 web demandée.
+
+## Reprise du 24 septembre 2026 : publication web contrôlée
+
+L'utilisateur a redéployé les deux services Easypanel en source Docker
+`ghcr.io/contact-aid/aidhabitat-api:latest` et
+`ghcr.io/contact-aid/aidhabitat-web:latest`. Les contrôles publics effectués
+après son action servaient encore l'API `fba6cd094400a69f320e944da13501748467cc63`
+et le web `de12ba34565647263ec2ee495c6a1355d5bf62a1`, build 33. Le
+redéploiement seul ne pouvait donc pas installer le build client 34 : son
+image n'avait pas encore été publiée.
+
+Inspection **en lecture seule** dans Easypanel : malgré leurs noms
+`aidhabitat-api-staging` et `aidhabitat-web-staging`, les domaines
+`https://api.aidhabitat.fr/` et `https://app.aidhabitat.fr/` sont bien associés
+à ces services respectifs. Le déploiement web de l'utilisateur a tiré
+`ghcr.io/contact-aid/aidhabitat-web:latest`. Avant publication, le digest de
+ce tag était
+`sha256:8462a1c3e1317ee50366a95e1c278ff13df68581927c1428febb528c3e26d385` ;
+il reste la référence de retour arrière, avec le manifeste public build 33
+observé à ce moment. Aucun secret de webhook n'est consigné ici.
+
+Le seul changement entre le commit client testé `1fcb1e0` et la tête de
+branche `1ff65dfe8c9f8e013d50b87cc415cb9a3587793c` est ce journal
+(`git diff --name-status 1fcb1e0 1ff65df`). Un nouveau run CI sans
+publication a réussi sur la tête exacte :
+[Build Flutter Web 35970254271](https://github.com/contact-aid/aidhabitat-manager/actions/runs/35970254271),
+deux jobs verts. `npm run release:ci-check -- --branch
+codex/prevent-note-write-on-open --sha
+1ff65dfe8c9f8e013d50b87cc415cb9a3587793c` a réussi. Son artefact
+`aidhabitat-web-1ff65dfe8c9f8e013d50b87cc415cb9a3587793c` passe
+`check-web-release.mjs` : 20 contrôles, build `1.0.0+34`, API
+`https://api.aidhabitat.fr`, empreinte JavaScript
+`5cae56b41852474fc08de18743b4d11d10ea0d61c53eb719a4f5678bcf9cc3f2`.
+
+Le workflow actif a ensuite été relancé sur **le même SHA** avec
+`publish_image=true`, `image_tag=latest`, `deploy_staging=false` et
+`expected_build_number=34` :
+[run de publication 35970884291](https://github.com/contact-aid/aidhabitat-manager/actions/runs/35970884291)
+entièrement vert. Les tags GHCR `:latest` et
+`:1ff65dfe8c9f8e013d50b87cc415cb9a3587793c` ont le **même digest**
+`sha256:85f18f43169cf11f45fe7bdb9d74205314981d369c203c1294a11c828dd7d9f4`.
+L'artefact de ce run passe également 20 contrôles de release ; son
+`main.dart.js` a exactement la même empreinte que celui du run CI précédent.
+
+Le service Easypanel `aidhabitat-web-staging`, associé au domaine de
+production `app.aidhabitat.fr`, a été épinglé sur le **tag SHA immuable**
+`ghcr.io/contact-aid/aidhabitat-web:1ff65dfe8c9f8e013d50b87cc415cb9a3587793c`,
+puis le bouton « Déployer » a été actionné. Easypanel a annoncé
+« Application déployée ». Une lecture fraîche de
+`https://app.aidhabitat.fr/release.json` et de `version.json` confirme
+`1.0.0+34`, le SHA `1ff65df…`, la cible API attendue et l'empreinte
+JavaScript ci-dessus. `node tools/check-web-release.mjs --url
+https://app.aidhabitat.fr --expected-build-number 34 --expected-git-sha
+1ff65dfe8c9f8e013d50b87cc415cb9a3587793c` passe **21 contrôles** ;
+`npm run release:live-check` et `npm run check:critical` réussissent
+(20/20 flux critiques). L'API `/api/health/live` et `/api/health/ready`
+reste au SHA serveur `fba6cd0…`, état sain. Aucune image API nouvelle n'a été
+publiée pendant cette reprise.
+
+La webapp publiée s'ouvre visuellement dans Arc et reste affichée après
+rechargement, sans page blanche. **Anomalie distincte encore présente dans la
+session Coralie de production :** bandeau rouge « Synchronisation en échec ».
+Le panneau Détails, lu sans résolution, montre une opération
+`note_page · note_nocodb-beneficiaire-62_notes_rapides_0`, conflit de note pour
+`notes_rapides`, page 0 (ANDASSE). Ce n'est pas le conflit Plans déjà résolu
+dans la session locale d'audit. Ni la note, ni sa file locale, ni aucun dossier
+réel n'ont été modifiés ; aucune action « Prendre la note du serveur » n'a été
+choisie. Le bandeau persiste après rechargement de cette session.
+
+Le profil Coralie connecté sur `app.aidhabitat.fr` ne voit que sept dossiers
+réels et **pas** `FICTIF DEMONSTRATION Anne-Gaëlle`. Un GET direct sans
+authentification sur `/api/note-pages/nocodb-beneficiaire-86` répond 401.
+L'utilisateur a donc ouvert une fenêtre Admin distincte, sans fermer sa
+session Coralie. L'interface Admin affiche 24 dossiers, dont le dossier
+explicitement fictif `FICTIF DEMONSTRATION Anne-Gaëlle`. Son parcours VAD →
+Plans → Scénario 1 montre le rectangle en haut à droite. Après rechargement
+complet de `app.aidhabitat.fr`, retour au dossier fictif et au scénario 1,
+ce rectangle est toujours visible. Aucun tracé, aucune saisie et aucune
+action de synchronisation n'ont été effectués pendant cette vérification.
+
+Dans les outils réseau de cette session Admin, un GET frais authentifié vers
+`https://api.aidhabitat.fr/api/note-pages/nocodb-beneficiaire-86?_syncRead=…`
+répond **HTTP 200**. La réponse JSON lue en lecture seule contient la note
+`visit_grid`, `tabKey=Plans`, `pageNumber=1`, `planPhase="apres"`, révision
+`027e6063-54d8-44e2-b310-71018b03577c`, dernière mise à jour
+`2026-09-23 15:37:54+00:00`. Cela confirme séparément la persistance côté
+API du scénario après travaux ; l'interface confirme visuellement le
+rectangle après rechargement. Aucun jeton d'authentification n'est consigné
+dans ce journal.
+
+La session Admin conserve toutefois un bandeau rouge « Synchronisation en
+échec » indiquant « Des sauvegardes attendent la reconnexion de leur auteur ».
+Le panneau Détails indique que ces sauvegardes appartiennent à un autre
+compte et sont conservées sur cet appareil. Le bandeau persiste après
+rechargement. Il est distinct de la note Plans vérifiée, mais le critère
+utilisateur **« sans bandeau rouge » n'est pas satisfait**. Aucune action
+« Réessayer », reconnexion, remplacement par la note serveur ou suppression
+de file n'a été déclenchée. ANDASSE et les dossiers réels restent intacts.
+
+**Bilan : pas prêt pour une recette sans anomalie visible.** Le web build 34
+sert le SHA testé, l'application s'ouvre, le scénario fictif reste visible
+après rechargement et l'API renvoie `planPhase="apres"` ; le bandeau rouge
+lié aux sauvegardes d'un autre compte demeure dans les sessions inspectées.
+Le correctif client Plans peut être testé par l'utilisateur sur
+`https://app.aidhabitat.fr`, en tenant compte de cette anomalie de file
+locale. Aucune version iPad/TestFlight n'a été construite ni publiée.
