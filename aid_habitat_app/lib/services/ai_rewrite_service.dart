@@ -26,17 +26,48 @@ class AiRewriteService {
   bool get _usesAppleModel =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
-  Future<bool> isAvailable({bool refresh = false}) {
+  Future<bool> isAvailable({
+    bool refresh = false,
+    String? apiBaseUrl,
+    String? sessionToken,
+  }) async {
     if (kIsWeb) {
-      return web_ai.localAiStatus().then((state) => state['supported'] == true);
+      final state = await web_ai.localAiStatus();
+      return state['supported'] == true;
     }
-    if (!_usesAppleModel) return Future<bool>.value(false);
+    if (!_usesAppleModel) return false;
     if (refresh || _availability == null) {
       _availability = _readNativeAvailability();
     }
-    return _availability!.then(
-      (appleAvailable) => appleAvailable || AppConfig.hasRemoteConfig,
+    if (await _availability!) return true;
+    return _remoteAvailable(apiBaseUrl: apiBaseUrl, sessionToken: sessionToken);
+  }
+
+  Future<bool> _remoteAvailable({
+    String? apiBaseUrl,
+    String? sessionToken,
+  }) async {
+    final apiBase = (apiBaseUrl ?? AppConfig.apiBaseUrl).trim().replaceAll(
+      RegExp(r'/+$'),
+      '',
     );
+    final token = (sessionToken ?? AppConfig.appSessionToken).trim();
+    if (apiBase.isEmpty || token.isEmpty) return false;
+    try {
+      final response = await _client
+          .get(
+            Uri.parse('$apiBase/api/ai/status'),
+            headers: {'X-App-Session': token},
+          )
+          .timeout(const Duration(seconds: 7));
+      if (response.statusCode != 200) return false;
+      final payload = jsonDecode(response.body);
+      return payload is Map &&
+          payload['data'] is Map &&
+          (payload['data'] as Map)['ready'] == true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<bool> needsPreparation() async {

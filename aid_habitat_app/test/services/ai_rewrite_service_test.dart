@@ -100,6 +100,60 @@ void main() {
     expect(await service.isAvailable(), isFalse);
   });
 
+  test('iOS hides rewriting when the API model is unavailable', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeChannel, (_) async => false);
+    final service = AiRewriteService(
+      nativeChannel: nativeChannel,
+      client: MockClient((request) async {
+        expect(request.url.toString(), 'https://example.org/api/ai/status');
+        expect(request.headers['X-App-Session'], 'test');
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'data': {'ready': false},
+          }),
+          200,
+        );
+      }),
+    );
+
+    expect(
+      await service.isAvailable(
+        apiBaseUrl: 'https://example.org',
+        sessionToken: 'test',
+      ),
+      isFalse,
+    );
+  });
+
+  test('iOS shows rewriting when the API model is ready', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(nativeChannel, (_) async => false);
+    final service = AiRewriteService(
+      nativeChannel: nativeChannel,
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'success': true,
+            'data': {'ready': true},
+          }),
+          200,
+        ),
+      ),
+    );
+
+    expect(
+      await service.isAvailable(
+        apiBaseUrl: 'https://example.org',
+        sessionToken: 'test',
+      ),
+      isTrue,
+    );
+  });
+
   test('rewrites on device and restores protected note data', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     late String protectedText;
