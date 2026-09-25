@@ -75,78 +75,86 @@ class BeneficiaryHeader extends StatelessWidget {
       }
     }
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        _buildBackButton(),
-        const SizedBox(width: 16),
-        Expanded(
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: constraints.maxWidth < 1000 ? 1000 : constraints.maxWidth,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // NOM Prénom — Nunito 22px w600, max 380pt avec ellipsis
-              // si très long.
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 380),
-                child: Text(
-                  '${patient.lastName.toUpperCase()} ${patient.firstName}',
-                  style: GoogleFonts.nunito(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.4,
-                    color: const Color(0xFF0E1116),
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: false,
-                ),
-              ),
-              // Fallback "MPA complet" : même si le champ
-              // `nature_accompagnement` est vide, on affiche le badge
-              // avec le défaut.
-              const SizedBox(width: 10),
-              AccompanimentBadge(
-                value: accompanimentLabel.isNotEmpty
-                    ? accompanimentLabel
-                    : 'MPA complet',
-                rawType: dossier.natureAccompagnement.trim().isNotEmpty
-                    ? dossier.natureAccompagnement
-                    : 'complet',
-                large: true,
-              ),
-              if (incomeLabel.isNotEmpty) ...[
-                const SizedBox(width: 6),
-                IncomeCategoryBadge(value: incomeLabel, large: true),
-              ],
-              if (addressLine.isNotEmpty) ...[
-                const SizedBox(width: 12),
-                const Icon(
-                  LucideIcons.mapPin,
-                  size: 18,
-                  color: Color(0xFF8A939D), // ink-400
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    addressLine,
-                    style: GoogleFonts.nunito(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: const Color(0xFF5C6670), // ink-500
+              _buildBackButton(),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    // NOM Prénom — Nunito 22px w600, max 380pt avec ellipsis
+                    // si très long.
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 380),
+                      child: Text(
+                        '${patient.lastName.toUpperCase()} ${patient.firstName}',
+                        style: GoogleFonts.nunito(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: -0.4,
+                          color: const Color(0xFF0E1116),
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                      ),
                     ),
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: false,
-                  ),
+                    // Fallback "MPA complet" : même si le champ
+                    // `nature_accompagnement` est vide, on affiche le badge
+                    // avec le défaut.
+                    const SizedBox(width: 10),
+                    AccompanimentBadge(
+                      value: accompanimentLabel.isNotEmpty
+                          ? accompanimentLabel
+                          : 'MPA complet',
+                      rawType: dossier.natureAccompagnement.trim().isNotEmpty
+                          ? dossier.natureAccompagnement
+                          : 'complet',
+                      large: true,
+                    ),
+                    if (incomeLabel.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      IncomeCategoryBadge(value: incomeLabel, large: true),
+                    ],
+                    if (addressLine.isNotEmpty) ...[
+                      const SizedBox(width: 12),
+                      const Icon(
+                        LucideIcons.mapPin,
+                        size: 18,
+                        color: Color(0xFF8A939D), // ink-400
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          addressLine,
+                          style: GoogleFonts.nunito(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF5C6670), // ink-500
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
+              ),
+              if (anahStatus.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                AnahStatusBadge(status: anahStatus, large: true),
               ],
+              if (trailing != null) ...[const SizedBox(width: 12), trailing!],
             ],
           ),
         ),
-        if (anahStatus.isNotEmpty) ...[
-          const SizedBox(width: 12),
-          AnahStatusBadge(status: anahStatus, large: true),
-        ],
-        if (trailing != null) ...[const SizedBox(width: 12), trailing!],
-      ],
+      ),
     );
   }
 

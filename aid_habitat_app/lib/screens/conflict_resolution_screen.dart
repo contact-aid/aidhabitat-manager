@@ -13,12 +13,14 @@ class ConflictResolutionScreen extends StatefulWidget {
     super.key,
     required this.localDossier,
     required this.onResolved,
+    this.onReviewApplied,
     this.loadReviews,
     this.resolveReview,
   });
 
   final Dossier localDossier;
   final VoidCallback onResolved;
+  final ValueChanged<String>? onReviewApplied;
   final Future<List<SyncConflictReview>> Function()? loadReviews;
   final Future<void> Function(SyncConflictReview, bool)? resolveReview;
 
@@ -85,6 +87,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
         _reviews.remove(review);
         _resolving = false;
       });
+      widget.onReviewApplied?.call(review.entityType);
       if (_reviews.isEmpty) widget.onResolved();
     } catch (_) {
       if (!mounted) return;
@@ -253,7 +256,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
   Widget _value(String title, dynamic value) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+      Text(title, style: const TextStyle(fontSize: 14, color: Colors.grey)),
       SelectableText(
         value == null || value == ''
             ? 'Non renseigne'

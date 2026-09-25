@@ -6,6 +6,7 @@ import '../../models/types.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
 import '../../components/brand_colors.dart';
+import '../../components/cta_text_style.dart';
 import '../../components/confirmation_dialog.dart';
 import '../../components/form_widgets.dart';
 import '../../components/soft_transitions.dart';
@@ -17,6 +18,7 @@ import '../../components/soft_transitions.dart';
 class AccessibilityTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final int conflictRefreshToken;
   final VoidCallback? onHousingChanged;
   final AccessibilityTabController? controller;
 
@@ -37,6 +39,7 @@ class AccessibilityTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.conflictRefreshToken = 0,
     this.onHousingChanged,
     this.controller,
     this.initialSubSection,
@@ -364,6 +367,16 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   @override
   void didUpdateWidget(covariant AccessibilityTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // A server choice updates SQLite, not this tab's cached room lists.
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      _hasPendingSave = false;
+      _dirtyHousingKeys.clear();
+      _loaded = false;
+      // ignore: discarded_futures
+      _load();
+    }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller?._detach(_flushPendingSave);
       widget.controller?._attach(_flushPendingSave, _openLevelsAndAddLevel);
@@ -438,7 +451,11 @@ class _AccessibilityTabState extends State<AccessibilityTab>
       _levelRooms[cfg.field] = _parseRooms(
         row?[cfg.roomsField] as String? ?? '[]',
       );
-      _customRoomCtrls[cfg.field] = TextEditingController();
+      final controller = _customRoomCtrls.putIfAbsent(
+        cfg.field,
+        () => TextEditingController(),
+      );
+      controller.clear();
     }
     _orderedLevels = _kLevelConfigs
         .where((c) => (row?[c.field] as int? ?? 0) == 1)
@@ -776,10 +793,24 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     final roomsChanged = _kLevelConfigs.any(
       (cfg) => dirtyAtStart.contains(cfg.roomsField),
     );
-    if (roomsChanged) {
+    // Never prune saved bathroom/WC details using a room selection that has
+    // already changed again while the first write was in flight.
+    final latestSnapshot = _buildHousingSaveMap();
+    final roomsStillMatch = _kLevelConfigs.every(
+      (cfg) => latestSnapshot[cfg.roomsField] == nextSnapshot[cfg.roomsField],
+    );
+    if (roomsChanged && roomsStillMatch) {
       await _pruneSanitaryRooms();
     }
-    _dirtyHousingKeys.removeAll(dirtyAtStart);
+    // A second edit may have changed the same field while updateHousing was
+    // awaiting SQLite. Keep that field dirty for the drain loop instead of
+    // silently dropping the newer room selection.
+    final currentSnapshot = _buildHousingSaveMap();
+    for (final key in dirtyAtStart) {
+      if (currentSnapshot[key] == nextSnapshot[key]) {
+        _dirtyHousingKeys.remove(key);
+      }
+    }
     widget.onHousingChanged?.call();
   }
 
@@ -909,7 +940,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                         items[i].label,
                         style: TextStyle(
                           // 10 → 12 (demande user 2026-05-13).
-                          fontSize: 12,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: labelColor,
                         ),
@@ -1093,7 +1124,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
             child: Center(
               child: Text(
                 'Aucun niveau disponible.',
-                style: TextStyle(color: Color(0xFF2B323A), fontSize: 13),
+                style: TextStyle(color: Color(0xFF2B323A), fontSize: 14),
               ),
             ),
           ),
@@ -1280,19 +1311,15 @@ class _AccessibilityTabState extends State<AccessibilityTab>
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: const Color(0xFFD8D0DC), width: 1.5),
         ),
-        child: const Row(
+        child: Row(
           mainAxisSize: MainAxisSize.max,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.add, size: 16, color: Color(0xFF554265)),
-            SizedBox(width: 8),
+            const Icon(Icons.add, size: 16, color: Color(0xFF554265)),
+            const SizedBox(width: 8),
             Text(
               'Ajouter un niveau',
-              style: TextStyle(
-                color: Color(0xFF554265),
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-              ),
+              style: kCtaTextStyle.copyWith(color: const Color(0xFF554265)),
             ),
           ],
         ),
@@ -1355,7 +1382,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                     style: TextStyle(
                       color: Color(0xFF554265),
                       fontWeight: FontWeight.w600,
-                      fontSize: 13,
+                      fontSize: 14,
                     ),
                   ),
                 ),
@@ -1685,7 +1712,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: labelColor,
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1711,7 +1738,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                           color: isActive
                               ? Colors.white
                               : const Color(0xFF5C6670),
-                          fontSize: 10,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           height: 1.0,
                         ),
@@ -1768,7 +1795,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                   color: isSelected
                       ? const Color(0xFF3F3451)
                       : const Color(0xFF2B323A),
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1787,7 +1814,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 10,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     height: 1.0,
                   ),
@@ -1850,7 +1877,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.w500,
                       color: Color(0xFF5C6670),
                       height: 1.3,
@@ -1907,7 +1934,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 12,
+                          fontSize: 14,
                           fontWeight: FontWeight.w500,
                           color: Color(0xFF6B7280),
                           height: 1.3,
@@ -2002,7 +2029,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                             child: TextField(
                               controller: ctrl,
                               stylusHandwritingEnabled: true,
-                              style: const TextStyle(fontSize: 12),
+                              style: const TextStyle(fontSize: 14),
                               decoration: InputDecoration(
                                 isDense: true,
                                 contentPadding: const EdgeInsets.symmetric(
@@ -2012,7 +2039,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
                                 hintText: 'Ajouter une pièce',
                                 hintStyle: const TextStyle(
                                   color: Color(0xFF8A939D),
-                                  fontSize: 12,
+                                  fontSize: 14,
                                 ),
                                 filled: true,
                                 fillColor: Colors.white,
@@ -2456,7 +2483,7 @@ class _YearPickerField extends StatelessWidget {
                           duration: const Duration(milliseconds: 180),
                           curve: Curves.easeOut,
                           style: DefaultTextStyle.of(ctx).style.copyWith(
-                            fontSize: 15,
+                            fontSize: 14,
                             fontWeight: FontWeight.w400,
                             color: isSelected
                                 ? Colors.white
@@ -2571,7 +2598,7 @@ class _YearPickerField extends StatelessWidget {
             child: Text(
               warningText!,
               style: const TextStyle(
-                fontSize: 11,
+                fontSize: 14,
                 color: Color(0xFFF59E0B),
                 fontWeight: FontWeight.w600,
               ),

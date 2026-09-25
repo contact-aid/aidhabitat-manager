@@ -30,6 +30,7 @@ import 'retirement_fund_selection.dart' as retirement_fund_selection;
 class BeneficiaryTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final int conflictRefreshToken;
 
   /// Called after each successful save so the parent can re-fetch the
   /// dossier and propagate fresh patient fields (name, city, …) to the
@@ -50,6 +51,7 @@ class BeneficiaryTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.conflictRefreshToken = 0,
     this.onPatientChanged,
     this.onSubSectionChanged,
     this.initialSubSection = 0,
@@ -424,6 +426,15 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   @override
   void didUpdateWidget(covariant BeneficiaryTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // A reviewed patient conflict has replaced the local row. The form's
+      // saved snapshot and observation baseline must follow that decision.
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      _saveRetryTimer?.cancel();
+      _saveRetryTimer = null;
+      _loadFromDossier();
+    }
     // Quand le parent change `initialSubSection` (ex. navigation
     // depuis la popup « Champs manquants »), bascule la sous-section
     // courante. Doit fonctionner même si l'onglet a déjà été visité,
@@ -814,7 +825,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
                       style: TextStyle(
                         // 10 → 12 (demande user 2026-05-13 : « 2px plus
                         // grand »).
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                         color: labelColor,
                       ),
@@ -933,7 +944,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               padding: EdgeInsets.only(top: 8),
               child: Text(
                 'Un GIR sera requis. Une grille AGGIR est disponible dans l’espace Documents.',
-                style: TextStyle(fontSize: 13, color: Color(0xFF554265)),
+                style: TextStyle(fontSize: 14, color: Color(0xFF554265)),
               ),
             ),
         ],
@@ -1791,7 +1802,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               style: TextStyle(
                 color: Color(0xFF554265),
                 fontWeight: FontWeight.w600,
-                fontSize: 13,
+                fontSize: 14,
               ),
             ),
           ],
@@ -2499,7 +2510,7 @@ class _RetirementFundKindTile extends StatelessWidget {
                     Text(
                       subtitle,
                       style: const TextStyle(
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF7A6A86),
                       ),
@@ -2726,7 +2737,7 @@ class _DateOfBirthField extends StatelessWidget {
                           // `decoration`/`decorationColor`, donc un style
                           // ambiant avec underline polluait les cellules).
                           style: DefaultTextStyle.of(ctx).style.copyWith(
-                            fontSize: 15,
+                            fontSize: 14,
                             fontWeight: FontWeight.w400,
                             color: isSelected
                                 ? Colors.white
@@ -2826,7 +2837,7 @@ class _DateOfBirthField extends StatelessWidget {
                           child: Text(
                             l,
                             style: const TextStyle(
-                              fontSize: 12,
+                              fontSize: 14,
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF5C6670),
                             ),
@@ -3008,7 +3019,7 @@ class _RoundCheckRow extends StatelessWidget {
               child: Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 13,
+                  fontSize: 14,
                   color: Color(0xFF2B323A),
                   fontWeight: FontWeight.w500,
                 ),
@@ -3385,7 +3396,7 @@ class _RetirementFundPickerDialogState
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF1E293B),
                       height: 1.15,
@@ -3398,7 +3409,7 @@ class _RetirementFundPickerDialogState
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 10,
+                        fontSize: 14,
                         color: Color(0xFF5C6670),
                         height: 1.15,
                       ),
@@ -3447,7 +3458,7 @@ class _RetirementFundPickerDialogState
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: Color(0xFF1E293B),
                     height: 1.15,

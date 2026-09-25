@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/ai_rewrite_service.dart';
 import '../services/pencil_interaction_service.dart';
@@ -198,6 +199,7 @@ class NotesWidget extends StatefulWidget {
     this.leadingNavWidget,
     this.medicalFlags,
     this.medicalFlagsScopeKey,
+    this.medicalFlagsUserEditRevision = 0,
     this.onMedicalFlagsChanged,
     this.stackedCards = false,
     this.stackedTextFraction,
@@ -353,6 +355,11 @@ class NotesWidget extends StatefulWidget {
   /// ne partagent pas les mêmes coches médicales.
   final String? medicalFlagsScopeKey;
 
+  /// Jeton incrémenté uniquement par un geste utilisateur qui modifie les
+  /// flags. Une nouvelle valeur de [medicalFlags] issue d'une hydratation,
+  /// d'un changement de page/occupant ou d'un pull ne doit pas être republiée.
+  final int medicalFlagsUserEditRevision;
+
   /// Callback émis lorsque la page active change ou après chargement
   /// initial — transmet les flags médicaux stockés pour cette page.
   /// Le parent l'utilise pour rafraîchir l'état des cases à cocher
@@ -430,6 +437,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       dossierId: widget.dossierId,
       scopeType: widget.scopeType,
       scopeId: widget.scopeId,
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
 
@@ -701,6 +709,8 @@ class _NotesWidgetState extends State<NotesWidget> {
     // Désormais : flags GLOBAUX (mêmes valeurs sur toutes les pages),
     // donc le switch ne change rien à l'état des cases parent.
     if (!medicalScopeChanged &&
+        oldWidget.medicalFlagsUserEditRevision !=
+            widget.medicalFlagsUserEditRevision &&
         widget.medicalFlags != null &&
         !_setIntEquals(
           widget.medicalFlags!,
@@ -2037,7 +2047,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       _isVoiceDictating = false;
       _currentPage = page;
       if (!widget.sharedText) {
-        _textController.text = _pageTexts[page] ?? '';
+        _setControllerSilently(_pageTexts[page] ?? '');
       }
       _activeStroke = null;
       _isDirty = false;
@@ -2142,7 +2152,7 @@ class _NotesWidgetState extends State<NotesWidget> {
         ..addAll(nextScopedFlags);
       _totalPages -= 1;
       if (_currentPage >= _totalPages) _currentPage = _totalPages - 1;
-      _textController.text = _pageTexts[_currentPage] ?? '';
+      _setControllerSilently(_pageTexts[_currentPage] ?? '');
       _undoStack.clear();
       _redoStack.clear();
       _isDirty = false;
@@ -2713,7 +2723,7 @@ class _NotesWidgetState extends State<NotesWidget> {
           child: Text(
             '${_currentPage + 1}/${math.max(_totalPages, 1)}',
             style: const TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: kBrandPurple,
               letterSpacing: 0.2,
@@ -2863,7 +2873,7 @@ class _NotesWidgetState extends State<NotesWidget> {
                   child: Text(
                     '${_currentPage + 1}/${math.max(_totalPages, 1)}',
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.4,
                     ),
@@ -2938,7 +2948,7 @@ class _NotesWidgetState extends State<NotesWidget> {
               child: Text(
                 '${_currentPage + 1}/${math.max(_totalPages, 1)}',
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.4,
                 ),
@@ -3175,7 +3185,7 @@ class _NotesWidgetState extends State<NotesWidget> {
           child: DefaultTextStyle(
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 11,
+              fontSize: 14,
               height: 1.32,
               fontFamily: 'monospace',
             ),
@@ -3699,7 +3709,7 @@ class _NotesWidgetState extends State<NotesWidget> {
                 Text(
                   label,
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: disabled ? Color(0xFF8A939D) : Color(0xFF1A1E24),
                   ),
@@ -4323,7 +4333,7 @@ class _AiRewritePreviewDialogState extends State<_AiRewritePreviewDialog> {
             Text(
               label,
               style: const TextStyle(
-                fontSize: 13,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF374151),
               ),
@@ -4426,7 +4436,7 @@ class _AiRewritePreviewDialogState extends State<_AiRewritePreviewDialog> {
               const SizedBox(height: 6),
               const Text(
                 'Relisez et ajustez la proposition avant de remplacer votre note.',
-                style: TextStyle(fontSize: 13, color: Color(0xFF5C6670)),
+                style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
               ),
               const SizedBox(height: 18),
               Expanded(
@@ -4685,7 +4695,7 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
                               Text(
                                 widget.title,
                                 style: const TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),

@@ -120,6 +120,8 @@ void main() {
       var calls = 0;
       var loads = 0;
       var resolved = 0;
+      var applied = 0;
+      String? appliedEntity;
       await tester.pumpWidget(
         MaterialApp(
           home: ConflictResolutionScreen(
@@ -137,6 +139,10 @@ void main() {
             onResolved: () {
               resolved++;
             },
+            onReviewApplied: (entityType) {
+              applied++;
+              appliedEntity = entityType;
+            },
           ),
         ),
       );
@@ -149,6 +155,7 @@ void main() {
       expect(calls, 1);
       expect(loads, 1, reason: 'No reload may race a pending decision');
       expect(resolved, 0);
+      expect(applied, 0);
       await tester.pump();
       expect(
         tester
@@ -162,6 +169,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(calls, 1);
       expect(resolved, 1);
+      expect(applied, 1);
+      expect(appliedEntity, _observations);
       await tester.runAsync(() async {
         expect(
           await db.query('sync_conflict_history'),

@@ -74,10 +74,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Dossier? _lastDossierTreeSelected;
   int _pendingSyncCount = 0;
   bool _isSyncing = false;
+  bool _isRefreshingDossiersManually = false;
   bool _isLoading = true;
   bool _isOffline = false;
   String? _lastSyncError;
   String _activeVisitSection = '';
+  int _conflictRefreshToken = 0;
+  int _housingConflictRefreshToken = 0;
+  int _contextConflictRefreshToken = 0;
+  int _patientConflictRefreshToken = 0;
   // True dès que l'utilisateur a cliqué sur Anah au moins une fois — la
   // WebView est alors maintenue vivante (Offstage) pour préserver la session.
   bool _anahEverVisited = false;
@@ -337,6 +342,39 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _syncEngine.requestFullSync();
   }
 
+  Future<void> _refreshCurrentUserDossiers() async {
+    if (_isRefreshingDossiersManually ||
+        _isOffline ||
+        ConnectivityService().isOffline ||
+        widget.remoteSessionExpired) {
+      return;
+    }
+    setState(() => _isRefreshingDossiersManually = true);
+    try {
+      final sessionReady = await _authService.resumePendingRemoteSession();
+      if (!sessionReady) throw StateError('Session distante indisponible');
+      if (!mounted || _isOffline || ConnectivityService().isOffline) return;
+      // GET /api/dossiers is scoped by the authenticated server session:
+      // only ADMIN receives every dossier; other profiles receive their own.
+      final refreshed = await _dataService.refreshDossierRecordsFromRemote();
+      if (!refreshed) throw StateError('Actualisation distante impossible');
+      await _refreshDossiers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Dossiers actualisés.')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Actualisation impossible. Vérifiez la connexion.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isRefreshingDossiersManually = false);
+    }
+  }
+
   Future<void> _retrySyncOrReview() async {
     try {
       final failure = await _syncEngine.inspectTopFailure();
@@ -490,15 +528,38 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
       return;
     }
+    final reviewedEntities = <String>{};
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (ctx) => ConflictResolutionScreen(
           localDossier: dossier,
           onResolved: () => Navigator.of(ctx).pop(),
+          onReviewApplied: reviewedEntities.add,
         ),
       ),
     );
-    if (mounted) _handleSyncNow();
+    if (!mounted) return;
+    if (reviewedEntities.isNotEmpty) {
+      final selected = _selectedDossier;
+      final fresh = selected == null
+          ? null
+          : await _dataService.fetchDossierById(selected.id);
+      if (!mounted) return;
+      setState(() {
+        if (fresh != null) _selectedDossier = fresh;
+        _conflictRefreshToken += 1;
+        if (reviewedEntities.contains('housing')) {
+          _housingConflictRefreshToken += 1;
+        }
+        if (reviewedEntities.contains('contexte_de_vie')) {
+          _contextConflictRefreshToken += 1;
+        }
+        if (reviewedEntities.contains('patient')) {
+          _patientConflictRefreshToken += 1;
+        }
+      });
+    }
+    _handleSyncNow();
   }
 
   @override
@@ -660,7 +721,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 'conservées.',
                 style: TextStyle(
                   color: Color(0xFF5B4668),
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -699,7 +760,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     'Synchronisation en échec',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -708,7 +769,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     _lastSyncError ?? '',
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.w400,
                     ),
                   ),
@@ -911,6 +972,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (_activeView == 'visit_report' && _selectedDossier != null) {
       return VisitReportScreen(
         dossier: _selectedDossier!,
+        conflictRefreshToken: _conflictRefreshToken,
+        housingConflictRefreshToken: _housingConflictRefreshToken,
+        contextConflictRefreshToken: _contextConflictRefreshToken,
+        patientConflictRefreshToken: _patientConflictRefreshToken,
         onContextChanged: (section) {
           if (!mounted || section == _activeVisitSection) return;
           setState(() => _activeVisitSection = section);
@@ -979,6 +1044,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         return DossiersListScreen(
           dossiers: _dossiers,
           onSelectDossier: _handleSelectDossier,
+          onRefreshDossiers: _refreshCurrentUserDossiers,
+          isOnline: !_isOffline && !widget.remoteSessionExpired,
+          isRefreshingDossiers: _isRefreshingDossiersManually,
         );
       case 'wiki':
         return const WikiScreen();
@@ -1314,7 +1382,7 @@ class _FailingOpCard extends StatelessWidget {
                 child: Text(
                   '$attemptCount tentative${attemptCount == "1" ? "" : "s"}',
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF7F1D1D),
                   ),
@@ -1327,7 +1395,7 @@ class _FailingOpCard extends StatelessWidget {
             Text(
               'ID : $entityLocalId',
               style: const TextStyle(
-                fontSize: 11,
+                fontSize: 14,
                 fontFamily: 'monospace',
                 color: Color(0xFF991B1B),
               ),
@@ -1337,7 +1405,7 @@ class _FailingOpCard extends StatelessWidget {
           SelectableText(
             lastError,
             maxLines: 4,
-            style: const TextStyle(fontSize: 12, color: Color(0xFF7F1D1D)),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF7F1D1D)),
           ),
           const SizedBox(height: 10),
           Row(

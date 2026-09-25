@@ -33,6 +33,8 @@ bash "$script_dir/test_safely.sh" \
   test/services/agent2_visit_recommendations_wiki_remap_test.dart \
   test/services/sync_conflict_resolution_test.dart \
   test/services/sync_mutation_test.dart \
+  test/services/note_read_only_hydration_test.dart \
+  test/services/note_sync_transport_test.dart \
   test/services/dossier_mutation_baseline_test.dart \
   test/services/dossier_pending_pull_test.dart \
   test/services/dossier_secondary_conflict_preservation_test.dart \
@@ -43,11 +45,13 @@ bash "$script_dir/test_safely.sh" \
   test/services/document_revision_save_test.dart \
   test/services/document_remote_revision_test.dart \
   test/services/document_imported_upload_test.dart \
+  test/services/aggir_document_test.dart \
   test/services/document_page_save_test.dart \
   test/services/image_rotation_worker_test.dart \
   test/services/visit_date_time_test.dart \
   test/screens/database_unavailable_screen_test.dart \
   test/screens/agent3_sync_ownership_review_screen_test.dart \
+  test/screens/dossier_note_read_only_test.dart \
   test/screens/visit_report/recommendations_gestures_test.dart \
   test/screens/document_preview_ink_test.dart \
   test/screens/document_preview_revision_test.dart \

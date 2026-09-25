@@ -42,6 +42,10 @@ export function createRestMock({ referenceRows = {} } = {}) {
   const initial = Object.fromEntries(Object.values(tables).map((id) => [id, []]));
   initial[tables.ergos] = members;
   initial[tables.dependances] = [{ Id: 901, libelle: 'Canne' }];
+  initial[tables.situations] = [
+    { Id: 601, libelle: 'Célibataire' },
+    { Id: 602, libelle: 'En concubinage' },
+  ];
   for (const [entity, records] of Object.entries(referenceRows)) initial[tables[entity]] = structuredClone(records);
   initial[tables.types] = [{ Id: 801, libelle: 'Maison' }, { Id: 802, libelle: 'Appartement' }];
   initial[tables.dossier] = [{ Id: 101, uuid_source: dossierId, patient_id: patientId,
@@ -54,12 +58,14 @@ export function createRestMock({ referenceRows = {} } = {}) {
     beneficiaire_apa: null, reconnaissance_invalidite_mdph: null, aide_a_domicile: false,
     dependance_particuliere_txt: 'Aucune',
     dependances_particulieres_id: null,
+    situation_proprietaire_id1: null,
     app_sync_revision: revision, CreatedAt: timestamp, UpdatedAt: timestamp }];
   initial[tables.logement] = [{ Id: 301, uuid_source: 'synthetic-housing',
     beneficiaire_id: patientId, beneficiaires_id: 201, commentaire: 'initial',
     observation_accessibilite: 'initial', sous_sol: null, acces_facile_rue: null,
+    veranda: false, terrasse: false, jardin: false, portail_id1: null,
     type_de_logement_id: null, type_de_logement: null,
-    app_sync_revision: revision, UpdatedAt: timestamp }];
+    app_sync_revision: revision, CreatedAt: timestamp, UpdatedAt: timestamp }];
   const schemas = {
     [tables.dossier]: columns({ compte_anah: 'SingleLineText', nature_accompagnement: 'SingleLineText',
       beneficiaire_prepare: 'Checkbox', visit_date: 'Date', status: 'SingleLineText' }),
@@ -69,9 +75,11 @@ export function createRestMock({ referenceRows = {} } = {}) {
       date_naissance_monsieur: 'Date', date_naissance_madame: 'Date',
       beneficiaire_apa: 'Checkbox', reconnaissance_invalidite_mdph: 'Checkbox',
       aide_a_domicile: 'Checkbox', dependance_particuliere_txt: 'LongText',
-      dependances_particulieres_id: 'Number' }),
+      dependances_particulieres_id: 'Number', situation_proprietaire_id1: 'Number' }),
     [tables.logement]: columns({ commentaire: 'LongText', observation_accessibilite: 'LongText',
-      sous_sol: 'Checkbox', acces_facile_rue: 'Checkbox', type_de_logement_id: 'Number' }),
+      sous_sol: 'Checkbox', acces_facile_rue: 'Checkbox', veranda: 'Checkbox',
+      terrasse: 'Checkbox', jardin: 'Checkbox', type_de_logement_id: 'Number',
+      portail_id1: 'Number' }),
     [tables.mobile_note_pages]: columns(Object.fromEntries([
       'uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom',
       'beneficiaire_nom_complet', 'dossier_libelle', 'scope_type', 'scope_id', 'tab_key',
@@ -103,13 +111,15 @@ export function createRestMock({ referenceRows = {} } = {}) {
     }).every(Boolean);
   };
 
+  let missingUpdatedAtOnWrite = false;
   return {
     calls, violations, schemas,
     row: (entity) => rows[tables[entity]][0],
     rows: (entity) => rows[tables[entity]],
     removeHousing() { rows[tables.logement] = []; },
     patches: () => calls.filter((call) => call.method === 'PATCH'),
-    reset() { rows = structuredClone(initial); calls.length = 0; race = null; loseNextResponse = false; },
+    reset() { rows = structuredClone(initial); calls.length = 0; race = null; loseNextResponse = false; missingUpdatedAtOnWrite = false; },
+    leaveUpdatedAtNullOnWrite() { missingUpdatedAtOnWrite = true; },
     loseNextResponse() { loseNextResponse = true; },
     raceNextTwoPatches() {
       let release;
@@ -157,7 +167,15 @@ export function createRestMock({ referenceRows = {} } = {}) {
             assert(Number.isSafeInteger(limit) && limit > 0);
             list = list.slice(offset, offset + limit);
             const fields = url.searchParams.get('fields')?.split(',');
-            if (fields) list = list.map((row) => Object.fromEntries(fields.map((key) => [key, row[key] ?? null])));
+            if (fields) list = list.map((row) => {
+              const relation = tableId === tables.logement && row.portail_id1 != null
+                ? rows[tables.portails].find((item) => item.Id === row.portail_id1)
+                : null;
+              const exposed = relation
+                ? { ...row, portail: { Id: relation.Id, libelle: relation.libelle } }
+                : row;
+              return Object.fromEntries(fields.map((key) => [key, exposed[key] ?? null]));
+            });
             return json({ list, pageInfo: { totalRows, isLastPage: offset + limit >= totalRows } });
           }
           if (method === 'POST') {
@@ -212,7 +230,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
           const matched = rows[tableId].filter((row) => matches(where, row));
           call.matched = matched.length;
           for (const row of matched) {
-            Object.assign(row, call.body, { UpdatedAt: '2026-09-02T10:00:00.000Z' });
+            Object.assign(row, call.body, { UpdatedAt: missingUpdatedAtOnWrite ? null : '2026-09-02T10:00:00.000Z' });
           }
           if (loseNextResponse) { loseNextResponse = false; throw new Error('SIMULATED_RESPONSE_LOST_AFTER_COMMIT'); }
           return json({ count: matched.length });

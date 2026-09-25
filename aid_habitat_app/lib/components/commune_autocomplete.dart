@@ -161,7 +161,7 @@ class _CommuneAutocompleteState extends State<CommuneAutocomplete> {
                             child: Text(
                               c.zipCode,
                               style: const TextStyle(
-                                fontSize: 12,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w700,
                                 color: Color(0xFF554265),
                               ),

@@ -102,14 +102,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 400;
     return Scaffold(
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 520),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(32.0),
+            padding: EdgeInsets.all(compact ? 12 : 32),
             child: Container(
-              padding: const EdgeInsets.all(32),
+              padding: EdgeInsets.all(compact ? 20 : 32),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),

@@ -9,6 +9,7 @@ import '../components/beneficiary_badges.dart'
     show formatAccompanimentType, IncomeCategoryBadge;
 import '../components/beneficiary_palettes.dart';
 import '../components/brand_colors.dart';
+import '../components/cta_text_style.dart';
 import '../components/soft_transitions.dart';
 import '../models/types.dart';
 import '../services/references_service.dart';
@@ -271,7 +272,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             dateLabelUpper,
             style: const TextStyle(
               // Bump 2026-05-13 : 11→13, w600→w700.
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               letterSpacing: 1.5,
               color: kBrandPurple, // mauve-500
@@ -305,14 +306,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // ---------- Prochaine visite banner (full width) ----------
           // Avec temps de route depuis Aid'Habitat (16 rue Léo Lagrange,
           // Chartres-de-Bretagne) — calculé async via OSRM.
-          _NextVisitBanner(
-            nextVisit: nextVisit,
-            onTap: nextVisit == null
-                ? null
-                : () => onSelectDossier(nextVisit.dossier),
-            onStartReport: nextVisit == null
-                ? null
-                : () => (onStartReport ?? onSelectDossier)(nextVisit.dossier),
+          LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: constraints.maxWidth < 1000
+                    ? 1000
+                    : constraints.maxWidth,
+                child: _NextVisitBanner(
+                  nextVisit: nextVisit,
+                  onTap: nextVisit == null
+                      ? null
+                      : () => onSelectDossier(nextVisit.dossier),
+                  onStartReport: nextVisit == null
+                      ? null
+                      : () => (onStartReport ?? onSelectDossier)(
+                          nextVisit.dossier,
+                        ),
+                ),
+              ),
+            ),
           ),
           const SizedBox(height: 24),
 
@@ -579,7 +592,7 @@ class _RecentDossierRowState extends State<_RecentDossierRow> {
                               visitTimeHighlight,
                               style: const TextStyle(
                                 // Bump 2026-05-13 : 13→15, w700→w800.
-                                fontSize: 15,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white,
                                 letterSpacing: 0.3,
@@ -843,7 +856,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                       'AGENDA',
                       style: TextStyle(
                         // Bump 2026-05-13 : 11→13, w600→w700.
-                        fontSize: 13,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.5,
                         color: Color(0xFF554265), // mauve-700
@@ -867,7 +880,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                         'PROCHAINE VISITE',
                         style: TextStyle(
                           // Bump 2026-05-13 : 11→13, w600→w700.
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.5,
                           color: kBrandPurple, // mauve-500
@@ -890,7 +903,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                         'Tout est à jour côté agenda.',
                         style: TextStyle(
                           // Bump 2026-05-13 : 13→15, ajout w600.
-                          fontSize: 15,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF5C6670), // ink-500
                         ),
@@ -983,7 +996,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                         dayBadgeLabel,
                         style: const TextStyle(
                           // Bump 2026-05-13 : 11→13, w600→w700.
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.5,
                           color: Color(0xFF554265), // mauve-700
@@ -1037,7 +1050,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                           'PROCHAINE VISITE',
                           style: TextStyle(
                             // Bump 2026-05-13 : 11→13, w600→w700.
-                            fontSize: 13,
+                            fontSize: 14,
                             fontWeight: FontWeight.w700,
                             letterSpacing: 1.5,
                             color: kBrandPurple, // mauve-500
@@ -1082,7 +1095,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           // Bump 2026-05-13 : 13→15, ajout w600.
-                                          fontSize: 15,
+                                          fontSize: 14,
                                           fontWeight: FontWeight.w600,
                                           color: Color(0xFF5C6670),
                                         ),
@@ -1104,7 +1117,7 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                                       phone,
                                       style: const TextStyle(
                                         // Bump 2026-05-13 : 13→15, ajout w600.
-                                        fontSize: 15,
+                                        fontSize: 14,
                                         fontWeight: FontWeight.w600,
                                         color: Color(0xFF5C6670),
                                       ),
@@ -1127,24 +1140,20 @@ class _NextVisitBannerState extends State<_NextVisitBanner> {
                 child: ElevatedButton.icon(
                   onPressed: widget.onStartReport ?? onTap,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: kBrandPurple, // mauve-500
+                    backgroundColor: const Color(0xFF866B9A),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 18,
-                      vertical: 14,
+                      vertical: 17,
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(999),
                     ),
                     elevation: 0,
                   ),
-                  icon: const Text(
+                  icon: Text(
                     'Démarrer le relevé',
-                    style: TextStyle(
-                      // Bump 2026-05-13 : 14→16, w600→w700.
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: kCtaTextStyle.copyWith(color: Colors.white),
                   ),
                   label: const Icon(LucideIcons.arrowRight, size: 16),
                 ),
@@ -1495,7 +1504,7 @@ class _TravelOverline extends StatelessWidget {
                 'Calcul du trajet…',
                 style: TextStyle(
                   // Bump 2026-05-13 : 11.5→13.5, ajout w600.
-                  fontSize: 13.5,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF8A939D),
                   fontStyle: FontStyle.italic,
@@ -1507,7 +1516,7 @@ class _TravelOverline extends StatelessWidget {
             'Trajet indisponible',
             style: TextStyle(
               // Bump 2026-05-13 : 11.5→13.5, w600→w700.
-              fontSize: 13.5,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: Color(0xFF8A939D),
               fontStyle: FontStyle.italic,
@@ -1636,7 +1645,7 @@ class _PendingReportsPanel extends StatelessWidget {
                       'À RELANCER',
                       style: TextStyle(
                         // Bump 2026-05-13 : 10→12, w600→w700.
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.2,
                         color: Color(0xFF8A939D), // ink-400
@@ -1662,11 +1671,7 @@ class _PendingReportsPanel extends StatelessWidget {
                   onPressed: onSeeAll,
                   style: TextButton.styleFrom(
                     foregroundColor: const Color(0xFF2B323A), // ink-700
-                    textStyle: const TextStyle(
-                      // Bump 2026-05-13 : 12→14, w500→w600.
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    textStyle: kCtaTextStyle,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 4,
@@ -1966,7 +1971,7 @@ class _WeekAgendaPanel extends StatelessWidget {
                       'CETTE SEMAINE',
                       style: TextStyle(
                         // Bump 2026-05-13 : 10→12, w600→w700.
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 1.2,
                         color: Color(0xFF8A939D), // ink-400
@@ -1991,11 +1996,7 @@ class _WeekAgendaPanel extends StatelessWidget {
                   onPressed: onSeeAll,
                   style: TextButton.styleFrom(
                     foregroundColor: const Color(0xFF2B323A), // ink-700
-                    textStyle: const TextStyle(
-                      // Bump 2026-05-13 : 12→14, w500→w600.
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    textStyle: kCtaTextStyle,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 4,
@@ -2117,7 +2118,7 @@ class _AgendaRow extends StatelessWidget {
                       monthLabel,
                       style: TextStyle(
                         // Bump 2026-05-13 : 10→12, w600→w700 / w400→w600.
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: isHighlighted
                             ? FontWeight.w700
                             : FontWeight.w600,
@@ -2137,7 +2138,7 @@ class _AgendaRow extends StatelessWidget {
                       '${p.firstName} ${p.lastName}'.trim(),
                       style: const TextStyle(
                         // Bump 2026-05-13 : 13→15, w500→w600.
-                        fontSize: 15,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF0E1116),
                       ),

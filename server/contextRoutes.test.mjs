@@ -3,6 +3,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { registerContextRoutes } from './contextRoutes.mjs';
 import { contextRecordToSections, contextServerReference, contextSectionsToDatabaseFields } from './contextGuardedSync.mjs';
+import { AUTONOMY_ITEMS } from '../shared/autonomyContract.js';
 
 function fixture({ enabled = true, allowed = true, absent = false, creationReady = false } = {}) {
   const routes = new Map();
@@ -107,4 +108,26 @@ test('context creation requires its own explicit preparation gate', async () => 
     assert.equal(result.statusCode, creationReady ? 200 : 503);
     assert.equal(f.writes(), creationReady ? 1 : 0);
   }
+});
+
+test('partial autonomy selection keeps the explicit incomplete state on create and replay', async () => {
+  const f = fixture({ absent: true, creationReady: true });
+  const checklist = AUTONOMY_ITEMS.map((name, index) => ({ name, checked: index === 0 }));
+  const empty = AUTONOMY_ITEMS.map((name) => ({ name, checked: false }));
+  const autonomy = {
+    done: false,
+    checklist,
+    occupants: [{
+      medical: { pathology: '', followUp: '', sensory: '', heightCm: '', weightKg: '' },
+      autonomyDone: false,
+      autonomy: checklist,
+      attention: empty,
+      humanHelp: empty,
+    }],
+  };
+  const body = { concurrency: f.guard(), updates: { autonomy } };
+  assert.equal((await f.request('PUT', body)).statusCode, 200);
+  assert.equal((await f.request('PUT', body)).statusCode, 200);
+  assert.equal(f.writes(), 1);
+  assert.equal(contextRecordToSections(f.row()).autonomy.done, false);
 });

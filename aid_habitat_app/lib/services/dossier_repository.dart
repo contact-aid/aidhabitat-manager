@@ -974,13 +974,8 @@ class DossierRepository {
                 existingRows.first['sync_state'] as String,
               );
 
-        // NOTE 2026-05-07 : ce chemin LEGACY n'est plus appelé (cf.
-        // commentaire de la fonction). Le chemin courant est
-        // `mergeRemoteDossierPayloads` qui a son propre LWW. Si on
-        // réactive cette fonction un jour, ajouter ici la stratégie
-        // LWW (comparer remote_updated_at) — actuellement le modèle
-        // `Dossier` Flutter n'expose pas l'updated_at, donc skip
-        // simple sur `pendingSync` pour rester safe.
+        // Chemin legacy : comme le merge principal, il garde une saisie
+        // locale non acquittée quelle que soit la date du serveur.
         if (existingRows.isNotEmpty && existingSyncState != SyncState.synced) {
           continue;
         }
@@ -1080,13 +1075,18 @@ class DossierRepository {
 
     await db.transaction((txn) async {
       // A newer remote snapshot is not an acknowledgement of a local write.
-      // Keep the whole dossier bundle (including its concurrency baseline)
-      // while a real mutation is outstanding, even if sync_state is stale.
+      // Protect the whole bundle when an operation is outstanding OR a local
+      // row still says unsynced, including if its operation is missing.
       // Only identifiers are loaded; queued PDFs/JSON payloads stay on disk.
       final protectedBundles = await txn.rawQuery('''
         SELECT d.local_id, d.patient_local_id, d.housing_local_id
         FROM dossiers AS d
-        WHERE EXISTS (
+        LEFT JOIN patients AS p ON p.local_id = d.patient_local_id
+        LEFT JOIN housings AS h ON h.local_id = d.housing_local_id
+        WHERE d.sync_state != 'synced'
+          OR (p.sync_state IS NOT NULL AND p.sync_state != 'synced')
+          OR (h.sync_state IS NOT NULL AND h.sync_state != 'synced')
+          OR EXISTS (
           SELECT 1 FROM sync_operations AS op
           WHERE op.status IN ('pending', 'running', 'failed', 'conflict')
             AND (
@@ -1147,37 +1147,10 @@ class DossierRepository {
                 existingDossier.first['sync_state'] as String,
               );
 
-        // Pré-calcule "remote strictement plus récent que local" — utilisé
-        // par les gardes 1 et 2 ci-dessous pour échapper au skip aveugle
-        // sur `pendingSync`. Fix 2026-05-07 (parité avec note_repository
-        // et document_repository) : avant ce fix, dès qu'une op
-        // `pendingSync` orpheline existait sur le dossier/patient/housing,
-        // toute mise à jour cross-device était bloquée indéfiniment —
-        // l'utilisateur ne voyait JAMAIS les modifs faites sur l'autre
-        // device tant qu'il n'avait pas resolu l'op.
-        //
-        // This recovery now applies only to orphaned states: bundles with
-        // actual outstanding operations were excluded above. Updating their
-        // remote_updated_at here would bypass the next push's version check.
-        bool remoteIsStrictlyNewer = false;
-        final remoteUpdatedAtForLww = _extractWorkspaceUpdatedAt(raw);
-        if (remoteUpdatedAtForLww != null && existingDossier.isNotEmpty) {
-          final localWorkspaceUpdated =
-              existingDossier.first['workspace_updated_at'] as String?;
-          remoteIsStrictlyNewer =
-              localWorkspaceUpdated == null ||
-              localWorkspaceUpdated.isEmpty ||
-              _isRemoteTimestampNewer(
-                remoteUpdatedAtForLww,
-                localWorkspaceUpdated,
-              );
-        }
-
         if (existingDossier.isNotEmpty &&
-            existingSyncState != SyncState.synced &&
-            !remoteIsStrictlyNewer) {
-          // User has unsync'd local edits ET le remote n'est pas plus
-          // récent → on préserve la version locale.
+            existingSyncState != SyncState.synced) {
+          // Un horodatage distant ne prouve pas que la saisie locale a été
+          // publiée. La conserver même si la file d'opérations est absente.
           continue;
         }
 
@@ -1190,8 +1163,7 @@ class DossierRepository {
         // serveur renvoyait l'ancien nom (eventual consistency) et le
         // merge l'écrivait par-dessus le nouveau nom local.
         //
-        // 2026-05-07 : LWW également appliqué ici (cf. garde 1).
-        if (existingDossier.isNotEmpty && !remoteIsStrictlyNewer) {
+        if (existingDossier.isNotEmpty) {
           final patientLocalIdExisting =
               existingDossier.first['patient_local_id'] as String?;
           final housingLocalIdExisting =
@@ -1436,15 +1408,6 @@ class DossierRepository {
       return remoteValue.compareTo(localValue) < 0;
     }
     return remote.isBefore(local);
-  }
-
-  bool _isRemoteTimestampNewer(String remoteValue, String localValue) {
-    final remote = DateTime.tryParse(remoteValue);
-    final local = DateTime.tryParse(localValue);
-    if (remote == null || local == null) {
-      return remoteValue.compareTo(localValue) > 0;
-    }
-    return remote.isAfter(local);
   }
 
   Future<void> _mergeRemoteContexteDeVie({
@@ -4092,6 +4055,130 @@ class DossierRepository {
       remoteRevision: snapshot['revision']?.toString(),
       remoteSnapshotExists: snapshot['snapshotExists'] == true,
     );
+  }
+
+  /// Resolve a publication revision conflict using the edit times of the
+  /// local list and the server snapshot. The local drafts stay local when the
+  /// server version wins.
+  Future<bool> resolveVisitRecommendationsByLatestEdit(
+    String dossierId,
+    Map<String, dynamic> snapshot,
+  ) async {
+    final remoteAt = DateTime.tryParse(snapshot['updatedAt']?.toString() ?? '');
+    final remoteRevision = snapshot['revision']?.toString();
+    final remoteItems = (snapshot['items'] as List?)
+        ?.whereType<Map>()
+        .map((item) => item.cast<String, dynamic>())
+        .toList();
+    if (remoteAt == null ||
+        remoteItems == null ||
+        remoteRevision == null ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        ).hasMatch(remoteRevision)) {
+      return false;
+    }
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'visit_recommendations',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      final operations = await txn.query(
+        'sync_operations',
+        where:
+            "entity_type = 'visit_recommendations' AND entity_local_id = ? AND status = 'conflict'",
+        whereArgs: [dossierId],
+        limit: 2,
+      );
+      if (rows.length != 1 || operations.length != 1) return false;
+      final localAt = DateTime.tryParse(
+        rows.single['updated_at']?.toString() ?? '',
+      );
+      if (localAt == null || localAt.isAtSameMomentAs(remoteAt)) return false;
+      final op = operations.single;
+      final now = DateTime.now().toIso8601String();
+      if (localAt.isAfter(remoteAt)) {
+        final payload =
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    op['payload_json'] as String,
+                  ),
+                )
+                as Map<String, dynamic>;
+        final envelope = (payload['envelope'] as Map?)?.cast<String, dynamic>();
+        if (envelope == null || envelope['items'] is! List) return false;
+        final writeId = newSyncWriteId();
+        payload
+          ..remove('conflict')
+          ..['envelope'] = {
+            ...envelope,
+            'writeId': writeId,
+            'expectedRevision': remoteRevision,
+          };
+        await txn.update(
+          'sync_operations',
+          {
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+            'status': 'pending',
+            'attempt_count': 0,
+            'last_error': null,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [op['id']],
+        );
+        await txn.update(
+          'visit_recommendations',
+          {
+            'remote_revision': remoteRevision,
+            'remote_snapshot_exists': 1,
+            'sync_state': SyncState.pendingSync.name,
+          },
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      } else {
+        final localItems =
+            (jsonDecode(rows.single['items_json'] as String) as List)
+                .whereType<Map>()
+                .map((item) => item.cast<String, dynamic>())
+                .toList();
+        final merged = mergePublishedRecommendationsWithLocalDrafts(
+          remotePublishedItems: remoteItems,
+          localItems: localItems,
+        );
+        await txn.update(
+          'sync_operations',
+          {'status': 'completed', 'last_error': null, 'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [op['id']],
+        );
+        await txn.update(
+          'visit_recommendations',
+          {
+            'items_json': jsonEncode(merged),
+            'remote_revision': remoteRevision,
+            'remote_snapshot_exists': 1,
+            'sync_state':
+                merged.any(
+                  (item) => (item['wikiItemId']?.toString() ?? '').isEmpty,
+                )
+                ? SyncState.pendingSync.name
+                : SyncState.synced.name,
+            'updated_at': snapshot['updatedAt'],
+          },
+          where: 'dossier_local_id = ?',
+          whereArgs: [dossierId],
+        );
+      }
+      return true;
+    });
   }
 
   Future<bool> mergeRemoteVisitRecommendationsPayload(

@@ -63,3 +63,14 @@ test('known JSON arrays ignore formatting but preserve order and all values', ()
   assert(!equals('text', '[1, 2]', '[1,2]'));
   assert(!equals('occupants_json', null, '[]'));
 });
+
+test('level rooms ignore display order but retain counts and distinct text', () => {
+  const left = JSON.stringify({ basement: ['WC', 'Salle de bain', 'Salle de bain'], rdc: [] });
+  const reordered = JSON.stringify({ rdc: [], basement: ['Salle de bain', 'WC', 'Salle de bain'] });
+  const fewer = JSON.stringify({ basement: ['WC', 'Salle de bain'], rdc: [] });
+  assert(equals('rooms_breakdown_json', left, reordered));
+  assert(!equals('rooms_breakdown_json', left, fewer));
+  assert(equals('description_sous_sol', 'WC, Salle de bain ²', 'Salle de bain ², WC'));
+  assert(!equals('description_sous_sol', 'WC, Salle de bain ²', 'WC, Salle de bain'));
+  assert(!equals('description_sous_sol', 'entrée, sortie', 'sortie, entrée'));
+});

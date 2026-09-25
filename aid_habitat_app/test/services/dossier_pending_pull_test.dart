@@ -121,11 +121,11 @@ void main() {
   );
 
   test(
-    'a newer remote value still repairs an orphaned pending state',
+    'a newer remote value cannot replace an unacknowledged local patient edit',
     () async {
       await db.update(
         'patients',
-        {'sync_state': 'pendingSync'},
+        {'first_name': 'Local edit', 'sync_state': 'pendingSync'},
         where: 'local_id = ?',
         whereArgs: ['patient-one'],
       );
@@ -135,9 +135,30 @@ void main() {
       ]);
       expect(
         (await row('patients', 'patient-one'))['first_name'],
-        'Remote new',
+        'Local edit',
       );
-      expect((await row('patients', 'patient-one'))['sync_state'], 'synced');
+      expect(
+        (await row('patients', 'patient-one'))['sync_state'],
+        'pendingSync',
+      );
+      expect((await row('patients', 'patient-two'))['first_name'], 'Original');
+    },
+  );
+
+  test(
+    'a newer remote value cannot replace an unacknowledged local dossier edit',
+    () async {
+      await db.update(
+        'dossiers',
+        {'status': 'Local status', 'sync_state': 'pendingSync'},
+        where: 'local_id = ?',
+        whereArgs: ['one'],
+      );
+      await repository.mergeRemoteDossierPayloads([
+        _remote('one', newer: true),
+      ]);
+      expect((await row('dossiers', 'one'))['status'], 'Local status');
+      expect((await row('dossiers', 'one'))['sync_state'], 'pendingSync');
     },
   );
 
@@ -197,6 +218,28 @@ void main() {
         ),
         isEmpty,
       );
+    },
+  );
+
+  test(
+    'an absent remote dossier preserves an unsynced patient and its bundle',
+    () async {
+      await db.update(
+        'patients',
+        {'first_name': 'Local edit', 'sync_state': 'pendingSync'},
+        where: 'local_id = ?',
+        whereArgs: ['patient-one'],
+      );
+      await repository.mergeRemoteDossierPayloads([
+        _remote('two', newer: true),
+      ]);
+      expect(
+        (await row('patients', 'patient-one'))['first_name'],
+        'Local edit',
+      );
+      expect(await row('dossiers', 'one'), isNotEmpty);
+      expect(await row('housings', 'housing_one'), isNotEmpty);
+      expect(await db.query('sync_operations'), isEmpty);
     },
   );
 

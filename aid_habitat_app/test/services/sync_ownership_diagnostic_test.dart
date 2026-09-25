@@ -300,4 +300,82 @@ void main() {
       );
     },
   );
+  test(
+    'pending diagnostics show ownership without another user error',
+    () async {
+      await SyncOperationOwnership.installMigration(db);
+      await user('ergo-a');
+      await write('mine');
+      await db.update(
+        'sync_operations',
+        {'status': 'failed', 'last_error': 'My server error'},
+        where: 'id = ?',
+        whereArgs: ['mine'],
+      );
+      await user('ergo-b');
+      await write('theirs');
+      await db.update(
+        'sync_operations',
+        {'status': 'failed', 'last_error': 'Private error for B'},
+        where: 'id = ?',
+        whereArgs: ['theirs'],
+      );
+      await user('ergo-a');
+
+      final diagnostics = await queue.fetchPendingDiagnostics();
+      expect(diagnostics.length, 2);
+      expect(diagnostics[0].ownerState, 'current');
+      expect(diagnostics[0].lastError, 'My server error');
+      expect(diagnostics[1].ownerState, 'other');
+      expect(diagnostics[1].lastError, isNull);
+      expect((await db.query('sync_operations')).length, 2);
+    },
+  );
+  test('only the original author can resume an aged running write', () async {
+    await SyncOperationOwnership.installMigration(db);
+    await user('ergo-a');
+    await write('stuck', value: 'preserve this');
+    final startedAt = DateTime.now()
+        .subtract(const Duration(minutes: 6))
+        .toIso8601String();
+    await db.update(
+      'sync_operations',
+      {'status': 'running', 'updated_at': startedAt},
+      where: 'id = ?',
+      whereArgs: ['stuck'],
+    );
+    final beforePayload = (await db.query(
+      'sync_operations',
+    )).single['payload_json'];
+    final protectedQueue = SyncRepository(databaseProvider: () async => db);
+    final diagnostic = (await protectedQueue.fetchPendingDiagnostics()).single;
+    expect(diagnostic.canResume, isTrue);
+
+    await user('ergo-b');
+    expect(
+      await protectedQueue.resumeStaleRunningOperation(
+        operationId: 'stuck',
+        observedUpdatedAt: startedAt,
+      ),
+      isFalse,
+    );
+    await user('ergo-a');
+    expect(
+      await protectedQueue.resumeStaleRunningOperation(
+        operationId: 'stuck',
+        observedUpdatedAt: startedAt,
+      ),
+      isTrue,
+    );
+    final after = (await db.query('sync_operations')).single;
+    expect(after['status'], 'pending');
+    expect(after['payload_json'], beforePayload);
+    expect(
+      await protectedQueue.resumeStaleRunningOperation(
+        operationId: 'stuck',
+        observedUpdatedAt: startedAt,
+      ),
+      isFalse,
+    );
+  });
 }

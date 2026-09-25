@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../components/brand_colors.dart';
+import '../components/cta_text_style.dart';
 import '../models/types.dart';
 import 'visit_report_screen.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -55,15 +56,21 @@ class StartVisitScreen extends StatelessWidget {
                   children: [
                     Text(
                       "${dossier.patient.lastName.toUpperCase()} ${dossier.patient.firstName}",
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    const Text("Visite à domicile", style: TextStyle(color: Colors.grey)),
+                    const Text(
+                      "Visite à domicile",
+                      style: TextStyle(color: Colors.grey),
+                    ),
                   ],
                 ),
               ],
             ),
           ),
-          
+
           // Center Content
           Center(
             child: Container(
@@ -115,8 +122,11 @@ class StartVisitScreen extends StatelessWidget {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: kBrandPurple,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
-                      textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 48,
+                        vertical: 16,
+                      ),
+                      textStyle: kCtaTextStyle,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
                       ),

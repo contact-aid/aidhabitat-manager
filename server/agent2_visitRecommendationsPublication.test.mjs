@@ -259,6 +259,27 @@ test('agent2 two devices from one revision cannot overwrite each other', async (
   assert.equal(store.compareAndSwapCalls, 1);
 });
 
+test('local priority republishes a fictitious visit recommendation after a remote edit', async () => {
+  const store = memoryStore(snapshot());
+  const publish = createVisitRecommendationsPublisher({
+    store,
+    preferLocal: true,
+    resolveWikiItem: async () => ({ id: 'wiki-one', title: 'Fixture' }),
+  });
+  await publish({
+    dossierId: 'dossier-1',
+    envelope: envelope([linkedItem('device-a')], { writeId: writeOne }),
+  });
+  const second = await publish({
+    dossierId: 'dossier-1',
+    envelope: envelope([linkedItem('device-b')], { writeId: writeTwo }),
+  });
+  assert.equal(second.applied, true);
+  assert.equal(store.current.revision, writeTwo);
+  assert.equal(store.current.items[0].id, 'device-b');
+  assert.equal(store.compareAndSwapCalls, 2);
+});
+
 test('agent2 duplicate stable item ids reject the replacement', async () => {
   const store = memoryStore(snapshot());
 

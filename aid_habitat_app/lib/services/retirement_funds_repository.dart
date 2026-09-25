@@ -10,6 +10,11 @@ import 'offline_vault.dart';
 import 'sync_engine.dart';
 
 class RetirementFundsRepository {
+  Future<void> deleteLocalFund(String fundId) async {
+    final db = await _database.database;
+    await db.delete('retirement_funds', where: 'id = ?', whereArgs: [fundId]);
+  }
+
   RetirementFundsRepository({LocalDatabase? database})
     : _database = database ?? LocalDatabase.instance;
 

@@ -367,7 +367,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
                     style: TextStyle(
                       color: Color(0xFF554265),
                       fontWeight: FontWeight.w600,
-                      fontSize: 13,
+                      fontSize: 14,
                     ),
                   ),
                 ],
@@ -440,7 +440,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: labelColor,
               ),

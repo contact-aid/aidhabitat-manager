@@ -360,6 +360,9 @@ router.get('/public/note-pages/:notePageId/preview', requireAuth, async (req, re
 
 router.get('/api/note-pages/:patientId', requireAuth, async (req, res, next) => {
   try {
+    res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     await resolveBeneficiaryAccess(req.appUser, req.params.patientId);
     const scopeType = stringValue(req.query?.scopeType).trim();
     const scopeId = stringValue(req.query?.scopeId).trim();

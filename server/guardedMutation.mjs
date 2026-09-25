@@ -4,6 +4,21 @@ import { validateConditionalPatch } from './nocodbConditionalWrite.mjs';
 
 export const SYNC_REVISION_FIELD = 'app_sync_revision';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const structuredColumns = new Set(['occupants_json', 'sdb_instances_json', 'wc_instances_json']);
+
+function unreadableStructuredFields(fields, observed) {
+  return Object.keys(fields).filter((key) => {
+    if (!structuredColumns.has(key)) return false;
+    const value = observed[key];
+    if (value == null || value === '') return false;
+    if (typeof value !== 'string') return true;
+    try {
+      const parsed = JSON.parse(value);
+      return !Array.isArray(parsed) || parsed.some((item) =>
+        item == null || typeof item !== 'object' || Array.isArray(item));
+    } catch { return true; }
+  });
+}
 
 export class SyncMutationError extends Error {
   constructor(status, code, observed = null, details = null) {
@@ -39,7 +54,7 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
  * readRecord must isolate one table/Id. writer must atomically compare Id AND
  * app_sync_revision and confirm content, never use an unconditional fallback.
  */
-export function createGuardedMutation({ readRecord, writer, readColumns }) {
+export function createGuardedMutation({ readRecord, writer, readColumns, preferLocal = false }) {
   return async ({ tableId, recordId, fields, baseFields, writeId, authorizeObserved,
     normalizeObserved }) => {
     if (!uuid.test(writeId ?? '') || typeof writeId !== 'string') {
@@ -80,8 +95,19 @@ export function createGuardedMutation({ readRecord, writer, readColumns }) {
           conflicts: replayPlan.conflicts, retainedFields: replayPlan.retainedFields, writeId,
         });
       }
-      const plan = planDatabaseMutation({ fields: desired, baseFields: baseline,
-        observed: comparisonObserved, equals });
+      const unreadable = preferLocal
+        ? unreadableStructuredFields(desired, comparisonObserved)
+        : [];
+      if (unreadable.length) {
+        throw new SyncMutationError(409, 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW', observed,
+          { conflicts: unreadable, retainedFields: [], writeId });
+      }
+      const plan = preferLocal
+        ? { patch: Object.fromEntries(Object.entries(desired).filter(([key, value]) =>
+            !Object.hasOwn(comparisonObserved, key) || !equals(key, comparisonObserved[key], value))),
+          conflicts: [], retainedFields: [] }
+        : planDatabaseMutation({ fields: desired, baseFields: baseline,
+          observed: comparisonObserved, equals });
       if (plan.conflicts.length) {
         throw new SyncMutationError(409, 'SYNC_FIELD_CONFLICT', observed, {
           conflicts: plan.conflicts, retainedFields: plan.retainedFields, writeId,

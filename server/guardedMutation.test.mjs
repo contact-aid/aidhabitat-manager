@@ -4,7 +4,7 @@ import test from 'node:test';
 import { createGuardedMutation, planDatabaseMutation } from './guardedMutation.mjs';
 import { createConditionalRecordWriter } from './nocodbConditionalWrite.mjs';
 
-function fixture({ loseResponse = false } = {}) {
+function fixture({ loseResponse = false, preferLocal = false } = {}) {
   const row = { Id: 1, app_sync_revision: randomUUID(), first: 'old', second: 'old' };
   let patches = 0;
   const request = async ({ method, path, body }) => {
@@ -21,7 +21,7 @@ function fixture({ loseResponse = false } = {}) {
   };
   const writer = createConditionalRecordWriter({ baseId: 'base1', allowedTableIds: ['table1'], request });
   const readRecord = async () => structuredClone(row);
-  const apply = createGuardedMutation({ writer, readRecord });
+  const apply = createGuardedMutation({ writer, readRecord, preferLocal });
   const mutation = { tableId: 'table1', recordId: 1, writeId: randomUUID(),
     fields: { first: 'local' }, baseFields: { first: 'old' } };
   return { row, apply, mutation, writer, readRecord, patches: () => patches };
@@ -42,6 +42,55 @@ test('a same-field conflict applies none of the patch', async () => {
     baseFields: { first: 'old', second: 'old' } }), e => e.status === 409);
   assert.equal(f.patches(), 0);
   assert.equal(f.row.second, 'old');
+});
+
+test('local priority overwrites only submitted fields through the conditional writer', async () => {
+  const f = fixture({ preferLocal: true });
+  f.row.first = 'remote';
+  f.row.second = 'remote untouched';
+  await f.apply({ ...f.mutation, baseFields: {} });
+  assert.equal(f.row.first, 'local');
+  assert.equal(f.row.second, 'remote untouched');
+  assert.equal(f.patches(), 1);
+  assert.equal((await f.apply({ ...f.mutation, baseFields: {} })).replay, true);
+  assert.equal(f.patches(), 1);
+});
+
+test('local priority still rejects missing mutation identity and authorization', async () => {
+  const f = fixture({ preferLocal: true });
+  await assert.rejects(f.apply({ ...f.mutation, writeId: null }), e => e.status === 428);
+  await assert.rejects(f.apply({ ...f.mutation, authorizeObserved: () => false }), e => e.status === 403);
+  assert.equal(f.patches(), 0);
+});
+
+test('local priority supports reload and a new edit without losing another field', async () => {
+  const f = fixture({ preferLocal: true });
+  f.row.first = 'remote before first save';
+  await f.apply(f.mutation);
+  const reloaded = structuredClone(f.row);
+  await f.apply({ ...f.mutation, writeId: randomUUID(),
+    fields: { first: 'next local edit' }, baseFields: { first: reloaded.first } });
+  assert.equal(f.row.first, 'next local edit');
+  assert.equal(f.row.second, 'old');
+  assert.equal(f.patches(), 2);
+});
+
+test('local priority retries against a changed revision before overwriting', async () => {
+  const f = fixture({ preferLocal: true });
+  let attempted = 0;
+  const apply = createGuardedMutation({ preferLocal: true, readRecord: f.readRecord,
+    writer: async input => {
+      if (++attempted === 1) {
+        f.row.first = 'concurrent';
+        f.row.app_sync_revision = randomUUID();
+        return { status: 'not_confirmed', reason: 'revision_changed' };
+      }
+      return f.writer(input);
+    } });
+  await apply(f.mutation);
+  assert.equal(f.row.first, 'local');
+  assert.equal(attempted, 2);
+  assert.equal(f.patches(), 1);
 });
 
 test('missing baseline is unknown, never treated as null', async () => {

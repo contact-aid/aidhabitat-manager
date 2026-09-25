@@ -27,6 +27,7 @@ for (const entity of ['dossier', 'beneficiaire', 'logement']) {
           NOCODB_BASE_ID: 'conditional_http_base',
           NOCODB_FORCE_REST: '1',
           NOCODB_REST_TIMEOUT_MS: '5000',
+          AIRTABLE_TOKEN: 'synthetic-airtable-read-only-token',
         },
         timeout: 40000,
         maxBuffer: 200000,

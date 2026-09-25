@@ -28,6 +28,7 @@ import '../services/report_generation_service.dart';
 import '../services/sync_engine.dart';
 import '../components/beneficiary_header.dart';
 import '../components/brand_colors.dart';
+import '../components/cta_text_style.dart';
 import '../components/notes_widget.dart';
 import '../components/soft_transitions.dart';
 import 'visit_report/beneficiary_tab.dart';
@@ -77,12 +78,20 @@ bool get _supportsNativeDetachedNoteWindows {
 
 class VisitReportScreen extends StatefulWidget {
   final Dossier dossier;
+  final int conflictRefreshToken;
+  final int housingConflictRefreshToken;
+  final int contextConflictRefreshToken;
+  final int patientConflictRefreshToken;
   final VoidCallback onBack;
   final ValueChanged<String>? onContextChanged;
 
   const VisitReportScreen({
     super.key,
     required this.dossier,
+    this.conflictRefreshToken = 0,
+    this.housingConflictRefreshToken = 0,
+    this.contextConflictRefreshToken = 0,
+    this.patientConflictRefreshToken = 0,
     required this.onBack,
     this.onContextChanged,
   });
@@ -104,6 +113,19 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   final WcTabController _wcController = WcTabController();
   final SummaryTabController _summaryController = SummaryTabController();
   late Dossier _dossier;
+
+  @override
+  void didUpdateWidget(covariant VisitReportScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // The conflict reviewer may have replaced local rows with server data.
+      // Refresh the parent snapshot as well as the stateful open tabs.
+      _dossier = widget.dossier;
+      // ignore: discarded_futures
+      _refreshDossier();
+    }
+  }
+
   int _housingVersion = 0;
   // Maps (patientId::tabKey) -> secondary OS windowId, so when the user
   // types in the in-app NotesWidget we can forward the change to the
@@ -122,6 +144,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   // propres coches dans Médicale/Autonomie.
   int _medicalOccupantIndex = 0;
   final Map<int, Set<int>> _medicalFlagNumbersByOccupant = <int, Set<int>>{};
+  int _medicalFlagsUserEditRevision = 0;
 
   Set<int> get _currentMedicalFlagNumbers => Set<int>.unmodifiable(
     _medicalFlagNumbersByOccupant[_medicalOccupantIndex] ?? const <int>{},
@@ -520,6 +543,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       tabKey: tabKey,
       pageNumber: 0,
       drawingJson: merged,
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
 
@@ -535,7 +559,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     } else {
       next.remove(flagNumber);
     }
-    setState(() => _medicalFlagNumbersByOccupant[_medicalOccupantIndex] = next);
+    setState(() {
+      _medicalFlagNumbersByOccupant[_medicalOccupantIndex] = next;
+      _medicalFlagsUserEditRevision += 1;
+    });
   }
 
   /// Appelé par NotesWidget (via `onMedicalFlagsChanged`) lorsqu'il
@@ -1132,6 +1159,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                             medicalFlagsScopeKey: isMedical
                                 ? 'occupant_$_medicalOccupantIndex'
                                 : null,
+                            medicalFlagsUserEditRevision:
+                                _medicalFlagsUserEditRevision,
                             onMedicalFlagsChanged: isMedical
                                 ? _handleMedicalFlagsFromNotes
                                 : null,
@@ -1173,6 +1202,17 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           Expanded(
             child: TabBar(
               controller: _tabController,
+              onTap: (index) {
+                if ((index == _tabs.indexOf('Salle de bain') ||
+                        index == _tabs.indexOf('WC')) &&
+                    _tabController.previousIndex ==
+                        _tabs.indexOf('Accessibilité')) {
+                  // Persist level/room choices before the sanitary tabs read
+                  // them from SQLite. The save callback bumps _housingVersion
+                  // and triggers their reload when it completes.
+                  unawaited(_accessibilityController.flushPendingSave());
+                }
+              },
               isScrollable: true,
               // Indicateur d'onglet actif : SIMPLE TRAIT VIOLET FONCÉ en
               // bas, qui s'étend sur TOUTE la largeur cliquable du
@@ -1290,14 +1330,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 else
                   Text(
                     'Générer',
-                    // Refonte 2026-05-13 : Nunito w600 (légèrement réduit
-                    // depuis w700 sur demande utilisateur).
-                    style: GoogleFonts.nunito(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
-                      color: Colors.white,
-                    ),
+                    style: kCtaTextStyle.copyWith(color: Colors.white),
                   ),
               ],
             ),
@@ -1992,20 +2025,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
         ),
       );
     }
-    // Type d'accompagnement (Diag ergo / MPA ergo / MPA complet) doit
-    // être renseigné — demande utilisateur 2026-05-04 : « tout doit
-    // avoir un type d'accompagnement ». Sans ça, la cellule AMO du PDF
-    // tombe sur "/" alors que le dossier méritait un montant.
-    if (_dossier.natureAccompagnement.trim().isEmpty) {
-      missing.add(
-        _MissingField(
-          label:
-              'Admin — type d\'accompagnement (Diag ergo / MPA ergo / MPA complet)',
-          tabIndex: tab,
-          subSectionIndex: 3,
-        ),
-      );
-    }
   }
 
   Future<void> _checkAccessibilite(List<_MissingField> missing) async {
@@ -2405,7 +2424,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   'remplies. Tu peux générer le rapport quand même '
                   '(les champs vides seront laissés blancs dans le PDF) '
                   'ou compléter d\'abord :',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF5C6670)),
+                  style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
                 ),
                 const SizedBox(height: 12),
                 Flexible(
@@ -2434,7 +2453,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                                     child: Text(
                                       m.label,
                                       style: const TextStyle(
-                                        fontSize: 13,
+                                        fontSize: 14,
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
@@ -2675,15 +2694,19 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       builder: (context, constraints) {
         final isStacked = constraints.maxWidth < _kStackedLayoutBreakpoint;
         if (isStacked) {
-          // Empilement : form en haut, note en dessous. Pas de hauteur fixe
-          // sur la note — l'utilisateur scrolle si besoin. La form garde
-          // sa hauteur naturelle.
+          // The form contains Expanded children and needs a bounded height.
+          // Its own sections scroll inside the available space.
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              formCard,
+              Expanded(child: formCard),
               const SizedBox(height: 16),
-              SizedBox(height: 280, child: notesPanel),
+              SizedBox(
+                height: constraints.maxHeight < 600
+                    ? constraints.maxHeight * 0.3
+                    : 280,
+                child: notesPanel,
+              ),
             ],
           );
         }
@@ -2722,6 +2745,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           'Bénéficiaire',
           BeneficiaryTab(
             dossier: _dossier,
+            conflictRefreshToken: widget.patientConflictRefreshToken,
             repository: _repository,
             onPatientChanged: _refreshDossier,
             initialSubSection: _activeSubsectionByTab['Bénéficiaire'] ?? 0,
@@ -2732,6 +2756,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           'Contexte de vie',
           ContextTab(
             dossier: _dossier,
+            conflictRefreshToken: widget.contextConflictRefreshToken,
             repository: _repository,
             onMedicalFlagToggled: _handleMedicalFlagToggle,
             // Les cases Pathologie / Suivi / Sensoriel reflètent la PAGE
@@ -2759,6 +2784,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           'Accessibilité',
           AccessibilityTab(
             dossier: _dossier,
+            conflictRefreshToken: widget.housingConflictRefreshToken,
             repository: _repository,
             controller: _accessibilityController,
             onHousingChanged: _notifyHousingChanged,

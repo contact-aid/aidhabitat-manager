@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../components/brand_colors.dart';
@@ -206,6 +207,134 @@ class _RetirementFundsPrincipalScreenState
     await _loadFunds();
   }
 
+  void _showActionError(String action, Object error) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$action impossible : $error')));
+  }
+
+  Future<void> _editFund(_PrincipalFund fund) async {
+    final name = TextEditingController(text: fund.name);
+    final phone = TextEditingController(text: fund.phone);
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Modifier la caisse'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: name,
+                decoration: const InputDecoration(labelText: 'Nom'),
+              ),
+              TextField(
+                controller: phone,
+                decoration: const InputDecoration(labelText: 'Téléphone'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annuler'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || name.text.trim().isEmpty) return;
+      await _api.updatePrincipalRetirementFund(
+        fundId: fund.id,
+        name: name.text.trim(),
+        phone: phone.text.trim(),
+      );
+      if (!mounted) return;
+      setState(
+        () => _funds = _funds
+            .map(
+              (f) => f.id == fund.id
+                  ? _PrincipalFund(
+                      id: f.id,
+                      name: name.text.trim(),
+                      phone: phone.text.trim(),
+                      logoUrl: f.logoUrl,
+                    )
+                  : f,
+            )
+            .toList(),
+      );
+      await _writeToCache(_funds);
+    } catch (error) {
+      _showActionError('Modification', error);
+    } finally {
+      name.dispose();
+      phone.dispose();
+    }
+  }
+
+  Future<void> _duplicateFund(_PrincipalFund fund) async {
+    try {
+      final created = await _api.createPrincipalRetirementFund(
+        name: '${fund.name} (copie)',
+        phone: fund.phone,
+      );
+      if (!mounted) return;
+      setState(() => _funds = [..._funds, _PrincipalFund.fromJson(created)]);
+      await _writeToCache(_funds);
+    } catch (error) {
+      _showActionError('Duplication', error);
+    }
+  }
+
+  Future<void> _deleteFund(_PrincipalFund fund) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Supprimer cette caisse ?'),
+        content: Text(fund.name),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _api.deletePrincipalRetirementFund(fund.id);
+      if (!mounted) return;
+      setState(() => _funds = _funds.where((f) => f.id != fund.id).toList());
+      await _writeToCache(_funds);
+    } catch (error) {
+      _showActionError('Suppression', error);
+    }
+  }
+
+  Future<void> _shareFund(_PrincipalFund fund) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final origin = box == null
+        ? const Rect.fromLTWH(0, 0, 1, 1)
+        : box.localToGlobal(Offset.zero) & box.size;
+    try {
+      await Share.share(
+        '${fund.name}\n${fund.phone}'.trim(),
+        sharePositionOrigin: origin,
+      );
+    } catch (error) {
+      _showActionError('Partage', error);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -364,6 +493,10 @@ class _RetirementFundsPrincipalScreenState
                   return _PrincipalFundCard(
                     fund: fund,
                     onOpen: () => _openFund(fund),
+                    onEdit: () => _editFund(fund),
+                    onShare: () => _shareFund(fund),
+                    onDuplicate: () => _duplicateFund(fund),
+                    onDelete: () => _deleteFund(fund),
                   );
                 },
               ),
@@ -384,8 +517,19 @@ class _RetirementFundsPrincipalScreenState
 class _PrincipalFundCard extends StatefulWidget {
   final _PrincipalFund fund;
   final VoidCallback onOpen;
+  final VoidCallback onEdit;
+  final VoidCallback onShare;
+  final VoidCallback onDuplicate;
+  final VoidCallback onDelete;
 
-  const _PrincipalFundCard({required this.fund, required this.onOpen});
+  const _PrincipalFundCard({
+    required this.fund,
+    required this.onOpen,
+    required this.onEdit,
+    required this.onShare,
+    required this.onDuplicate,
+    required this.onDelete,
+  });
 
   @override
   State<_PrincipalFundCard> createState() => _PrincipalFundCardState();
@@ -478,51 +622,94 @@ class _PrincipalFundCardState extends State<_PrincipalFundCard> {
                         ),
                       ),
                       const SizedBox(height: 10),
-                      if (hasPhone)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF2F4F6),
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  LucideIcons.phone,
-                                  size: 12,
-                                  color: Color(0xFF5C6670),
-                                ),
-                                const SizedBox(width: 6),
-                                Flexible(
-                                  child: Text(
-                                    fund.phone,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF5C6670),
-                                    ),
+                      Row(
+                        children: [
+                          if (hasPhone)
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF2F4F6),
+                                    borderRadius: BorderRadius.circular(50),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        LucideIcons.phone,
+                                        size: 12,
+                                        color: Color(0xFF5C6670),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          fund.phone,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF5C6670),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
+                              ),
+                            )
+                          else
+                            const Spacer(),
+                          PopupMenuButton<String>(
+                            tooltip: 'Actions',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 34,
+                              height: 34,
                             ),
+                            icon: const Icon(
+                              LucideIcons.moreVertical,
+                              size: 18,
+                            ),
+                            onSelected: (action) {
+                              switch (action) {
+                                case 'edit':
+                                  widget.onEdit();
+                                case 'share':
+                                  widget.onShare();
+                                case 'duplicate':
+                                  widget.onDuplicate();
+                                case 'delete':
+                                  widget.onDelete();
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Modifier'),
+                              ),
+                              PopupMenuItem(
+                                value: 'share',
+                                child: Text('Partager'),
+                              ),
+                              PopupMenuItem(
+                                value: 'duplicate',
+                                child: Text('Dupliquer'),
+                              ),
+                              PopupMenuDivider(),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Supprimer'),
+                              ),
+                            ],
                           ),
-                        )
-                      else
-                        const Text(
-                          'Téléphone non renseigné',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF8A939D),
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -894,7 +1081,7 @@ class _PrincipalFundDialog extends StatelessWidget {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 14,
                                         fontWeight: FontWeight.w600,
                                         color: Colors.white.withValues(
                                           alpha: 0.85,
@@ -1070,7 +1257,7 @@ class _NewPrincipalFundDialogState extends State<_NewPrincipalFundDialog> {
                   _errorMessage!,
                   style: const TextStyle(
                     color: Color(0xFFB91C1C),
-                    fontSize: 13,
+                    fontSize: 14,
                   ),
                 ),
               ],
@@ -1134,7 +1321,7 @@ class _PrincipalLabeledField extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             color: kBrandPurple,
           ),

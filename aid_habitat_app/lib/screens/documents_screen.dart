@@ -1228,13 +1228,13 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   // ----- Rename -----
 
   Future<void> _showRenameDialog(DocItem doc) async {
-    final controller = TextEditingController(text: doc.title);
+    var editedTitle = doc.title;
     final newTitle = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Renommer le document'),
-        content: TextField(
-          controller: controller,
+        content: TextFormField(
+          initialValue: doc.title,
           autofocus: true,
           maxLines: 1,
           textInputAction: TextInputAction.done,
@@ -1242,7 +1242,8 @@ class _DocumentsScreenState extends State<DocumentsScreen>
             labelText: 'Nom du document',
             border: OutlineInputBorder(),
           ),
-          onSubmitted: (value) {
+          onChanged: (value) => editedTitle = value,
+          onFieldSubmitted: (value) {
             final trimmed = value.trim();
             if (trimmed.isNotEmpty) Navigator.pop(dialogContext, trimmed);
           },
@@ -1255,7 +1256,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: kBrandPurple),
             onPressed: () {
-              final trimmed = controller.text.trim();
+              final trimmed = editedTitle.trim();
               if (trimmed.isNotEmpty) Navigator.pop(dialogContext, trimmed);
             },
             child: const Text('Renommer'),
@@ -1263,7 +1264,6 @@ class _DocumentsScreenState extends State<DocumentsScreen>
         ],
       ),
     );
-    controller.dispose();
     final trimmed = newTitle?.trim() ?? '';
     if (trimmed.isEmpty || trimmed == doc.title || !mounted) return;
     await _documentRepository.updateDocumentMetadata(
@@ -1675,7 +1675,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
               style: const TextStyle(
                 fontWeight: FontWeight.w700,
                 color: kBrandDarkPurple,
-                fontSize: 15,
+                fontSize: 14,
               ),
             ),
             const Spacer(),
@@ -2215,7 +2215,7 @@ class _AddDocumentTileState extends State<_AddDocumentTile> {
               ),
               Text(
                 subtitle,
-                style: TextStyle(fontSize: 11, color: Color(0xFF5C6670)),
+                style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
               ),
             ],
           ),
@@ -2419,7 +2419,7 @@ class _EmptyState extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Utilisez les boutons ci-dessus pour ajouter un document.',
-              style: TextStyle(color: Color(0xFF5C6670), fontSize: 12),
+              style: TextStyle(color: Color(0xFF5C6670), fontSize: 14),
             ),
           ],
         ],
@@ -2522,7 +2522,7 @@ class _UploadModalState extends State<_UploadModal> {
                     child: Text(
                       tag,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: active ? Colors.white : kBrandDarkPurple,
                       ),
@@ -3255,7 +3255,7 @@ class _PreviewScreenState extends State<DocumentPreview> {
                       '• Modifié',
                       style: TextStyle(
                         color: Colors.amber.shade200,
-                        fontSize: 11,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -3475,7 +3475,7 @@ class _PreviewScreenState extends State<DocumentPreview> {
                   const SizedBox(height: 8),
                   Text(
                     'Prévisualisation non disponible pour ce format.',
-                    style: TextStyle(color: Color(0xFF8A939D), fontSize: 13),
+                    style: TextStyle(color: Color(0xFF8A939D), fontSize: 14),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
@@ -4680,7 +4680,7 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
                         '$_currentPage / $_totalPages',
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
-                          fontSize: 13,
+                          fontSize: 14,
                         ),
                       ),
                     ),

@@ -213,7 +213,7 @@ class _CommuneFieldGroupState extends State<CommuneFieldGroup> {
                                 option.label,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 14,
                                   color: selected
                                       ? const Color(0xFF554265)
                                       : Colors.black87,
@@ -226,7 +226,7 @@ class _CommuneFieldGroupState extends State<CommuneFieldGroup> {
                             Text(
                               '(${option.zipCode.isEmpty ? '—' : option.zipCode})',
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 14,
                                 color: Color(0xFF5C6670),
                               ),
                             ),
@@ -334,7 +334,7 @@ class _CommuneFieldGroupState extends State<CommuneFieldGroup> {
           softWrap: false,
           overflow: TextOverflow.fade,
           style: TextStyle(
-            fontSize: widget.labelSize ?? 13,
+            fontSize: (widget.labelSize ?? 14).clamp(14, double.infinity),
             color: widget.labelColor ?? const Color(0xFF8A939D),
             fontWeight: FontWeight.w600,
           ),
@@ -350,7 +350,7 @@ class _CommuneFieldGroupState extends State<CommuneFieldGroup> {
           ],
           onChanged: _handleZipChanged,
           style: TextStyle(
-            fontSize: widget.valueSize ?? 13,
+            fontSize: (widget.valueSize ?? 14).clamp(14, double.infinity),
             color: Color(0xFF2B323A),
           ),
           decoration: InputDecoration(
@@ -382,7 +382,7 @@ class _CommuneFieldGroupState extends State<CommuneFieldGroup> {
         Text(
           widget.cityLabel,
           style: TextStyle(
-            fontSize: widget.labelSize ?? 13,
+            fontSize: (widget.labelSize ?? 14).clamp(14, double.infinity),
             color: widget.labelColor ?? const Color(0xFF8A939D),
             fontWeight: FontWeight.w600,
           ),
@@ -421,7 +421,9 @@ class _CommuneFieldGroupState extends State<CommuneFieldGroup> {
               }
               _refreshOverlay();
             },
-            style: TextStyle(fontSize: widget.valueSize ?? 13),
+            style: TextStyle(
+              fontSize: (widget.valueSize ?? 14).clamp(14, double.infinity),
+            ),
             decoration: InputDecoration(
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(

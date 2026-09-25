@@ -6,6 +6,7 @@ import '../../models/types.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
 import '../../components/brand_colors.dart';
+import '../../components/cta_text_style.dart';
 import '../../components/form_widgets.dart';
 import '../../components/soft_transitions.dart';
 
@@ -631,7 +632,7 @@ class _BathroomTabState extends State<BathroomTab>
                     style: TextStyle(
                       color: Color(0xFF554265),
                       fontWeight: FontWeight.w600,
-                      fontSize: 13,
+                      fontSize: 14,
                     ),
                   ),
                 ],
@@ -704,7 +705,7 @@ class _BathroomTabState extends State<BathroomTab>
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: labelColor,
               ),
@@ -1278,10 +1279,8 @@ class _WetZoneButton extends StatelessWidget {
         child: Text(
           label,
           textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: active ? FontWeight.w500 : FontWeight.w400,
-            color: active ? Colors.white : const Color(0xFF2B323A), // ink-700
+          style: kCtaTextStyle.copyWith(
+            color: active ? Colors.white : const Color(0xFF2B323A),
           ),
         ),
       ),

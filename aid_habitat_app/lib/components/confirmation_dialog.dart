@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import 'brand_colors.dart';
+import 'cta_text_style.dart';
 import 'soft_transitions.dart';
 
 const Color kConfirmationDanger = Color(0xFFB91C1C);
@@ -219,7 +220,7 @@ class _ConfirmationButton<T> extends StatelessWidget {
         minimumSize: const Size(0, 40),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        textStyle: kCtaTextStyle,
       );
       if (action.icon != null) {
         return FilledButton.icon(
@@ -248,7 +249,7 @@ class _ConfirmationButton<T> extends StatelessWidget {
       minimumSize: const Size(0, 40),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+      textStyle: kCtaTextStyle,
     );
     if (action.icon != null) {
       return TextButton.icon(

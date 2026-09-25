@@ -311,7 +311,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'Aid\'Habitat — application métier d\'aide à l\'évaluation '
             'd\'accessibilité du logement pour ergothérapeutes.',
             style: TextStyle(
-              fontSize: 11,
+              fontSize: 14,
               color: Color(0xFF2B323A),
               fontStyle: FontStyle.italic,
             ),
@@ -320,7 +320,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Text(
             '© 2026 Aid\'Habitat. Tous droits réservés.',
             style: TextStyle(
-              fontSize: 11,
+              fontSize: 14,
               color: Color(0xFF5C6670),
             ),
           ),
@@ -347,7 +347,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF2B323A),
                   letterSpacing: 0.3,
@@ -357,7 +357,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Text(
                 value,
                 style: TextStyle(
-                  fontSize: 13,
+                  fontSize: 14,
                   color: isLink ? kBrandPurple : Colors.black87,
                   decoration: isLink ? TextDecoration.underline : null,
                 ),
@@ -423,7 +423,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Text(
                       _roleLabel.toUpperCase(),
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: Color(0xFF2B323A),
                         letterSpacing: 1,
@@ -545,7 +545,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Text(
             'Choisissez une image pour personnaliser votre compte. Elle sera réutilisée dans la barre latérale et dans l\'espace paramètres.',
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               color: Color(0xFF2B323A),
             ),
           ),
@@ -566,7 +566,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Text(
         _feedback!,
         style: TextStyle(
-          fontSize: 13,
+          fontSize: 14,
           fontWeight: FontWeight.w500,
           color: _feedbackIsError
               ? Colors.red.shade700
@@ -611,7 +611,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SizedBox(height: 2),
                 Text(
                   'Changer votre mot de passe local.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
                 ),
               ],
             ),

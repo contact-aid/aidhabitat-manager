@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../models/types.dart';
 import 'offline_vault.dart';
 import 'visit_recommendations_publication.dart';
 
@@ -172,6 +173,7 @@ Map<String, dynamic> _legacyPublicationPayload({
     'dossierId': dossierId,
     'updates': <String, dynamic>{'items': items},
     'items': items,
+    'mutationOrigin': SyncMutationOrigin.dataMigration.wireName,
     'localReference': <String, dynamic>{
       'version': 1,
       'writeId': writeId,

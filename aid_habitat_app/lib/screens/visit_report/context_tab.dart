@@ -21,6 +21,7 @@ import '../../components/two_threshold_swipe.dart';
 class ContextTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final int conflictRefreshToken;
 
   /// Called when the user toggles a numbered medical flag (1 = Pathologie,
   /// 2 = Suivi médical, 3 = Sensoriel). `checked` is the new state. Le
@@ -61,6 +62,7 @@ class ContextTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.conflictRefreshToken = 0,
     this.onMedicalFlagToggled,
     this.currentMedicalFlags,
     this.onSubSectionChanged,
@@ -103,6 +105,15 @@ class _ContextTabState extends State<ContextTab>
   @override
   void didUpdateWidget(covariant ContextTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
+      // A reviewed conflict can replace the local row while this tab stays
+      // mounted behind the review screen. Drop its stale in-memory form.
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      _loaded = false;
+      // ignore: discarded_futures
+      _load();
+    }
     // Sync de la sous-section quand le parent change
     // `initialSubSection` programmatiquement — ex. navigation depuis
     // la popup « Champs manquants » du flow de génération PDF.
@@ -314,6 +325,7 @@ class _ContextTabState extends State<ContextTab>
         autonomyDone: occ.autonomyDone,
         autonomy: occ.autonomy,
         humanHelp: occ.humanHelp,
+        attention: occ.attention,
       ),
     );
   }
@@ -847,7 +859,7 @@ class _ContextTabState extends State<ContextTab>
               textAlign: TextAlign.center,
               style: TextStyle(
                 // 10 → 12 (demande user 2026-05-13).
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: labelColor,
               ),
@@ -1001,7 +1013,7 @@ class _ContextTabState extends State<ContextTab>
               style: TextStyle(
                 color: contentColor,
                 fontWeight: FontWeight.w600,
-                fontSize: 13,
+                fontSize: 14,
               ),
             ),
             const SizedBox(width: 8),
@@ -1135,7 +1147,7 @@ class _MedicalFlagRow extends StatelessWidget {
                 index.toString(),
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF6E5583),
                   fontFeatures: [FontFeature.tabularFigures()],
@@ -1147,7 +1159,7 @@ class _MedicalFlagRow extends StatelessWidget {
               child: Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 13.5,
+                  fontSize: 14,
                   height: 1.25,
                   color: Color(0xFF1A1E24),
                   fontWeight: FontWeight.w500,
@@ -1246,7 +1258,7 @@ class _NumberedCheckRow extends StatelessWidget {
                 index.toString(),
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF6E5583), // mauve-600
                   fontFeatures: [FontFeature.tabularFigures()],
@@ -1259,7 +1271,7 @@ class _NumberedCheckRow extends StatelessWidget {
               child: Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 13.5,
+                  fontSize: 14,
                   height: 1.25,
                   color: Color(0xFF1A1E24), // ink-800
                   fontWeight: FontWeight.w500,
@@ -1390,7 +1402,7 @@ class _ActionButton extends StatelessWidget {
               ? Text(
                   labelChar,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: iconColor,
                     height: 1,

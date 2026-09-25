@@ -22,6 +22,7 @@ import { registerContextRoutes } from './contextRoutes.mjs';
 import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
+import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
 } from './resyncLegacyNames.mjs';
@@ -60,6 +61,8 @@ import {
   generateVisitReport,
   buildReportFileName,
 } from './reports/generateVisitReport.mjs';
+import { readReportRecommendations } from './reports/reportRecommendationSource.mjs';
+import { readLocalWikiReportImage } from './reports/localWikiReportImage.mjs';
 import {
   createConcurrencyGate,
   executeSyncBatch,
@@ -430,7 +433,7 @@ const FIELD_SETS = {
     // identique à avant (pas de pièces affichées).
     'rooms_breakdown_json',
     'type_de_logement_id', 'porte_de_garage_id', 'portail_id1',
-    'UpdatedAt',
+    'CreatedAt', 'UpdatedAt',
   ],
   contexteDeVie: [
     'uuid_source', 'dossier_id', 'beneficiaire_id', 'beneficiaires_id', 'aide_technique_deplacement', 'restrictions_conduite',
@@ -491,6 +494,7 @@ const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter
 }) : null;
 const serializeHousingMutation = createKeyedSerialExecutor();
 const guardedMutation = conditionalWriter ? createGuardedMutation({
+  preferLocal: true,
   writer: conditionalWriter,
   readColumns: async (tableId) => {
     if (!conditionalTables.includes(tableId)) throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
@@ -1183,7 +1187,7 @@ const parseSyntheticBeneficiaryId = (value) => {
   const match = String(value || '').match(/^nocodb-beneficiaire-(\d+)$/);
   return match ? Number(match[1]) : null;
 };
-const mobileSyncStore = createMobileSyncStore({ absoluteUrl });
+const mobileSyncStore = createMobileSyncStore({ absoluteUrl, preferLocal: true });
 const deriveBeneficiaryAppId = ({ beneficiaryRecord, dossierRecords = [], housingRecords = [], contextRecords = [], infoRecords = [] }) => {
   const relatedExternalId = [
     latestRecord(dossierRecords) ? field(latestRecord(dossierRecords), 'patient_id') : undefined,
@@ -1359,15 +1363,6 @@ const inferExtensionFromMimeType = (mimeType) => ({
   'image/gif': 'gif',
   'application/pdf': 'pdf',
 })[String(mimeType || '').trim().toLowerCase()] || 'bin';
-
-const inferMimeTypeFromFilePath = (filePath) => ({
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-})[path.extname(String(filePath || '')).toLowerCase()] || 'application/octet-stream';
 
 const safeDecodeUriComponent = (value) => {
   try {
@@ -2428,7 +2423,9 @@ const mapHousing = (housingRecord) => {
     cheminementSeuilPorte: toBool(field(housingRecord, 'cheminement_seuil_porte')),
     difficultesCirculationInterieure: toBool(field(housingRecord, 'difficultes_circulation_interieure')),
     porteGarageId: field(housingRecord, 'porte_de_garage')?.id ? String(field(housingRecord, 'porte_de_garage').id) : '',
-    portailId: field(housingRecord, 'portail')?.id ? String(field(housingRecord, 'portail').id) : '',
+    portailId: stringValue(field(housingRecord, 'portail_id1')
+      ?? field(housingRecord, 'portail')?.id
+      ?? field(housingRecord, 'portail')?.Id),
     motorisationPorteGarage: refLabel(field(housingRecord, 'porte_de_garage')),
     motorisationPortail: refLabel(field(housingRecord, 'portail')),
     // Nullable : l'ergo doit pouvoir laisser le champ vide (le validateur
@@ -4208,7 +4205,12 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
   const trustedPersonEmailValue = hasTrustedPerson && Object.prototype.hasOwnProperty.call(trustedPersonPayload, 'email')
     ? trustedPersonPayload?.email
     : (has('trustedEmail') ? updates.trustedEmail : undefined);
-  const situationMatch = findByLabel(references.situations, updates.familySituation);
+  // Flutter labels the pill "Concubinage" while the NocoDB reference is
+  // "En concubinage". Resolve that known alias before mapping both the
+  // desired patch and its baseline through this same function.
+  const situationLabel = normalizeLabelForMatch(updates.familySituation) === 'concubinage'
+    ? 'En concubinage' : updates.familySituation;
+  const situationMatch = findByLabel(references.situations, situationLabel);
   const normalizedOccupation = normalizeLabelForMatch(updates.occupationStatus);
   const occupationMatch = findByLabel(references.statuts, updates.occupationStatus === 'Usufruitier' ? 'Usufruitier(e)' : updates.occupationStatus)
     || (normalizedOccupation.startsWith('usufruitier')
@@ -5190,6 +5192,35 @@ app.post('/api/retirement-funds-principal', requireAuth, async (req, res, next) 
   }
 });
 
+app.put('/api/retirement-funds-principal/:fundId', requireAuth, async (req, res, next) => {
+  try {
+    const fundId = String(req.params.fundId || '').trim();
+    const name = stringValue(req.body?.name).trim();
+    const phone = stringValue(req.body?.phone).trim();
+    if (!name) return res.status(400).json({ success: false, error: 'Nom obligatoire' });
+    const records = await queryAll(TABLES.caissesRetraite, { fields: ['nom'] });
+    if (!records.some((record) => String(record.id) === fundId)) {
+      return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+    }
+    await updateRecord(TABLES.caissesRetraite, fundId, {
+      nom: name, numero_telephone_contact: nullableString(phone),
+    });
+    res.json({ success: true, error: null, data: { fund: { id: fundId, name, phone } } });
+  } catch (error) { next(error); }
+});
+
+app.delete('/api/retirement-funds-principal/:fundId', requireAuth, async (req, res, next) => {
+  try {
+    const fundId = String(req.params.fundId || '').trim();
+    const records = await queryAll(TABLES.caissesRetraite, { fields: ['nom'] });
+    if (!records.some((record) => String(record.id) === fundId)) {
+      return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+    }
+    await callNocoTool('deleteRecords', { tableId: TABLES.caissesRetraite, records: [{ id: fundId }] });
+    res.status(204).end();
+  } catch (error) { next(error); }
+});
+
 app.get('/api/anah-status', requireAuth, async (_req, res, next) => {
   try {
     // Cache HTTP : ANAH status (feature flag + URLs) change quasi
@@ -5576,6 +5607,27 @@ app.put('/api/retirement-funds/:fundId', requireAuth, async (req, res, next) => 
   }
 });
 
+app.delete('/api/retirement-funds/:fundId', requireAuth, async (req, res, next) => {
+  try {
+    const fundId = String(req.params.fundId || '').trim();
+    const store = await readRetirementFundsStore();
+    if (fundId.startsWith('custom-')) {
+      const count = store.customFunds.length;
+      store.customFunds = store.customFunds.filter((fund) => fund.id !== fundId);
+      if (store.customFunds.length === count) return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+    } else {
+      const records = await queryAll(TABLES.caissesRetraiteComplementaires, { fields: ['nom'] });
+      if (!records.some((record) => String(record.id) === fundId)) {
+        return res.status(404).json({ success: false, error: 'Caisse introuvable' });
+      }
+      await callNocoTool('deleteRecords', { tableId: TABLES.caissesRetraiteComplementaires, records: [{ id: fundId }] });
+      delete store.funds[fundId];
+    }
+    await writeRetirementFundsStore(store);
+    res.status(204).end();
+  } catch (error) { next(error); }
+});
+
 app.get('/api/mobile-sync/schema', requireAuth, async (_req, res, next) => {
   try {
     res.json({
@@ -5630,6 +5682,41 @@ app.post('/api/mobile-sync/migrate', requireAdmin, async (_req, res, next) => {
 app.get('/api/dossiers', requireAuth, async (req, res, next) => {
   try {
     res.json(await getDossiersForApp(req.appUser));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Explicit read-only Airtable source for the "Actualiser" action. Exact
+// airtable:rec... NocoDB UUIDs identify imported dossiers; no write occurs.
+app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next) => {
+  try {
+    const fullName = stringValue(req.appUser?.ergoLabel).trim();
+    if (req.appUser?.role !== 'ERGO' || !fullName) {
+      res.status(403).json({ success: false, error: 'Intervenant requis' });
+      return;
+    }
+    if (!process.env.AIRTABLE_TOKEN) {
+      res.status(503).json({ success: false, error: 'Lecture Airtable indisponible' });
+      return;
+    }
+    const firstName = fullName.split(/\s+/)[0];
+    const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
+    const records = (await read(firstName, { fullName }))
+      .map(projectAirtableDossier);
+    const dossierRows = await queryAll(TABLES.dossiers, {
+      fields: ['uuid_source', 'patient_id', 'ergo_id'],
+    });
+    const scopedIds = new Set(filterDossiersByScopes(
+      dossierRows.map((row) => ({
+        id: stringValue(field(row, 'uuid_source')),
+        ergoId: field(row, 'ergo_id'),
+      })), req.appUser,
+    ).map((row) => row.id));
+    const scopedRows = dossierRows.filter((row) =>
+      scopedIds.has(stringValue(field(row, 'uuid_source'))));
+    const linked = resolveAirtableLinks(records, scopedRows);
+    res.json({ success: true, error: null, data: { records: linked } });
   } catch (error) {
     next(error);
   }
@@ -6329,84 +6416,51 @@ const fetchVadOverlayNotesForReport = async (patientId, dossierId) => {
  * de l'endpoint /api/visit-recommendations/:dossierId.
  */
 const fetchVisitRecommendationsForDossier = async (dossierId) => {
-  try {
-    const tableId = await getVisitRecommendationsTableId();
-    let items = [];
-    if (tableId) {
-      const records = await queryAll(tableId, {
-        fields: VISIT_RECOMMENDATION_FIELDS,
-        where: `(dossier_id,eq,${JSON.stringify(String(dossierId))})`,
-      });
-      items = records
-        .map(mapVisitRecommendationRecord)
-        .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
-    } else {
-      const store = await readVisitRecommendationsStore();
-      const payload = store.dossiers?.[dossierId];
-      items = asArray(payload?.items);
-    }
-    const wikiItems = await loadWikiLibrary();
-    const wikiLookup = buildWikiRecommendationLookup(wikiItems);
-    return items.map((item) => {
-      const matchedWikiItem = resolveRecommendationWikiItem(item, wikiLookup);
-      if (!matchedWikiItem) {
-        return {
-          ...item,
-          wikiImageUrl: absoluteUrl(item?.wikiImageUrl),
-        };
+  const items = await readReportRecommendations({
+    readSnapshot: async () => {
+      try {
+        return await (await getVisitRecommendationsSnapshotStore()).read(dossierId);
+      } catch (error) {
+        // Older installations have only the legacy table. Once the snapshot
+        // table exists, all other read failures must stop PDF generation.
+        if (error?.code === 'VISIT_RECOMMENDATIONS_SNAPSHOT_NOT_PREPARED') return null;
+        throw error;
       }
+    },
+    readLegacy: async () => {
+      const tableId = await getVisitRecommendationsTableId();
+      if (tableId) {
+        const records = await queryAll(tableId, {
+          fields: VISIT_RECOMMENDATION_FIELDS,
+          where: `(dossier_id,eq,${JSON.stringify(String(dossierId))})`,
+        });
+        return records
+          .map(mapVisitRecommendationRecord)
+          .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+      }
+      const store = await readVisitRecommendationsStore();
+      return asArray(store.dossiers?.[dossierId]?.items);
+    },
+  });
+  const wikiItems = await loadWikiLibrary();
+  const wikiLookup = buildWikiRecommendationLookup(wikiItems);
+  return items.map((item) => {
+    const matchedWikiItem = resolveRecommendationWikiItem(item, wikiLookup);
+    if (!matchedWikiItem) {
       return {
         ...item,
-        wikiItemId: stringValue(matchedWikiItem.id),
-        wikiTitle: stringValue(matchedWikiItem.title),
-        wikiImageUrl: absoluteUrl(matchedWikiItem.imageUrl),
-        wikiTag: stringValue(matchedWikiItem.tags?.[0] || item?.wikiTag),
-        wikiDescription: stringValue(matchedWikiItem.description),
+        wikiImageUrl: absoluteUrl(item?.wikiImageUrl),
       };
-    });
-  } catch (error) {
-    console.warn('[report] échec fetch recos :', error?.message || error);
-    return [];
-  }
-};
-
-const wikiOfflinePathnameFromUrl = (value) => {
-  const rawValue = String(value || '').trim();
-  if (!rawValue) return '';
-  try {
-    const parsed = /^https?:\/\//i.test(rawValue)
-      ? new URL(rawValue)
-      : new URL(rawValue, 'https://aid-habitat.local');
-    const pathname = safeDecodeUriComponent(parsed.pathname || '');
-    return pathname.startsWith('/wiki-offline/') ? pathname : '';
-  } catch {
-    const pathname = safeDecodeUriComponent(rawValue.split(/[?#]/, 1)[0] || '');
-    return pathname.startsWith('/wiki-offline/') ? pathname : '';
-  }
-};
-
-const readBundledWikiOfflineImage = async (urlValue) => {
-  const pathname = wikiOfflinePathnameFromUrl(urlValue);
-  if (!pathname) return null;
-  const relativePath = pathname.replace(/^\/wiki-offline\/+/, '');
-  if (!relativePath || relativePath.includes('\0')) return null;
-  const fullPath = path.resolve(BUNDLED_WIKI_OFFLINE_DIR_PATH, relativePath);
-  const relativeToRoot = path.relative(BUNDLED_WIKI_OFFLINE_DIR_PATH, fullPath);
-  if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
-    return null;
-  }
-  try {
-    const buffer = await fs.readFile(fullPath);
-    return {
-      buffer,
-      mimeType: inferMimeTypeFromFilePath(fullPath),
-    };
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      console.warn('[report] échec lecture image wiki-offline :', pathname, error?.message || error);
     }
-    return null;
-  }
+    return {
+      ...item,
+      wikiItemId: stringValue(matchedWikiItem.id),
+      wikiTitle: stringValue(matchedWikiItem.title),
+      wikiImageUrl: absoluteUrl(matchedWikiItem.imageUrl),
+      wikiTag: stringValue(matchedWikiItem.tags?.[0] || item?.wikiTag),
+      wikiDescription: stringValue(matchedWikiItem.description),
+    };
+  });
 };
 
 const isPrivateIpAddress = (address) => {
@@ -6536,8 +6590,11 @@ const fetchImageBytesForReport = async (descriptor) => {
           mimeType: dataUrlMatch[1] || 'image/png',
         };
       }
-      const bundledWikiImage = await readBundledWikiOfflineImage(rawUrl);
-      if (bundledWikiImage) return bundledWikiImage;
+      const localWikiImage = await readLocalWikiReportImage(rawUrl, {
+        offlineDir: BUNDLED_WIKI_OFFLINE_DIR_PATH,
+        uploadsDir: WIKI_LIBRARY_DIR_URL.pathname,
+      });
+      if (localWikiImage) return localWikiImage;
       const safeUrl = await resolveSafeRemoteReportImageUrl(rawUrl);
       if (!safeUrl) return null;
       const res = await fetch(safeUrl, { redirect: 'manual' });
@@ -7427,6 +7484,7 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
 });
 
 registerContextRoutes(app, { requireAuth, enabled: conditionalSyncEnabled,
+  preferLocal: true,
   creationReady: conditionalCreatesReady,
   tableId: TABLES.contexteDeVie, writer: conditionalWriter, createRecord, queryAll,
   ensureDossierRecord, canAccessDossierRecord, field });
@@ -8318,6 +8376,9 @@ app.get('/public/note-pages/:notePageId/preview', requireAuth, async (req, res, 
 
 app.get('/api/note-pages/:patientId', requireAuth, async (req, res, next) => {
   try {
+    res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     const access = await resolveBeneficiaryAccess(
       req.appUser,
       req.params.patientId,
@@ -9240,6 +9301,7 @@ app.put('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
     const dossierId = field(dossierRecord, 'uuid_source');
     const result = await createVisitRecommendationsPublisher({
       store: await getVisitRecommendationsSnapshotStore(),
+      preferLocal: true,
       resolveWikiItem: async (wikiItemId) => resolveRecommendationWikiItem(
         { wikiItemId },
         wikiLookup,

@@ -38,12 +38,26 @@ class AggirDocumentService {
     final patient = dossier.patient;
     final docs = await _repository.fetchDocuments(patient.id);
     final id = documentId(patient.id);
+    bool isAutomaticGrid(DocItem doc) =>
+        doc.id == id ||
+        (doc.title == 'Grille AGGIR' && doc.tags.contains('AGGIR'));
+    final grids = docs.where(isAutomaticGrid).toList();
     if (!primaryBeneficiaryRequiresAggir(patient)) {
       // Hide the automatic grid without deleting handwriting or signatures.
-      return docs.where((doc) => doc.id != id).toList();
+      return docs.where((doc) => !isAutomaticGrid(doc)).toList();
     }
-    // Never regenerate an existing form: the practitioner may have signed it.
-    if (!createIfMissing || docs.any((doc) => doc.id == id)) return docs;
+    // A remote alias can have a different local id from the deterministic
+    // offline form. Keep one visible copy and never overwrite a signed one.
+    if (grids.isNotEmpty) {
+      final signed = grids.where(
+        (doc) => (doc.annotationsJson ?? '').trim().isNotEmpty,
+      );
+      final preferred = signed.isNotEmpty
+          ? signed.first
+          : grids.firstWhere((doc) => doc.id == id, orElse: () => grids.first);
+      return [preferred, ...docs.where((doc) => !isAutomaticGrid(doc))];
+    }
+    if (!createIfMissing) return docs;
     final bytes = await buildPdf(patient, today: DateTime.now());
     final document = await _repository.importDocumentBytes(
       patientId: patient.id,

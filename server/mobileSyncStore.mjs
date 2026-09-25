@@ -4,6 +4,7 @@ import process from 'node:process';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 import { callNocoTool, requestConditionalNocodbRest } from './nocodbMcpClient.mjs';
+import { notePageReadFields } from './notePageFields.mjs';
 
 const syncRevisionField = 'app_sync_revision';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -118,6 +119,8 @@ const previewDataUrlForStorage = (previewDataUrl) => {
   return '';
 };
 
+// Every optional field written by upsertNotePage must be read back for its
+// post-write confirmation and stable writeId replay.
 export const MOBILE_SYNC_SCHEMA_SPEC = {
   documents: {
     tableName: TABLE_NAMES.documents,
@@ -927,7 +930,7 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
   },
 });
 
-const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId, notePagesTableId }) => {
+const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId, notePagesTableId, preferLocal = false }) => {
   let notePageFieldNamesPromise = null;
 
   const getNotePageFieldNames = async () => {
@@ -950,14 +953,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
   };
 
   const getNotePageFields = async () => {
-    const fields = ['uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom', 'beneficiaire_nom_complet', 'dossier_libelle', 'scope_type', 'scope_id', 'tab_key', 'sub_tab_key', 'page_number', 'text_content', 'drawing_json', 'layout_kind', syncRevisionField, 'updated_at'];
-    if (await supportsNotePageField('preview_data_url')) {
-      fields.splice(fields.indexOf('layout_kind'), 0, 'preview_data_url');
-    }
-    if (await supportsNotePageField('preview_url')) {
-      fields.splice(fields.indexOf('layout_kind'), 0, 'preview_url');
-    }
-    return fields;
+    return notePageReadFields(await getNotePageFieldNames());
   };
 
   const notePageIdentityWhere = ({
@@ -1734,11 +1730,14 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
           throw new NotePageMutationError(409, 'NOTE_PAGE_WRITE_ID_REUSED', existing);
         }
       } else {
-        if (observedRevision !== expectedRevision) {
+        if (!preferLocal && observedRevision !== expectedRevision) {
           throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT', existing);
         }
+        if (preferLocal && !uuidPattern.test(observedRevision)) {
+          throw new NotePageMutationError(503, 'NOTE_PAGE_REVISION_NOT_PREPARED', existing);
+        }
         const params = new URLSearchParams({
-          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${expectedRevision})`,
+          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${preferLocal ? observedRevision : expectedRevision})`,
         });
         await requestConditionalNocodbRest({
           method: 'PATCH',
@@ -1925,7 +1924,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
   };
 };
 
-export const createMobileSyncStore = ({ absoluteUrl }) => {
+export const createMobileSyncStore = ({ absoluteUrl, preferLocal = false }) => {
   let adapterPromise;
 
   const getAdapter = async ({ forceRefresh = false } = {}) => {
@@ -1933,7 +1932,7 @@ export const createMobileSyncStore = ({ absoluteUrl }) => {
       adapterPromise = discoverMobileSyncTables()
         .then((tables) => {
           if (tables) {
-            return createNocodbStoreAdapter({ absoluteUrl, ...tables });
+            return createNocodbStoreAdapter({ absoluteUrl, preferLocal, ...tables });
           }
           if (REQUIRE_NOCODB_ON_SERVERLESS) {
             throw new Error('Tables NocoDB mobiles introuvables (mode obligatoire en production).');
@@ -2079,7 +2078,7 @@ export const createMobileSyncStore = ({ absoluteUrl }) => {
         throw new Error('Tables NocoDB mobiles introuvables');
       }
 
-      const nocodbAdapter = createNocodbStoreAdapter({ absoluteUrl, ...tables });
+      const nocodbAdapter = createNocodbStoreAdapter({ absoluteUrl, preferLocal, ...tables });
       const localDocuments = await readDocumentStore();
       const localNotePages = await readNotePagesStore();
       const summary = {

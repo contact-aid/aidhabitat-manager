@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -9,6 +8,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../components/beneficiary_header.dart';
 import '../components/beneficiary_palettes.dart';
 import '../components/brand_colors.dart';
+import '../components/cta_text_style.dart';
 import '../components/commune_field_group.dart';
 import '../components/form_widgets.dart';
 import '../components/notes_widget.dart';
@@ -152,64 +152,30 @@ class _DossierScreenState extends State<DossierScreen> {
       _recomputeIncomeCategory();
       setState(() => _communeOptions = _mapCommunes());
     });
-    // Hydrate la note rapide avec le commentaire projet (si la note
-    // rapide n'existe pas encore côté storage — un utilisateur qui a
-    // volontairement effacé la note ne verra pas le commentaire
-    // réapparaître).
-    _seedQuickNoteFromProjectComment();
+    // Une ouverture d'écran est strictement en lecture : elle peut rafraîchir
+    // le cache local depuis le serveur, mais ne doit jamais créer une note ni
+    // alimenter la file de synchronisation.
+    _refreshQuickNoteFromRemote();
   }
 
-  /// Si la note rapide ("notes_rapides") n'existe PAS encore côté
-  /// storage pour ce dossier, et que `observations.projetSouhaitUsage`
-  /// contient un commentaire projet, on pré-remplit la note avec ce
-  /// commentaire. Ensuite, NotesWidget se re-fetch via le jeton de
-  /// rafraîchissement et affiche le texte.
-  ///
-  /// Condition d'idempotence : on ne seede QUE si la ligne n'existe
-  /// pas du tout (DataService.fetchNoteDrawingJson → null). Si
-  /// l'utilisateur a déjà tapé puis effacé la note, il y a une ligne
-  /// (JSON avec texte vide) et on ne touche à rien.
-  Future<void> _seedQuickNoteFromProjectComment() async {
+  /// Rafraîchit la note rapide sans aucune écriture distante. L'ancien flux
+  /// initialisait automatiquement une note depuis le commentaire projet quand
+  /// le cache local était vide. Sur un nouveau navigateur, cette absence de
+  /// cache pouvait être confondue avec une absence serveur et produire une
+  /// écriture CAS concurrente simplement en ouvrant le dossier.
+  Future<void> _refreshQuickNoteFromRemote() async {
     try {
-      final existingJson = await DataService().fetchNoteDrawingJson(
+      final refreshed = await DataService().refreshNotePageFromRemote(
         patientId: widget.dossier.patient.id,
         tabKey: 'notes_rapides',
         pageNumber: 0,
-        dossierId: widget.dossier.id,
-      );
-      if (existingJson != null) return;
-      // Un autre appareil peut avoir renseigné l'observation après le
-      // dernier workspace pull. Rafraîchit silencieusement la table dédiée
-      // avant de décider si la note rapide doit être initialisée.
-      await DataService().refreshObservationsFromRemote(widget.dossier.id);
-      // Récupère le commentaire projet depuis les observations du dossier.
-      final obs = await _repository.fetchObservations(widget.dossier.id);
-      final comment = (obs?.projetSouhaitUsage ?? '').trim();
-      if (comment.isEmpty) return;
-      // Écrit le commentaire comme texte initial de la page 0 de la
-      // note rapide. Format identique à `_currentDrawingJson()` de
-      // NotesWidget (version:1, text, strokes).
-      final json = jsonEncode({
-        'version': 1,
-        'text': comment,
-        'strokes': <dynamic>[],
-      });
-      await DataService().saveNoteDrawingJson(
-        patientId: widget.dossier.patient.id,
-        tabKey: 'notes_rapides',
-        pageNumber: 0,
-        drawingJson: json,
         dossierId: widget.dossier.id,
         scopeType: 'dossier_detail',
         scopeId: widget.dossier.id,
       );
-      if (mounted) {
-        // Le jeton externe force NotesWidget à re-fetch sa page 0 — le
-        // commentaire tout juste sauvé apparaît alors dans la zone texte.
-        setState(() => _quickNoteRefreshToken++);
-      }
+      if (refreshed && mounted) setState(() => _quickNoteRefreshToken++);
     } catch (_) {
-      // silent — la note rapide restera vide si la hydratation échoue.
+      // Best effort : hors ligne, NotesWidget conserve la copie locale.
     }
   }
 
@@ -413,48 +379,67 @@ class _DossierScreenState extends State<DossierScreen> {
             _buildHeader(context),
             const SizedBox(height: 32),
             Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 5,
-                    child: Column(
-                      children: [
-                        _buildQuickActions(context),
-                        if (widget.dossier.syncState == SyncState.conflict) ...[
-                          const SizedBox(height: 12),
+              child: LayoutBuilder(
+                builder: (context, constraints) => constraints.maxWidth < 700
+                    ? ListView(
+                        children: [
+                          _buildQuickActions(context),
+                          const SizedBox(height: 24),
                           SizedBox(
-                            width: double.infinity,
-                            child: _QuickActionButton(
-                              icon: LucideIcons.gitMerge,
-                              label: 'Résoudre le conflit',
-                              subLabel:
-                                  'Comparer les versions et choisir laquelle garder',
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => ConflictResolutionScreen(
-                                      localDossier: widget.dossier,
-                                      onResolved: () {
-                                        Navigator.pop(context);
-                                        widget.onBack();
+                            height: constraints.maxHeight < 650
+                                ? 650
+                                : constraints.maxHeight,
+                            child: _buildInfoCard(),
+                          ),
+                          const SizedBox(height: 24),
+                          SizedBox(height: 420, child: _buildNotesColumn()),
+                        ],
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 5,
+                            child: Column(
+                              children: [
+                                _buildQuickActions(context),
+                                if (widget.dossier.syncState ==
+                                    SyncState.conflict) ...[
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: _QuickActionButton(
+                                      icon: LucideIcons.gitMerge,
+                                      label: 'Résoudre le conflit',
+                                      subLabel:
+                                          'Comparer les versions et choisir laquelle garder',
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                ConflictResolutionScreen(
+                                                  localDossier: widget.dossier,
+                                                  onResolved: () {
+                                                    Navigator.pop(context);
+                                                    widget.onBack();
+                                                  },
+                                                ),
+                                          ),
+                                        );
                                       },
                                     ),
                                   ),
-                                );
-                              },
+                                ],
+                                const SizedBox(height: 24),
+                                Expanded(child: _buildInfoCard()),
+                              ],
                             ),
                           ),
+                          const SizedBox(width: 24),
+                          Expanded(flex: 7, child: _buildNotesColumn()),
                         ],
-                        const SizedBox(height: 24),
-                        Expanded(child: _buildInfoCard()),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 24),
-                  Expanded(flex: 7, child: _buildNotesColumn()),
-                ],
+                      ),
               ),
             ),
           ],
@@ -519,7 +504,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       'Date de visite',
                       style: GoogleFonts.nunito(
-                        fontSize: 11,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: const Color(0xFF8A7A95),
                         height: 1,
@@ -1101,8 +1086,8 @@ class _DossierScreenState extends State<DossierScreen> {
                                 label: 'Nom',
                                 value: _lastName,
                                 labelColor: kBrandPurple,
-                                labelSize: 14,
-                                valueSize: 14,
+                                labelSize: 16,
+                                valueSize: 16,
                                 onFocused: onFocused,
                                 onChanged: (v) {
                                   _lastName = v;
@@ -1118,8 +1103,8 @@ class _DossierScreenState extends State<DossierScreen> {
                                 label: 'Prénom',
                                 value: _firstName,
                                 labelColor: kBrandPurple,
-                                labelSize: 14,
-                                valueSize: 14,
+                                labelSize: 16,
+                                valueSize: 16,
                                 onFocused: onFocused,
                                 onChanged: (v) {
                                   _firstName = v;
@@ -1147,8 +1132,8 @@ class _DossierScreenState extends State<DossierScreen> {
                                 value: _fiscalRevenue,
                                 unit: '€',
                                 labelColor: kBrandPurple,
-                                labelSize: 14,
-                                valueSize: 14,
+                                labelSize: 16,
+                                valueSize: 16,
                                 onFocused: onFocused,
                                 onChanged: (v) {
                                   _fiscalRevenue = v;
@@ -1168,8 +1153,8 @@ class _DossierScreenState extends State<DossierScreen> {
                           label: 'Adresse',
                           value: _address,
                           labelColor: kBrandPurple,
-                          labelSize: 14,
-                          valueSize: 14,
+                          labelSize: 16,
+                          valueSize: 16,
                           onFocused: onFocused,
                           onChanged: (v) {
                             _address = v;
@@ -1190,8 +1175,8 @@ class _DossierScreenState extends State<DossierScreen> {
                           showZipField: true,
                           zipLabel: 'Code postal',
                           labelColor: kBrandPurple,
-                          labelSize: 14,
-                          valueSize: 14,
+                          labelSize: 16,
+                          valueSize: 16,
                           onFocused: onFocused,
                           onChanged: (update) {
                             setState(() {
@@ -1459,7 +1444,7 @@ class _DossierScreenState extends State<DossierScreen> {
                     Text(
                       items[index].label,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
                         color: color,
                       ),
@@ -1592,14 +1577,7 @@ class _QuickActionButton extends StatelessWidget {
               child: Icon(icon, color: kBrandPurple),
             ),
             const SizedBox(height: 16),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
+            Text(label, style: kCtaTextStyle.copyWith(color: Colors.black87)),
             const SizedBox(height: 4),
             Text(
               subLabel,
@@ -1607,7 +1585,7 @@ class _QuickActionButton extends StatelessWidget {
               // pour rester lisible avec l'épaisseur générale du
               // dossier (demande user 2026-05-13).
               style: const TextStyle(
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: Colors.grey,
               ),

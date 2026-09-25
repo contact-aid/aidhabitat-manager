@@ -77,10 +77,12 @@ class EpciBadge extends StatelessWidget {
     required this.label,
     this.maxWidth = 220,
     this.large = false,
+    this.compact = false,
   });
   final String label;
   final double maxWidth;
   final bool large;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -102,7 +104,7 @@ class EpciBadge extends StatelessWidget {
           // Refonte 2026-05-13 : Nunito w600 — aligné sur les autres
           // titres / badges de page de l'app.
           style: GoogleFonts.nunito(
-            fontSize: large ? 14 : 12,
+            fontSize: compact ? 14 : 16,
             fontWeight: FontWeight.w600,
             letterSpacing: 0.2,
             color: palette.fg,

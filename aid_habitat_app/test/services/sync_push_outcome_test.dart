@@ -279,6 +279,45 @@ void main() {
     },
   );
 
+  test(
+    'a durable local-priority mutation may omit its historical timestamp',
+    () async {
+      const writeId = '11111111-1111-4111-8111-111111111111';
+      final queue = _Queue(
+        payload: jsonEncode({
+          'dossierId': 'dossier-1',
+          'updates': {'status': 'NEW'},
+          'concurrency': {
+            'version': 1,
+            'writeId': writeId,
+            'baseValues': <String, dynamic>{},
+            'expectedUpdatedAt': null,
+          },
+        }),
+      );
+      var requests = 0;
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          requests++;
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['concurrency']['writeId'], writeId);
+          expect(body['expectedUpdatedAt'], isNull);
+          return http.Response(
+            '{"success":true,"data":{"updatedAt":"2026-09-02T10:00:00.000Z"}}',
+            200,
+          );
+        }),
+      );
+      final result = await NocodbSyncService(
+        apiClient: client,
+        syncRepository: queue,
+      ).pushPendingChanges();
+      expect(requests, greaterThan(0));
+      expect(result.conflictCount, 0);
+      expect(queue.completed, isNotEmpty);
+    },
+  );
+
   for (final retryStatus in [200, 400, 503]) {
     test(
       '409 never retries unconditionally (following response would be $retryStatus)',

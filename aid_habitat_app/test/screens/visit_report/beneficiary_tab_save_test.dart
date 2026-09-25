@@ -99,6 +99,7 @@ Future<void> _mount(
   _Repository repository, {
   Dossier? dossier,
   int section = 0,
+  int conflictRefreshToken = 0,
   VoidCallback? onChanged,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 1200));
@@ -110,6 +111,7 @@ Future<void> _mount(
           dossier: dossier ?? _dossier(),
           repository: repository,
           initialSubSection: section,
+          conflictRefreshToken: conflictRefreshToken,
           onPatientChanged: onChanged,
         ),
       ),
@@ -155,6 +157,52 @@ Future<void> _exhaustRetries(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('server choice refreshes dependence without saving stale form', (
+    tester,
+  ) async {
+    final repository = _Repository();
+    Patient patientWithDependence(String value) {
+      final p = _dossier().patient;
+      return Patient(
+        id: p.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        birthDate: p.birthDate,
+        phone: p.phone,
+        email: p.email,
+        address: p.address,
+        city: p.city,
+        zipCode: p.zipCode,
+        familySituation: p.familySituation,
+        incomeCategory: p.incomeCategory,
+        trustedPerson: p.trustedPerson,
+        dependenceTxt: value,
+        occupants: [Occupant(dependenceTxt: value)],
+      );
+    }
+
+    final local = _dossier().copyWith(patient: patientWithDependence('Canne'));
+    await _mount(tester, repository, dossier: local, section: 2);
+    FormToggleGroup dependence() => tester.widget<FormToggleGroup>(
+      find.byWidgetPredicate(
+        (widget) => widget is FormToggleGroup && widget.label == 'Dépendance',
+      ),
+    );
+    expect(dependence().selected, 'Canne');
+
+    final server = local.copyWith(patient: patientWithDependence('Aucune'));
+    await _mount(
+      tester,
+      repository,
+      dossier: server,
+      section: 2,
+      conflictRefreshToken: 1,
+    );
+    expect(dependence().selected, 'Aucune');
+    await _flush(tester);
+    expect(repository.patientWrites, isEmpty);
+  });
+
   testWidgets('AGGIR notice follows the primary beneficiary age', (
     tester,
   ) async {

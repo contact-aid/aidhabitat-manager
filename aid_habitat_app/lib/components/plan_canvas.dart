@@ -12,6 +12,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/pencil_interaction_service.dart';
 import 'confirmation_dialog.dart';
@@ -259,6 +260,8 @@ class PlanCanvas extends StatefulWidget {
   /// Regenerates the PNG preview once after loading existing strokes.
   /// Useful when a page has just been seeded from another drawing.
   final bool refreshPreviewOnLoad;
+  final DataService? dataService;
+  final Future<String?> Function()? previewDataUrlBuilder;
 
   /// Optional pagination info rendered inline dans la toolbar.
   final int? currentPage;
@@ -283,6 +286,8 @@ class PlanCanvas extends StatefulWidget {
     this.tabKey = 'Plans',
     this.pageNumber = 0,
     this.refreshPreviewOnLoad = false,
+    this.dataService,
+    this.previewDataUrlBuilder,
     this.currentPage,
     this.totalPages,
     this.onPrevPage,
@@ -297,7 +302,7 @@ class PlanCanvas extends StatefulWidget {
 }
 
 class _PlanCanvasState extends State<PlanCanvas> {
-  final _dataService = DataService();
+  late final DataService _dataService = widget.dataService ?? DataService();
   final GlobalKey _drawAreaKey = GlobalKey();
   StreamSubscription<PencilDoubleTapEvent>? _pencilDoubleTapSubscription;
 
@@ -357,7 +362,6 @@ class _PlanCanvasState extends State<PlanCanvas> {
 
   Timer? _saveTimer;
   bool _loaded = false;
-  bool _decodedLegacyErasers = false;
 
   static const List<int> _colorPresets = [
     0xFF111827,
@@ -705,7 +709,6 @@ class _PlanCanvasState extends State<PlanCanvas> {
       final migrated = <_PlanStroke>[];
       for (final stroke in parsed) {
         if (stroke.tool == PlanTool.eraser) {
-          _decodedLegacyErasers = true;
           _applyEraserToTargets(migrated, stroke);
         } else {
           migrated.add(stroke);
@@ -724,16 +727,14 @@ class _PlanCanvasState extends State<PlanCanvas> {
       pageNumber: widget.pageNumber,
     );
     if (!mounted) return;
-    _decodedLegacyErasers = false;
     _strokes
       ..clear()
       ..addAll(_decodeStrokesJson(json));
     if (!mounted) return;
     setState(() => _loaded = true);
-    if ((_decodedLegacyErasers || widget.refreshPreviewOnLoad) &&
-        _strokes.isNotEmpty) {
-      // Refresh the preview after loading a seeded page so report generation
-      // sees the copied editable drawing even if the user does not redraw.
+    if (widget.refreshPreviewOnLoad && _strokes.isNotEmpty) {
+      // Only a scenario just created by an explicit user action may generate
+      // its missing preview. Loading an existing page must stay read-only.
       _scheduleSave();
     }
   }
@@ -756,13 +757,16 @@ class _PlanCanvasState extends State<PlanCanvas> {
     // `toImage` indisponible — rare), on save quand même les
     // strokes JSON. Le rapport aura juste page 9/10 vide pour cette
     // visite.
-    final previewDataUrl = await _rasterizeCanvasDataUrl();
+    final previewDataUrl =
+        await (widget.previewDataUrlBuilder?.call() ??
+            _rasterizeCanvasDataUrl());
     await _dataService.saveNoteDrawingJson(
       patientId: patientId,
       tabKey: tabKey,
       pageNumber: pageNumber,
       drawingJson: payload,
       previewDataUrl: previewDataUrl,
+      mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
 
@@ -1373,7 +1377,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
         child: Text(
           '${widget.currentPage! + 1}/${widget.totalPages}',
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.4,
             color: _kToolbarIcon,
@@ -1469,7 +1473,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
                 label,
                 style: const TextStyle(
                   color: _kToolbarActiveText,
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                 ),
               ),

@@ -191,6 +191,7 @@ class NoteRepository {
     String? dossierId,
     String? scopeType,
     String? scopeId,
+    required SyncMutationOrigin mutationOrigin,
   }) async {
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
@@ -256,6 +257,7 @@ class NoteRepository {
           'expectedRevision': mutation.expectedRevision,
           'writeId': mutation.writeId,
           'predecessorWriteIds': mutation.predecessorWriteIds,
+          'mutationOrigin': mutationOrigin.wireName,
           if (preservedPhase != null) 'planPhase': preservedPhase,
           // `previewDataUrl` rasterisé côté Flutter (PNG base64). Stocké
           // uniquement dans le payload de la sync_op (pas en SQLite
@@ -342,6 +344,7 @@ class NoteRepository {
           'writeId': mutation.writeId,
           'predecessorWriteIds': mutation.predecessorWriteIds,
           'planPhase': planPhaseToDb(phase),
+          'mutationOrigin': SyncMutationOrigin.userEdit.wireName,
         }),
       ),
       'status': SyncOperationStatus.pending.name,
@@ -464,40 +467,27 @@ class NoteRepository {
     );
     final existing = existingRows.isNotEmpty ? existingRows.first : null;
 
-    // Stratégie LWW (last-writer-wins) basée sur les timestamps.
-    //
-    // Avant 2026-05-07 : on skippait simplement si `existingSyncState !=
-    // synced`, ce qui bloquait définitivement la propagation cross-
-    // device dès qu'une row locale était orpheline en `pendingSync`
-    // (ex. push échoué silencieusement, op `failed` non rejouée…).
-    // Symptôme reporté : « j'ai modifié la note médicale Contexte de
-    // vie de BALS Joris sur iPad, sur Mac ça ne se change pas ».
-    //
-    // Désormais :
-    //  1. Une ligne locale non publiée n'est remplacée que si le serveur est
-    //     strictement plus récent.
-    //  2. Une ligne déjà `synced` accepte une version de même timestamp :
-    //     cela permet au serveur canonique de réparer un cache Web incomplet.
-    //  3. Un snapshot serveur réellement plus ancien reste refusé.
-    //
-    // Le NotesWidget protège déjà la frappe en cours via `_isDirty` →
-    // pas de risque d'écraser ce que l'utilisateur tape MAINTENANT,
-    // c'est seulement les modifs anciennes orphelines qui peuvent
-    // être ratrapées.
+    // Une note non publiée reste prioritaire, quel que soit l'horodatage
+    // distant. Une note déjà synchronisée peut accepter le même timestamp
+    // pour réparer un cache incomplet, mais jamais un snapshot plus ancien.
     if (existing != null) {
-      final localUpdatedAt = existing['updated_at'] as String?;
-      final remoteIsNewer = _isRemoteUpdatedAtNewer(
-        remoteUpdatedAt: updatedAt,
-        localUpdatedAt: localUpdatedAt,
+      final outstanding = await db.query(
+        'sync_operations',
+        columns: const ['id'],
+        where:
+            "entity_type = 'note_page' AND entity_local_id = ? AND status != 'completed'",
+        whereArgs: [existing['local_id']],
+        limit: 1,
       );
+      if (outstanding.isNotEmpty) return false;
+      final localUpdatedAt = existing['updated_at'] as String?;
       final localHasUnpublishedChanges =
           existing['sync_state']?.toString() != SyncState.synced.name;
       final remoteIsOlder = _isRemoteUpdatedAtOlder(
         remoteUpdatedAt: updatedAt,
         localUpdatedAt: localUpdatedAt,
       );
-      if ((localHasUnpublishedChanges && !remoteIsNewer) ||
-          (!localHasUnpublishedChanges && remoteIsOlder)) {
+      if (localHasUnpublishedChanges || remoteIsOlder) {
         return false;
       }
     }
@@ -593,22 +583,6 @@ class NoteRepository {
       writeId: newSyncWriteId(),
       predecessorWriteIds: predecessorWriteIds.toSet().take(256).toList(),
     );
-  }
-
-  /// Compare deux timestamps ISO-8601 (ex. `2026-05-07T14:30:00Z`)
-  /// pour décider si la version remote est strictement plus récente
-  /// que la version locale. En cas de timestamp manquant ou invalide,
-  /// renvoie `false` (= refuse le merge) pour rester safe.
-  bool _isRemoteUpdatedAtNewer({
-    required String? remoteUpdatedAt,
-    required String? localUpdatedAt,
-  }) {
-    if (remoteUpdatedAt == null || remoteUpdatedAt.isEmpty) return false;
-    if (localUpdatedAt == null || localUpdatedAt.isEmpty) return true;
-    final remote = DateTime.tryParse(remoteUpdatedAt);
-    final local = DateTime.tryParse(localUpdatedAt);
-    if (remote == null || local == null) return false;
-    return remote.isAfter(local);
   }
 
   bool _isRemoteUpdatedAtOlder({

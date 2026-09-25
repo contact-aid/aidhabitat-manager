@@ -165,14 +165,17 @@ class _RecommendationsTabState extends State<RecommendationsTab>
     final visibleItems = hydratedItems
         .where(_hasSelectedLibraryItem)
         .toList(growable: false);
-    final removedEmptyItems = visibleItems.length != hydratedItems.length;
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
       _items = visibleItems;
       _wikiItems = localWiki;
       _loaded = true;
     });
-    if (removedEmptyItems) _scheduleSave();
+    // Hydration is read-only. Historical empty drafts remain preserved in
+    // SQLite and are merely hidden from the grid. Removing them is a data
+    // migration and must never be disguised as an autosave triggered by
+    // opening/rebuilding the tab. A future cleanup, if needed, must be an
+    // explicit user action or a separately audited migration.
   }
 
   bool _hasSelectedLibraryItem(VisitRecommendationItem item) {
@@ -563,7 +566,8 @@ class _RecommendationsTabState extends State<RecommendationsTab>
 
   double _recommendationCardHeight(double cardWidth) {
     final imageHeight = (cardWidth - 24) / 1.5;
-    return imageHeight + 174;
+    // Leave room for the two-line description and 16 px field labels.
+    return imageHeight + 210;
   }
 
   Widget _buildAddRecommendationCard() {
@@ -804,6 +808,7 @@ class _RecommendationCard extends StatelessWidget {
             maxLines: 2,
             minLines: 2,
             valueSize: 14,
+            valueWeight: FontWeight.w700,
             onChanged: (v) => onChange(item.copyWith(note: v)),
           ),
         ],
@@ -1039,7 +1044,7 @@ class _WikiPickerDialogState extends State<WikiPickerDialog> {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                   color: Color(0xFF2B323A),
                 ),
@@ -1347,7 +1352,7 @@ class _DescriptionsPickerDialogState extends State<_DescriptionsPickerDialog> {
               const SizedBox(height: 4),
               Text(
                 widget.title,
-                style: const TextStyle(fontSize: 13, color: Color(0xFF5C6670)),
+                style: const TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
               ),
               const SizedBox(height: 12),
               Flexible(
