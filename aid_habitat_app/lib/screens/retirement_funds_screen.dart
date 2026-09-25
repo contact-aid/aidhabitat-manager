@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../components/brand_colors.dart';
 import '../components/cta_text_style.dart';
 import '../components/cached_remote_image.dart';
+import '../components/retirement_fund_action_menu.dart';
 import '../components/soft_transitions.dart';
 import '../models/types.dart';
 import '../services/data_service.dart';
@@ -618,53 +619,11 @@ class _FundCardState extends State<_FundCard> {
                           else
                             const Spacer(),
                           const SizedBox(width: 8),
-                          SizedBox(
-                            width: 34,
-                            height: 34,
-                            child: PopupMenuButton<String>(
-                              tooltip: 'Actions',
-                              icon: const Icon(
-                                LucideIcons.moreVertical,
-                                size: 18,
-                                color: Color(0xFF8A939D),
-                              ),
-                              padding: EdgeInsets.zero,
-                              splashRadius: 18,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              onSelected: (action) {
-                                switch (action) {
-                                  case 'edit':
-                                    widget.onEdit();
-                                  case 'share':
-                                    widget.onShare();
-                                  case 'duplicate':
-                                    widget.onDuplicate();
-                                  case 'delete':
-                                    widget.onDelete();
-                                }
-                              },
-                              itemBuilder: (_) => const [
-                                PopupMenuItem(
-                                  value: 'edit',
-                                  child: Text('Modifier'),
-                                ),
-                                PopupMenuItem(
-                                  value: 'share',
-                                  child: Text('Partager'),
-                                ),
-                                PopupMenuItem(
-                                  value: 'duplicate',
-                                  child: Text('Dupliquer'),
-                                ),
-                                PopupMenuDivider(),
-                                PopupMenuItem(
-                                  value: 'delete',
-                                  child: Text('Supprimer'),
-                                ),
-                              ],
-                            ),
+                          RetirementFundActionMenu(
+                            onEdit: widget.onEdit,
+                            onShare: widget.onShare,
+                            onDuplicate: widget.onDuplicate,
+                            onDelete: widget.onDelete,
                           ),
                         ],
                       ),

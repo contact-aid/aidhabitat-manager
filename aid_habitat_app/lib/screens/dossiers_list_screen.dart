@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
@@ -730,6 +731,8 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
   static const int _flexEpci = 4;
   static const int _flexDate = 2;
 
+  bool get _showEpciColumn => kIsWeb && MediaQuery.sizeOf(context).width >= 900;
+
   /// En-tête de colonnes pour UNE section. Le tap sur une colonne sort
   /// uniquement les dossiers de cette section (pas les autres) — chaque
   /// bucket conserve son propre tri.
@@ -758,10 +761,15 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
             flex: _flexRevenus,
             child: _headerCell(bucket, 'REVENUS', column: 'revenus'),
           ),
-          Expanded(
-            flex: _flexEpci,
-            child: _headerCell(bucket, 'COMMUNAUTÉ DE COMMUNE', column: 'epci'),
-          ),
+          if (_showEpciColumn)
+            Expanded(
+              flex: _flexEpci,
+              child: _headerCell(
+                bucket,
+                'COMMUNAUTÉ DE COMMUNE',
+                column: 'epci',
+              ),
+            ),
           Expanded(
             flex: _flexDate,
             child: _headerCell(
@@ -967,15 +975,16 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                       ),
               ),
               // COMMUNAUTÉ DE COMMUNE
-              Expanded(
-                flex: _flexEpci,
-                child: epci.isEmpty
-                    ? const SizedBox.shrink()
-                    : Align(
-                        alignment: Alignment.centerLeft,
-                        child: EpciBadge(label: epci),
-                      ),
-              ),
+              if (_showEpciColumn)
+                Expanded(
+                  flex: _flexEpci,
+                  child: epci.isEmpty
+                      ? const SizedBox.shrink()
+                      : Align(
+                          alignment: Alignment.centerLeft,
+                          child: EpciBadge(label: epci),
+                        ),
+                ),
               // DATE DE VISITE — alignée à droite pour la pousser au
               // maximum vers le chevron (demande utilisateur : "décaler
               // la date plus à droite").
