@@ -12,7 +12,22 @@ void main() {
       );
       expect(
         voiceDictationMessageForError('not-allowed', isWeb: true),
-        contains('microphone est autorisé'),
+        contains('autorisations du site'),
+      );
+    });
+
+    test('identifies the browser error without exposing dictated text', () {
+      expect(
+        voiceDictationMessageForError('aborted', isWeb: true),
+        contains('code navigateur : aborted'),
+      );
+      expect(
+        voiceDictationMessageForError('network', isWeb: true),
+        contains('service de reconnaissance vocale'),
+      );
+      expect(
+        voiceDictationMessageForError('language-not-supported', isWeb: true),
+        contains('reconnaissance française'),
       );
     });
 

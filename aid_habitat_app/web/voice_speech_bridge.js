@@ -13,7 +13,7 @@
     }
   }
 
-  function shouldUseRemoteTrack() {
+  function shouldUseRemoteRecognition() {
     try {
       return isArcBrowser() ||
         window.sessionStorage.getItem('aidHabitatRemoteSpeech') === '1';
@@ -22,7 +22,7 @@
     }
   }
 
-  function useRecognitionBridge(Recognition, locale, processLocally) {
+  function useRecognitionBridge(Recognition, locale, processLocally, useExplicitTrack) {
     function BridgedSpeechRecognition() {
       const recognition = new Recognition();
       recognition.lang = locale;
@@ -87,6 +87,14 @@
       recognition.start = function(audioTrack) {
         if (audioTrack) {
           nativeStart(audioTrack);
+          return;
+        }
+
+        // Chrome's recognizer can acquire the microphone itself. Passing a
+        // separately opened track adds an asynchronous start and can abort an
+        // otherwise valid recognition session. Arc alone needs that track.
+        if (!useExplicitTrack) {
+          nativeStart();
           return;
         }
 
@@ -160,10 +168,11 @@
     // Arc exposes itself as Chromium. Its local French recognizer can detect
     // speech without ever returning a transcript, so keep the explicit audio
     // track while using the connected recognizer that Arc handles reliably.
-    if (shouldUseRemoteTrack()) {
-      useRecognitionBridge(Recognition, locale, false);
-      window.__aidHabitatSpeechRuntime = 'remote-track';
-      return 'remote-track';
+    if (shouldUseRemoteRecognition()) {
+      const useExplicitTrack = isArcBrowser();
+      useRecognitionBridge(Recognition, locale, false, useExplicitTrack);
+      window.__aidHabitatSpeechRuntime = useExplicitTrack ? 'remote-track' : 'remote';
+      return window.__aidHabitatSpeechRuntime;
     }
 
     // Browsers without the on-device API keep their existing remote service.
@@ -193,7 +202,7 @@
         window.__aidHabitatSpeechRuntime = 'remote';
         return 'remote';
       }
-      useRecognitionBridge(Recognition, locale, true);
+      useRecognitionBridge(Recognition, locale, true, false);
       window.__aidHabitatSpeechRuntime = 'local';
       return 'local';
     } catch (error) {

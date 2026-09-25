@@ -73,12 +73,13 @@ String voiceDictationMessageForError(String errorCode, {required bool isWeb}) {
   final code = errorCode.toLowerCase();
   if (isWeb &&
       (code.contains('service-not-allowed') ||
-          code.contains('service_not_allowed') ||
-          code.contains('not-allowed') ||
-          code.contains('not_allowed'))) {
-    return 'Le microphone est autorisé, mais ce navigateur bloque son '
-        'service de reconnaissance vocale. Ouvrez app.aidhabitat.fr dans '
-        'Google Chrome ou Safari pour utiliser la dictée.';
+          code.contains('service_not_allowed'))) {
+    return 'Ce navigateur refuse son service de reconnaissance vocale. '
+        'Essayez app.aidhabitat.fr dans Google Chrome ou Safari.';
+  }
+  if (isWeb && (code.contains('not-allowed') || code.contains('not_allowed'))) {
+    return 'Le navigateur refuse l’accès au microphone ou à la '
+        'reconnaissance vocale. Vérifiez les autorisations du site.';
   }
   if (code.contains('permission') ||
       code.contains('disabled') ||
@@ -97,19 +98,31 @@ String voiceDictationMessageForError(String errorCode, {required bool isWeb}) {
   if (isWeb && code.contains('audio-capture')) {
     return 'Aucun microphone utilisable n’a été détecté par le navigateur.';
   }
-  if (code.contains('network') ||
-      code.contains('language') ||
-      code.contains('on_device')) {
-    return isWeb
-        ? 'La dictée web nécessite une connexion active et la '
-              'reconnaissance française du navigateur.'
-        : 'La reconnaissance française hors ligne n’est pas disponible '
-              'sur cet appareil.';
+  if (isWeb && code.contains('network')) {
+    return 'Le service de reconnaissance vocale du navigateur ne répond pas. '
+        'Vérifiez la connexion, puis réessayez.';
+  }
+  if (isWeb && (code.contains('language') || code.contains('on_device'))) {
+    return 'La reconnaissance française du navigateur n’est pas disponible '
+        'sur cet appareil.';
+  }
+  if (code.contains('language') || code.contains('on_device')) {
+    return 'La reconnaissance française hors ligne n’est pas disponible '
+        'sur cet appareil.';
   }
   if (code.contains('no_match') ||
       code.contains('no-speech') ||
       code.contains('speech_timeout')) {
     return 'Aucune parole reconnue. Touchez le micro pour réessayer.';
+  }
+  if (isWeb) {
+    final normalizedCode = code.replaceAll(RegExp(r'[^a-z0-9_-]'), '');
+    final safeCode = normalizedCode.length > 40
+        ? normalizedCode.substring(0, 40)
+        : normalizedCode;
+    return 'La dictée s’est interrompue (code navigateur : '
+        '${safeCode.isEmpty ? 'inconnu' : safeCode}). '
+        'Le texte déjà reconnu est conservé.';
   }
   return 'La dictée s’est interrompue. Le texte déjà reconnu est conservé.';
 }
