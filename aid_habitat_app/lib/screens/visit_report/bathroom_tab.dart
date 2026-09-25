@@ -477,10 +477,11 @@ class _BathroomTabState extends State<BathroomTab>
   }
 
   Future<void> _flushPendingSave() async {
+    final hadPendingSave = _saveTimer?.isActive ?? false;
     _saveTimer?.cancel();
     final inFlight = _saveFuture;
     if (inFlight != null) await inFlight;
-    await _save();
+    if (hadPendingSave) await _save();
   }
 
   void _selectLevelField(String levelField) {

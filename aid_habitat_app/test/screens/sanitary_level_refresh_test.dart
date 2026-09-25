@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 class _DelayedHousingRepository extends DossierRepository {
   final firstRead = Completer<Map<String, dynamic>?>();
   int reads = 0;
+  int writes = 0;
 
   @override
   Future<DiagnosticSanitaire?> fetchDiagnosticSanitaire(
@@ -26,6 +27,14 @@ class _DelayedHousingRepository extends DossierRepository {
   @override
   Future<bool> refreshDiagnosticSanitaireFromRemote(String dossierId) async =>
       false;
+
+  @override
+  Future<void> upsertDiagnosticSanitaire(
+    String dossierId,
+    DiagnosticSanitaire diagnostic,
+  ) async {
+    writes++;
+  }
 }
 
 final _dossier = Dossier(
@@ -90,6 +99,43 @@ void main() {
         repository.firstRead.complete({'second_floor_rooms_json': '[]'});
         await tester.pumpAndSettle();
         expect(find.text('2e étage'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      '${bathroom ? 'Bathroom' : 'WC'} flushes without writing when nothing changed',
+      (tester) async {
+        final repository = _DelayedHousingRepository();
+        repository.firstRead.complete({
+          'second_floor_rooms_json': '["WC","Salle de bain"]',
+        });
+        final bathroomController = BathroomTabController();
+        final wcController = WcTabController();
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: bathroom
+                  ? BathroomTab(
+                      dossier: _dossier,
+                      repository: repository,
+                      controller: bathroomController,
+                    )
+                  : WcTab(
+                      dossier: _dossier,
+                      repository: repository,
+                      controller: wcController,
+                    ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        if (bathroom) {
+          await bathroomController.flushPendingSave();
+        } else {
+          await wcController.flushPendingSave();
+        }
+        expect(repository.writes, 0);
       },
     );
   }
