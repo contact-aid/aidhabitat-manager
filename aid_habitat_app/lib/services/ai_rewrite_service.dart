@@ -34,7 +34,9 @@ class AiRewriteService {
     if (refresh || _availability == null) {
       _availability = _readNativeAvailability();
     }
-    return _availability!;
+    return _availability!.then(
+      (appleAvailable) => appleAvailable || AppConfig.hasRemoteConfig,
+    );
   }
 
   Future<bool> needsPreparation() async {
@@ -84,6 +86,24 @@ class AiRewriteService {
         mode: mode,
         apiBaseUrl: apiBaseUrl,
         sessionToken: sessionToken,
+      );
+    }
+
+    // Apple Intelligence is unavailable on older iPads (including iPad Air
+    // 4). Use the authenticated Aid'Habitat API only for that case; supported
+    // devices continue to process the note locally.
+    if (_usesAppleModel && !await _readNativeAvailability()) {
+      if ((apiBaseUrl != null && sessionToken != null) ||
+          AppConfig.hasRemoteConfig) {
+        return _rewriteRemotely(
+          text: sourceText,
+          mode: mode,
+          apiBaseUrl: apiBaseUrl,
+          sessionToken: sessionToken,
+        );
+      }
+      throw Exception(
+        'La reformulation nécessite une connexion à votre session sur cet iPad.',
       );
     }
 

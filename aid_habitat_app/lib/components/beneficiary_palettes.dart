@@ -68,21 +68,18 @@ EpciPalette epciPaletteFor(String label) {
 ///
 /// Le drapeau [large] augmente le padding et la typo (16×9, fontSize
 /// 14) pour les contextes où le badge accompagne un titre imposant
-/// (ex. preview du bloc Bénéficiaire dans la fiche dossier). La taille
-/// par défaut (12×6, fontSize 12) reste utilisée dans la liste "Mes
-/// dossiers" pour ne pas alourdir le tableau.
+/// (ex. preview du bloc Bénéficiaire dans la fiche dossier). Le texte
+/// reste à 14 px dans tous les contextes.
 class EpciBadge extends StatelessWidget {
   const EpciBadge({
     super.key,
     required this.label,
     this.maxWidth = 220,
     this.large = false,
-    this.compact = false,
   });
   final String label;
   final double maxWidth;
   final bool large;
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -104,7 +101,7 @@ class EpciBadge extends StatelessWidget {
           // Refonte 2026-05-13 : Nunito w600 — aligné sur les autres
           // titres / badges de page de l'app.
           style: GoogleFonts.nunito(
-            fontSize: compact ? 14 : 16,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
             letterSpacing: 0.2,
             color: palette.fg,

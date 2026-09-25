@@ -973,7 +973,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                     ? const SizedBox.shrink()
                     : Align(
                         alignment: Alignment.centerLeft,
-                        child: EpciBadge(label: epci, compact: true),
+                        child: EpciBadge(label: epci),
                       ),
               ),
               // DATE DE VISITE — alignée à droite pour la pousser au

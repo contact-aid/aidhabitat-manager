@@ -164,11 +164,47 @@ void main() {
     );
   });
 
-  test('iOS never falls back to HTTP even with explicit credentials', () async {
+  test(
+    'iOS uses the authenticated API when the Apple model is unavailable',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      var requests = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(nativeChannel, (_) async => false);
+      final service = AiRewriteService(
+        nativeChannel: nativeChannel,
+        client: MockClient((request) async {
+          requests++;
+          expect(request.url.toString(), 'https://example.org/api/ai/rewrite');
+          expect(request.headers['X-App-Session'], 'test');
+          return http.Response(
+            jsonEncode({
+              'data': {'text': 'La note est reformulée.'},
+            }),
+            200,
+          );
+        }),
+      );
+      expect(
+        await service.rewrite(
+          text: 'Une note privée.',
+          apiBaseUrl: 'https://example.org',
+          sessionToken: 'test',
+        ),
+        'La note est reformulée.',
+      );
+      expect(requests, 1);
+    },
+  );
+
+  test('iOS keeps Apple processing when it is available', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     var requests = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (_) async => false);
+        .setMockMethodCallHandler(nativeChannel, (call) async {
+          if (call.method == 'isAvailable') return true;
+          return (call.arguments as Map)['text'] as String;
+        });
     final service = AiRewriteService(
       nativeChannel: nativeChannel,
       client: MockClient((_) async {
@@ -176,13 +212,13 @@ void main() {
         return http.Response('{}', 200);
       }),
     );
-    await expectLater(
-      service.rewrite(
-        text: 'Une note privee.',
+    expect(
+      await service.rewrite(
+        text: 'Le seuil mesure 15 cm.',
         apiBaseUrl: 'https://example.org',
         sessionToken: 'test',
       ),
-      throwsException,
+      'Le seuil mesure 15 cm.',
     );
     expect(requests, 0);
   });

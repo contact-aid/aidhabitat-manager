@@ -769,8 +769,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     final currentIndex = _tabController.index;
     if (previousIndex != currentIndex) {
       _lastHandledTabIndex = currentIndex;
-      if (currentIndex == _tabs.indexOf('Salle de bain') ||
-          currentIndex == _tabs.indexOf('WC')) {
+      if (previousIndex == _tabs.indexOf('Accessibilité') &&
+          (currentIndex == _tabs.indexOf('Salle de bain') ||
+              currentIndex == _tabs.indexOf('WC'))) {
         // TabBar and programmatic navigation both arrive here. Finish any
         // pending level edit before the sanitary tab reads the housing row.
         unawaited(_refreshSanitaryTabsAfterHousingSave());
@@ -782,6 +783,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   }
 
   Future<void> _refreshSanitaryTabsAfterHousingSave() async {
+    // These tabs may still have edits waiting for their debounce timer when
+    // the user briefly visits Accessibilité. Persist them before reloading.
+    await _bathroomController.flushPendingSave();
+    await _wcController.flushPendingSave();
     await _accessibilityController.flushPendingSave();
     if (!mounted) return;
     // Also refresh when the room edit was saved by the debounce timer before

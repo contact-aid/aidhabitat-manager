@@ -140,15 +140,15 @@ class _VoiceDictationStartResult {
 }
 
 /// Owns the singleton `speech_to_text` instance and routes its callbacks to the
-/// currently active editor. Dictation is intentionally limited to the native
-/// iPad app, where Apple provides reliable on-device recognition.
+/// currently active editor. Native iPad uses on-device recognition; the web
+/// app uses the browser speech service after preparing its runtime.
 class _VoiceDictationService {
   _VoiceDictationService._();
 
   static final _VoiceDictationService instance = _VoiceDictationService._();
 
   static bool get isSupportedPlatform =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+      kIsWeb || defaultTargetPlatform == TargetPlatform.iOS;
 
   stt.SpeechToText _speech = stt.SpeechToText();
   bool _initialized = false;
