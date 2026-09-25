@@ -9,6 +9,7 @@ import '../models/types.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
 import '../services/sync_repository.dart';
+import '../services/sync_engine.dart';
 import '../services/web_file_picker.dart';
 import '../services/profile_photo_image.dart';
 import 'brand_colors.dart';
@@ -169,6 +170,15 @@ class _AccountDialogState extends State<AccountDialog> {
                           '$status · $owner · ${operation.attemptCount} tentative(s)'
                           '${error == null || error.isEmpty ? '' : '\n$error'}',
                         ),
+                        trailing: operation.canResume
+                            ? TextButton(
+                                onPressed: () => _resumeStaleOperation(
+                                  operation,
+                                  dialogContext,
+                                ),
+                                child: const Text('Reprendre'),
+                              )
+                            : null,
                       );
                     },
                   ),
@@ -192,6 +202,48 @@ class _AccountDialogState extends State<AccountDialog> {
         ),
       );
     }
+  }
+
+  Future<void> _resumeStaleOperation(
+    PendingSyncDiagnostic operation,
+    BuildContext detailsContext,
+  ) async {
+    final confirm = await showAppConfirmationDialog<bool>(
+      context: detailsContext,
+      title: 'Reprendre cet envoi ?',
+      message:
+          'Fermez les autres onglets de l’application avant de reprendre. '
+          'La sauvegarde sera conservée et envoyée de nouveau avec son '
+          'identifiant initial.',
+      tone: AppConfirmationTone.warning,
+      icon: LucideIcons.refreshCw,
+      actions: const [
+        AppConfirmationAction(label: 'Annuler', value: false),
+        AppConfirmationAction(
+          label: 'Reprendre',
+          value: true,
+          icon: LucideIcons.refreshCw,
+          isPrimary: true,
+        ),
+      ],
+    );
+    if (confirm != true || !mounted) return;
+    final resumed = await SyncRepository().resumeStaleRunningOperation(
+      operationId: operation.operationId,
+      observedUpdatedAt: operation.updatedAt,
+    );
+    if (!mounted) return;
+    if (detailsContext.mounted) Navigator.of(detailsContext).pop();
+    if (resumed) SyncEngine().requestSync();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          resumed
+              ? 'Envoi repris. Les sauvegardes sont conservées.'
+              : 'L’état a changé. Rouvrez les sauvegardes en attente.',
+        ),
+      ),
+    );
   }
 
   Future<void> _pickAndUploadPhoto() async {

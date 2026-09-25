@@ -32,20 +32,31 @@ class _SyncDatabaseHandle {
 
 class PendingSyncDiagnostic {
   const PendingSyncDiagnostic({
+    required this.operationId,
     required this.entityType,
     required this.operationType,
     required this.status,
     required this.ownerState,
     required this.attemptCount,
+    required this.updatedAt,
     this.lastError,
   });
 
+  final String operationId;
   final String entityType;
   final String operationType;
   final String status;
   final String ownerState;
   final int attemptCount;
+  final String updatedAt;
   final String? lastError;
+
+  bool get canResume =>
+      ownerState == 'current' &&
+      status == 'running' &&
+      DateTime.tryParse(updatedAt) != null &&
+      DateTime.now().difference(DateTime.parse(updatedAt)) >=
+          const Duration(minutes: 5);
 }
 
 class SyncRepository {
@@ -746,8 +757,9 @@ class SyncRepository {
   Future<List<PendingSyncDiagnostic>> fetchPendingDiagnostics() async {
     final db = await _database.database;
     final rows = await db.rawQuery('''
-      SELECT operation.entity_type, operation.operation_type,
+      SELECT operation.id, operation.entity_type, operation.operation_type,
         operation.status, operation.attempt_count, operation.last_error,
+        operation.updated_at,
         CASE
           WHEN ownership.operation_id IS NULL THEN 'missing'
           WHEN ownership.attribution_state IN (
@@ -770,17 +782,57 @@ class SyncRepository {
     return rows
         .map(
           (row) => PendingSyncDiagnostic(
+            operationId: row['id'] as String,
             entityType: row['entity_type'] as String,
             operationType: row['operation_type'] as String,
             status: row['status'] as String,
             ownerState: row['owner_state'] as String,
             attemptCount: (row['attempt_count'] as int?) ?? 0,
+            updatedAt: row['updated_at'] as String,
             lastError: row['owner_state'] == 'current'
                 ? row['last_error'] as String?
                 : null,
           ),
         )
         .toList(growable: false);
+  }
+
+  /// Reopens one interrupted write after its longest JSON request timeout has
+  /// elapsed. The exact operation and payload remain unchanged. Ownership and
+  /// the observed timestamp are checked atomically so a newer write or an
+  /// active account switch cannot be affected.
+  Future<bool> resumeStaleRunningOperation({
+    required String operationId,
+    required String observedUpdatedAt,
+    Duration minAge = const Duration(minutes: 5),
+  }) async {
+    final lastStarted = DateTime.tryParse(observedUpdatedAt);
+    if (lastStarted == null ||
+        DateTime.now().difference(lastStarted) < minAge) {
+      return false;
+    }
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership &&
+          !await SyncOperationOwnership.mayResumeRunning(txn, operationId)) {
+        return false;
+      }
+      final changed = await txn.update(
+        'sync_operations',
+        {
+          'status': SyncOperationStatus.pending.name,
+          'last_error': 'Envoi repris après interruption',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND status = ? AND updated_at = ?',
+        whereArgs: [
+          operationId,
+          SyncOperationStatus.running.name,
+          observedUpdatedAt,
+        ],
+      );
+      return changed == 1;
+    });
   }
 
   /// Compte uniquement les écritures encore en attente qui alimentent le

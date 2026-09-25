@@ -340,6 +340,26 @@ class SyncOperationOwnership {
     return rows.isNotEmpty;
   }
 
+  /// Allows only the original author to reopen an interrupted in-flight row.
+  static Future<bool> mayResumeRunning(
+    DatabaseExecutor txn,
+    String operationId,
+  ) async {
+    final rows = await txn.rawQuery(
+      '''
+      SELECT 1 FROM sync_operations AS operation
+      JOIN $tableName AS ownership ON ownership.operation_id = operation.id
+      JOIN app_session AS session ON session.id = 1
+        AND session.user_local_id = ownership.owner_user_local_id
+      WHERE operation.id = ? AND operation.status = 'running'
+        AND ownership.attribution_state IN (?, ?)
+      LIMIT 1
+      ''',
+      [operationId, capturedAtEnqueue, reviewed],
+    );
+    return rows.isNotEmpty;
+  }
+
   /// Explicitly attributes a reviewed operation to the active local user.
   ///
   /// Both the payload and previous owner are compare-and-set inputs. If the
