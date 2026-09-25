@@ -61,6 +61,8 @@ import {
   generateVisitReport,
   buildReportFileName,
 } from './reports/generateVisitReport.mjs';
+import { readReportRecommendations } from './reports/reportRecommendationSource.mjs';
+import { readLocalWikiReportImage } from './reports/localWikiReportImage.mjs';
 import {
   createConcurrencyGate,
   executeSyncBatch,
@@ -1361,15 +1363,6 @@ const inferExtensionFromMimeType = (mimeType) => ({
   'image/gif': 'gif',
   'application/pdf': 'pdf',
 })[String(mimeType || '').trim().toLowerCase()] || 'bin';
-
-const inferMimeTypeFromFilePath = (filePath) => ({
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-})[path.extname(String(filePath || '')).toLowerCase()] || 'application/octet-stream';
 
 const safeDecodeUriComponent = (value) => {
   try {
@@ -6423,84 +6416,51 @@ const fetchVadOverlayNotesForReport = async (patientId, dossierId) => {
  * de l'endpoint /api/visit-recommendations/:dossierId.
  */
 const fetchVisitRecommendationsForDossier = async (dossierId) => {
-  try {
-    const tableId = await getVisitRecommendationsTableId();
-    let items = [];
-    if (tableId) {
-      const records = await queryAll(tableId, {
-        fields: VISIT_RECOMMENDATION_FIELDS,
-        where: `(dossier_id,eq,${JSON.stringify(String(dossierId))})`,
-      });
-      items = records
-        .map(mapVisitRecommendationRecord)
-        .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
-    } else {
-      const store = await readVisitRecommendationsStore();
-      const payload = store.dossiers?.[dossierId];
-      items = asArray(payload?.items);
-    }
-    const wikiItems = await loadWikiLibrary();
-    const wikiLookup = buildWikiRecommendationLookup(wikiItems);
-    return items.map((item) => {
-      const matchedWikiItem = resolveRecommendationWikiItem(item, wikiLookup);
-      if (!matchedWikiItem) {
-        return {
-          ...item,
-          wikiImageUrl: absoluteUrl(item?.wikiImageUrl),
-        };
+  const items = await readReportRecommendations({
+    readSnapshot: async () => {
+      try {
+        return await (await getVisitRecommendationsSnapshotStore()).read(dossierId);
+      } catch (error) {
+        // Older installations have only the legacy table. Once the snapshot
+        // table exists, all other read failures must stop PDF generation.
+        if (error?.code === 'VISIT_RECOMMENDATIONS_SNAPSHOT_NOT_PREPARED') return null;
+        throw error;
       }
+    },
+    readLegacy: async () => {
+      const tableId = await getVisitRecommendationsTableId();
+      if (tableId) {
+        const records = await queryAll(tableId, {
+          fields: VISIT_RECOMMENDATION_FIELDS,
+          where: `(dossier_id,eq,${JSON.stringify(String(dossierId))})`,
+        });
+        return records
+          .map(mapVisitRecommendationRecord)
+          .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+      }
+      const store = await readVisitRecommendationsStore();
+      return asArray(store.dossiers?.[dossierId]?.items);
+    },
+  });
+  const wikiItems = await loadWikiLibrary();
+  const wikiLookup = buildWikiRecommendationLookup(wikiItems);
+  return items.map((item) => {
+    const matchedWikiItem = resolveRecommendationWikiItem(item, wikiLookup);
+    if (!matchedWikiItem) {
       return {
         ...item,
-        wikiItemId: stringValue(matchedWikiItem.id),
-        wikiTitle: stringValue(matchedWikiItem.title),
-        wikiImageUrl: absoluteUrl(matchedWikiItem.imageUrl),
-        wikiTag: stringValue(matchedWikiItem.tags?.[0] || item?.wikiTag),
-        wikiDescription: stringValue(matchedWikiItem.description),
+        wikiImageUrl: absoluteUrl(item?.wikiImageUrl),
       };
-    });
-  } catch (error) {
-    console.warn('[report] échec fetch recos :', error?.message || error);
-    return [];
-  }
-};
-
-const wikiOfflinePathnameFromUrl = (value) => {
-  const rawValue = String(value || '').trim();
-  if (!rawValue) return '';
-  try {
-    const parsed = /^https?:\/\//i.test(rawValue)
-      ? new URL(rawValue)
-      : new URL(rawValue, 'https://aid-habitat.local');
-    const pathname = safeDecodeUriComponent(parsed.pathname || '');
-    return pathname.startsWith('/wiki-offline/') ? pathname : '';
-  } catch {
-    const pathname = safeDecodeUriComponent(rawValue.split(/[?#]/, 1)[0] || '');
-    return pathname.startsWith('/wiki-offline/') ? pathname : '';
-  }
-};
-
-const readBundledWikiOfflineImage = async (urlValue) => {
-  const pathname = wikiOfflinePathnameFromUrl(urlValue);
-  if (!pathname) return null;
-  const relativePath = pathname.replace(/^\/wiki-offline\/+/, '');
-  if (!relativePath || relativePath.includes('\0')) return null;
-  const fullPath = path.resolve(BUNDLED_WIKI_OFFLINE_DIR_PATH, relativePath);
-  const relativeToRoot = path.relative(BUNDLED_WIKI_OFFLINE_DIR_PATH, fullPath);
-  if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
-    return null;
-  }
-  try {
-    const buffer = await fs.readFile(fullPath);
-    return {
-      buffer,
-      mimeType: inferMimeTypeFromFilePath(fullPath),
-    };
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      console.warn('[report] échec lecture image wiki-offline :', pathname, error?.message || error);
     }
-    return null;
-  }
+    return {
+      ...item,
+      wikiItemId: stringValue(matchedWikiItem.id),
+      wikiTitle: stringValue(matchedWikiItem.title),
+      wikiImageUrl: absoluteUrl(matchedWikiItem.imageUrl),
+      wikiTag: stringValue(matchedWikiItem.tags?.[0] || item?.wikiTag),
+      wikiDescription: stringValue(matchedWikiItem.description),
+    };
+  });
 };
 
 const isPrivateIpAddress = (address) => {
@@ -6630,8 +6590,11 @@ const fetchImageBytesForReport = async (descriptor) => {
           mimeType: dataUrlMatch[1] || 'image/png',
         };
       }
-      const bundledWikiImage = await readBundledWikiOfflineImage(rawUrl);
-      if (bundledWikiImage) return bundledWikiImage;
+      const localWikiImage = await readLocalWikiReportImage(rawUrl, {
+        offlineDir: BUNDLED_WIKI_OFFLINE_DIR_PATH,
+        uploadsDir: WIKI_LIBRARY_DIR_URL.pathname,
+      });
+      if (localWikiImage) return localWikiImage;
       const safeUrl = await resolveSafeRemoteReportImageUrl(rawUrl);
       if (!safeUrl) return null;
       const res = await fetch(safeUrl, { redirect: 'manual' });
