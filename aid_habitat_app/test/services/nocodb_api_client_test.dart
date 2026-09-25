@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 
 import 'package:aid_habitat_app/services/app_config.dart';
 import 'package:aid_habitat_app/services/nocodb_api_client.dart';
+import 'package:aid_habitat_app/models/types.dart';
 
 /// Couvre le `_runWithTransientGuard` à travers `updateDossier` —
 /// méthode représentative qui passe par le même chemin de
@@ -25,6 +26,62 @@ void main() {
   tearDown(() {
     AppConfig.setApiBaseUrl('');
     AppConfig.clearAppSessionToken();
+  });
+
+  group('caisses de retraite complémentaires', () {
+    test('une caisse déjà absente peut être retirée du cache local', () async {
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'DELETE');
+          expect(request.url.path, '/api/retirement-funds/18');
+          return http.Response('{"success":false}', 404);
+        }),
+      );
+      await client.deleteRetirementFund('18');
+    });
+
+    test('la modification transmet le nouveau logo au serveur', () async {
+      const fund = RetirementFund(
+        id: '18',
+        name: 'Caisse test',
+        phone: '',
+        audience: '',
+        requestMethod: '',
+        requestDelay: '',
+        aidAmount: '',
+        therapistNote: '',
+        website: '',
+        logoUrl: 'data:image/jpeg;base64,YWJj',
+      );
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          expect(request.method, 'PUT');
+          expect(jsonDecode(request.body)['logoUrl'], fund.logoUrl);
+          return http.Response(
+            '{"success":true,"data":{"fund":{"id":"18","name":"Caisse test","logoUrl":"data:image/jpeg;base64,YWJj"}}}',
+            200,
+          );
+        }),
+      );
+      final saved = await client.updateRetirementFund(fundId: '18', fund: fund);
+      expect(saved.logoUrl, fund.logoUrl);
+    });
+
+    test('chaque lecture demande une version fraîche du catalogue', () async {
+      final requests = <Uri>[];
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          requests.add(request.url);
+          return http.Response('{"success":true,"data":{"funds":[]}}', 200);
+        }),
+      );
+      await client.fetchRetirementFunds();
+      await client.fetchRetirementFunds();
+      expect(requests, hasLength(2));
+      expect(requests[0].path, '/api/retirement-funds');
+      expect(requests[0].queryParameters['refresh'], isNotEmpty);
+      expect(requests[0], isNot(requests[1]));
+    });
   });
 
   group('document deletion acknowledgement', () {

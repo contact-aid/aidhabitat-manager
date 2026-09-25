@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -13,9 +17,11 @@ import '../components/retirement_fund_action_menu.dart';
 import '../components/soft_transitions.dart';
 import '../models/types.dart';
 import '../services/data_service.dart';
+import '../services/image_compressor.dart';
 import '../services/media_cache_service.dart';
 import '../services/retirement_funds_repository.dart';
 import '../services/sync_engine.dart';
+import '../services/web_file_picker.dart';
 
 class RetirementFundsScreen extends StatefulWidget {
   /// Cache le header (titre + barre de recherche) — utilisé quand l'écran
@@ -670,6 +676,8 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
   late final TextEditingController _phoneController;
 
   late RetirementFund _currentFund;
+  late String _draftLogoUrl;
+  bool _pickingLogo = false;
   _SaveState _saveState = _SaveState.idle;
   bool _isEditing = false;
 
@@ -677,6 +685,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
   void initState() {
     super.initState();
     _currentFund = widget.fund;
+    _draftLogoUrl = widget.fund.logoUrl;
     _isEditing = widget.startEditing;
     _nameController = TextEditingController(text: widget.fund.name);
     _audienceController = TextEditingController(text: widget.fund.audience);
@@ -744,12 +753,14 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
       therapistNote: _therapistNoteController.text,
       website: _websiteController.text.trim(),
       phone: _phoneController.text.trim(),
+      logoUrl: _draftLogoUrl,
     );
     try {
       final saved = await _dataService.updateRetirementFund(draft);
       if (!mounted) return;
       setState(() {
         _currentFund = saved;
+        _draftLogoUrl = saved.logoUrl;
         _saveState = _SaveState.saved;
         _isEditing = false; // leave edit mode after successful save
       });
@@ -789,9 +800,61 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
     _websiteController.text = _currentFund.website;
     _phoneController.text = _currentFund.phone;
     setState(() {
+      _draftLogoUrl = _currentFund.logoUrl;
       _isEditing = false;
       _saveState = _SaveState.idle;
     });
+  }
+
+  Future<void> _pickLogo() async {
+    if (_pickingLogo) return;
+    setState(() => _pickingLogo = true);
+    try {
+      late Uint8List bytes;
+      late String fileName;
+      String? mimeType;
+      if (kIsWeb) {
+        final picked = await pickWebFile(accept: 'image/*');
+        if (picked == null) return;
+        bytes = Uint8List.fromList(picked.bytes);
+        fileName = picked.name;
+      } else {
+        final picked = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+        );
+        if (picked == null) return;
+        bytes = await picked.readAsBytes();
+        fileName = picked.name;
+        mimeType = picked.mimeType;
+      }
+      final compressed = await compressImageForUpload(
+        bytes: bytes,
+        fileName: fileName,
+        sourceMimeType: mimeType,
+        maxWidthPx: 360,
+        jpegQuality: 70,
+        skipThresholdBytes: 0,
+      );
+      if (!compressed.mimeType.startsWith('image/') ||
+          compressed.bytes.length > 45 * 1024) {
+        throw const FormatException(
+          'Choisissez une image de moins de 45 Ko après compression.',
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _draftLogoUrl =
+            'data:${compressed.mimeType};base64,${base64Encode(compressed.bytes)}';
+        _saveState = _SaveState.idle;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Logo indisponible : $error')));
+    } finally {
+      if (mounted) setState(() => _pickingLogo = false);
+    }
   }
 
   Future<void> _launchTel() async {
@@ -880,22 +943,60 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
           // Logo carré 56×84 pt (60 plus tôt → encore -8 pt pour
           // raccourcir la rangée). Toujours lisible — l'image
           // intérieure a son propre BoxFit.contain qui s'adapte.
-          Container(
+          SizedBox(
             height: 56,
             width: 84,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
+            child: Stack(
+              children: [
+                Container(
+                  width: 84,
+                  height: 56,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: _FundLogoImage(
+                    fund: _currentFund.copyWith(logoUrl: _draftLogoUrl),
+                  ),
                 ),
+                if (_isEditing)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Tooltip(
+                      message: 'Changer le logo',
+                      child: InkWell(
+                        onTap: _pickingLogo ? null : _pickLogo,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          width: 26,
+                          height: 26,
+                          decoration: const BoxDecoration(
+                            color: kBrandPurple,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            LucideIcons.camera,
+                            size: 14,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
-            child: _FundLogoImage(fund: _currentFund),
           ),
           const SizedBox(width: 12),
           // Bloc texte : nom au-dessus, date en dessous.
@@ -1646,15 +1747,46 @@ class _FundLogoImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fallback = _FundInitials(name: fund.name);
-    if (fund.logoUrl.trim().isEmpty) return fallback;
+    final logoUrl = fund.logoUrl.trim().isEmpty
+        ? _generatedFundLogoUrl(fund.name)
+        : fund.logoUrl;
     return CachedRemoteImage(
-      key: ValueKey(fund.logoUrl),
-      url: fund.logoUrl,
+      key: ValueKey(logoUrl),
+      url: logoUrl,
       fit: BoxFit.contain,
       placeholder: fallback,
       errorWidget: fallback,
     );
   }
+}
+
+/// Même logo SVG que l'API pour une caisse sans image personnalisée.
+/// Il s'affiche immédiatement, avant la prochaine synchronisation.
+String _generatedFundLogoUrl(String name) {
+  final label = name.trim().isEmpty ? 'Caisse' : name.trim();
+  final initials = label
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty)
+      .take(2)
+      .map((part) => part[0].toUpperCase())
+      .join();
+  final svg =
+      '''
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160" viewBox="0 0 240 160" role="img" aria-label="$label">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#907CA1" />
+      <stop offset="100%" stop-color="#554A63" />
+    </linearGradient>
+  </defs>
+  <rect width="240" height="160" rx="28" fill="url(#g)" />
+  <circle cx="198" cy="40" r="16" fill="rgba(255,255,255,0.18)" />
+  <circle cx="42" cy="124" r="18" fill="rgba(255,255,255,0.12)" />
+  <text x="120" y="96" text-anchor="middle" font-family="Arial, sans-serif" font-size="52" font-weight="700" fill="#ffffff">${initials.isEmpty ? 'CR' : initials}</text>
+</svg>
+'''
+          .trim();
+  return 'data:image/svg+xml;charset=UTF-8,${Uri.encodeComponent(svg)}';
 }
 
 class _FundInitials extends StatelessWidget {

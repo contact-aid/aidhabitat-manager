@@ -2197,7 +2197,14 @@ class NocodbApiClient {
     if (!AppConfig.hasRemoteConfig) return const [];
 
     final response = await _client
-        .get(Uri.parse('$_baseUrl/api/retirement-funds'), headers: _headers)
+        .get(
+          Uri.parse('$_baseUrl/api/retirement-funds').replace(
+            queryParameters: {
+              'refresh': DateTime.now().microsecondsSinceEpoch.toString(),
+            },
+          ),
+          headers: _headers,
+        )
         .timeout(_defaultTimeout);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -2423,6 +2430,7 @@ class NocodbApiClient {
             'aidAmount': fund.aidAmount,
             'therapistNote': fund.therapistNote,
             'website': fund.website,
+            'logoUrl': fund.logoUrl,
           }),
         )
         .timeout(_defaultTimeout);
@@ -2451,7 +2459,10 @@ class NocodbApiClient {
           headers: _headers,
         )
         .timeout(_defaultTimeout);
-    if (response.statusCode != 204) {
+    // Une caisse affichée depuis le cache local peut déjà avoir été supprimée
+    // sur un autre appareil. Le résultat attendu est identique : l'ôter du
+    // cache local sans afficher une fausse erreur.
+    if (response.statusCode != 204 && response.statusCode != 404) {
       throw Exception('Suppression impossible (${response.statusCode})');
     }
   }
