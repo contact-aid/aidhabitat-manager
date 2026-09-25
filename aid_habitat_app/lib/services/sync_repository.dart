@@ -37,6 +37,7 @@ class PendingSyncDiagnostic {
     required this.operationType,
     required this.status,
     required this.ownerState,
+    this.ownerDisplayName,
     required this.attemptCount,
     required this.updatedAt,
     this.lastError,
@@ -47,6 +48,7 @@ class PendingSyncDiagnostic {
   final String operationType;
   final String status;
   final String ownerState;
+  final String? ownerDisplayName;
   final int attemptCount;
   final String updatedAt;
   final String? lastError;
@@ -752,14 +754,15 @@ class SyncRepository {
     return int.tryParse('$v') ?? 0;
   }
 
-  /// Read-only queue summary for the account dialog. Never reads payloads or
-  /// identifies another account to the currently signed-in user.
+  /// Read-only queue summary for the account dialog. Never reads payloads.
+  /// The author's display name helps the device owner sign in to the right
+  /// account without attributing or replaying another user's operation.
   Future<List<PendingSyncDiagnostic>> fetchPendingDiagnostics() async {
     final db = await _database.database;
     final rows = await db.rawQuery('''
       SELECT operation.id, operation.entity_type, operation.operation_type,
         operation.status, operation.attempt_count, operation.last_error,
-        operation.updated_at,
+        operation.updated_at, owner.display_name AS owner_display_name,
         CASE
           WHEN ownership.operation_id IS NULL THEN 'missing'
           WHEN ownership.attribution_state IN (
@@ -775,6 +778,8 @@ class SyncRepository {
       LEFT JOIN ${SyncOperationOwnership.tableName} AS ownership
         ON ownership.operation_id = operation.id
       LEFT JOIN app_session AS session ON session.id = 1
+      LEFT JOIN app_users AS owner
+        ON owner.local_id = ownership.owner_user_local_id
       WHERE operation.status != 'completed'
       ORDER BY operation.created_at ASC, operation.id ASC
       LIMIT 20
@@ -787,6 +792,9 @@ class SyncRepository {
             operationType: row['operation_type'] as String,
             status: row['status'] as String,
             ownerState: row['owner_state'] as String,
+            ownerDisplayName: row['owner_state'] == 'other'
+                ? row['owner_display_name'] as String?
+                : null,
             attemptCount: (row['attempt_count'] as int?) ?? 0,
             updatedAt: row['updated_at'] as String,
             lastError: row['owner_state'] == 'current'
@@ -821,6 +829,7 @@ class SyncRepository {
         'sync_operations',
         {
           'status': SyncOperationStatus.pending.name,
+          'attempt_count': 0,
           'last_error': 'Envoi repris après interruption',
           'updated_at': DateTime.now().toIso8601String(),
         },
@@ -830,6 +839,29 @@ class SyncRepository {
           SyncOperationStatus.running.name,
           observedUpdatedAt,
         ],
+      );
+      return changed == 1;
+    });
+  }
+
+  /// Relance sans délai une écriture déjà en attente après un échec réseau.
+  /// Le payload et son identifiant restent inchangés.
+  Future<bool> retryPendingOperationNow(String operationId) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership &&
+          !await SyncOperationOwnership.mayClaim(txn, operationId)) {
+        return false;
+      }
+      final changed = await txn.update(
+        'sync_operations',
+        {
+          'attempt_count': 0,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND status = ? AND attempt_count > 0',
+        whereArgs: [operationId, SyncOperationStatus.pending.name],
       );
       return changed == 1;
     });

@@ -149,7 +149,11 @@ class _AccountDialogState extends State<AccountDialog> {
                       final operation = operations[index];
                       final owner = switch (operation.ownerState) {
                         'current' => 'Compte actuel',
-                        'other' => 'Autre compte',
+                        'other' =>
+                          (operation.ownerDisplayName?.trim().isNotEmpty ??
+                                  false)
+                              ? 'Autre compte : ${operation.ownerDisplayName!.trim()}'
+                              : 'Autre compte',
                         'review' => 'Auteur à confirmer',
                         _ => 'Auteur non identifié',
                       };
@@ -177,6 +181,16 @@ class _AccountDialogState extends State<AccountDialog> {
                                   dialogContext,
                                 ),
                                 child: const Text('Reprendre'),
+                              )
+                            : operation.ownerState == 'current' &&
+                                  operation.status == 'pending' &&
+                                  operation.attemptCount > 0
+                            ? TextButton(
+                                onPressed: () => _retryPendingOperation(
+                                  operation,
+                                  dialogContext,
+                                ),
+                                child: const Text('Relancer'),
                               )
                             : null,
                       );
@@ -240,6 +254,27 @@ class _AccountDialogState extends State<AccountDialog> {
         content: Text(
           resumed
               ? 'Envoi repris. Les sauvegardes sont conservées.'
+              : 'L’état a changé. Rouvrez les sauvegardes en attente.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _retryPendingOperation(
+    PendingSyncDiagnostic operation,
+    BuildContext detailsContext,
+  ) async {
+    final retried = await SyncRepository().retryPendingOperationNow(
+      operation.operationId,
+    );
+    if (!mounted) return;
+    if (detailsContext.mounted) Navigator.of(detailsContext).pop();
+    if (retried) SyncEngine().requestSync();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          retried
+              ? 'Nouvel envoi lancé. La sauvegarde est conservée.'
               : 'L’état a changé. Rouvrez les sauvegardes en attente.',
         ),
       ),

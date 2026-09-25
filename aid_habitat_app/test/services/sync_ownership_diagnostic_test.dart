@@ -17,6 +17,9 @@ void main() {
     await db.execute(
       'CREATE TABLE app_session (id INTEGER PRIMARY KEY, user_local_id TEXT NOT NULL)',
     );
+    await db.execute(
+      'CREATE TABLE app_users (local_id TEXT PRIMARY KEY, display_name TEXT NOT NULL)',
+    );
     await db.execute('''CREATE TABLE sync_operations (
       id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_local_id TEXT NOT NULL,
       operation_type TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -301,9 +304,13 @@ void main() {
     },
   );
   test(
-    'pending diagnostics show ownership without another user error',
+    'pending diagnostics identify the author without exposing their error',
     () async {
       await SyncOperationOwnership.installMigration(db);
+      await db.insert('app_users', {
+        'local_id': 'ergo-b',
+        'display_name': 'Autrice B',
+      });
       await user('ergo-a');
       await write('mine');
       await db.update(
@@ -327,6 +334,7 @@ void main() {
       expect(diagnostics[0].ownerState, 'current');
       expect(diagnostics[0].lastError, 'My server error');
       expect(diagnostics[1].ownerState, 'other');
+      expect(diagnostics[1].ownerDisplayName, 'Autrice B');
       expect(diagnostics[1].lastError, isNull);
       expect((await db.query('sync_operations')).length, 2);
     },
@@ -340,7 +348,7 @@ void main() {
         .toIso8601String();
     await db.update(
       'sync_operations',
-      {'status': 'running', 'updated_at': startedAt},
+      {'status': 'running', 'updated_at': startedAt, 'attempt_count': 5},
       where: 'id = ?',
       whereArgs: ['stuck'],
     );
@@ -369,6 +377,7 @@ void main() {
     );
     final after = (await db.query('sync_operations')).single;
     expect(after['status'], 'pending');
+    expect(after['attempt_count'], 0);
     expect(after['payload_json'], beforePayload);
     expect(
       await protectedQueue.resumeStaleRunningOperation(
@@ -377,5 +386,29 @@ void main() {
       ),
       isFalse,
     );
+  });
+  test('only the author can restart a pending write without backoff', () async {
+    await SyncOperationOwnership.installMigration(db);
+    await user('ergo-a');
+    await write('waiting', value: 'preserve this');
+    await db.update(
+      'sync_operations',
+      {'attempt_count': 5, 'last_error': 'Remote update failed (503)'},
+      where: 'id = ?',
+      whereArgs: ['waiting'],
+    );
+    final queue = SyncRepository(databaseProvider: () async => db);
+    final beforePayload = (await db.query(
+      'sync_operations',
+    )).single['payload_json'];
+    await user('ergo-b');
+    expect(await queue.retryPendingOperationNow('waiting'), isFalse);
+    await user('ergo-a');
+    expect(await queue.retryPendingOperationNow('waiting'), isTrue);
+    final after = (await db.query('sync_operations')).single;
+    expect(after['status'], 'pending');
+    expect(after['attempt_count'], 0);
+    expect(after['last_error'], isNull);
+    expect(after['payload_json'], beforePayload);
   });
 }
