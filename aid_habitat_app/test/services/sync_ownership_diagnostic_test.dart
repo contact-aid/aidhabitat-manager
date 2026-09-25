@@ -17,6 +17,9 @@ void main() {
     await db.execute(
       'CREATE TABLE app_session (id INTEGER PRIMARY KEY, user_local_id TEXT NOT NULL)',
     );
+    await db.execute(
+      'CREATE TABLE app_users (local_id TEXT PRIMARY KEY, display_name TEXT NOT NULL)',
+    );
     await db.execute('''CREATE TABLE sync_operations (
       id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_local_id TEXT NOT NULL,
       operation_type TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -301,9 +304,13 @@ void main() {
     },
   );
   test(
-    'pending diagnostics show ownership without another user error',
+    'pending diagnostics identify the author without exposing their error',
     () async {
       await SyncOperationOwnership.installMigration(db);
+      await db.insert('app_users', {
+        'local_id': 'ergo-b',
+        'display_name': 'Autrice B',
+      });
       await user('ergo-a');
       await write('mine');
       await db.update(
@@ -327,6 +334,7 @@ void main() {
       expect(diagnostics[0].ownerState, 'current');
       expect(diagnostics[0].lastError, 'My server error');
       expect(diagnostics[1].ownerState, 'other');
+      expect(diagnostics[1].ownerDisplayName, 'Autrice B');
       expect(diagnostics[1].lastError, isNull);
       expect((await db.query('sync_operations')).length, 2);
     },

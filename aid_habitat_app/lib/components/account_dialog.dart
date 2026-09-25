@@ -149,7 +149,11 @@ class _AccountDialogState extends State<AccountDialog> {
                       final operation = operations[index];
                       final owner = switch (operation.ownerState) {
                         'current' => 'Compte actuel',
-                        'other' => 'Autre compte',
+                        'other' =>
+                          (operation.ownerDisplayName?.trim().isNotEmpty ??
+                                  false)
+                              ? 'Autre compte : ${operation.ownerDisplayName!.trim()}'
+                              : 'Autre compte',
                         'review' => 'Auteur à confirmer',
                         _ => 'Auteur non identifié',
                       };
