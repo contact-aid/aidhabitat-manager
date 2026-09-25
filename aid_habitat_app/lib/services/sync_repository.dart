@@ -30,6 +30,24 @@ class _SyncDatabaseHandle {
   Future<Database> get database => _provider();
 }
 
+class PendingSyncDiagnostic {
+  const PendingSyncDiagnostic({
+    required this.entityType,
+    required this.operationType,
+    required this.status,
+    required this.ownerState,
+    required this.attemptCount,
+    this.lastError,
+  });
+
+  final String entityType;
+  final String operationType;
+  final String status;
+  final String ownerState;
+  final int attemptCount;
+  final String? lastError;
+}
+
 class SyncRepository {
   SyncRepository({
     LocalDatabase? database,
@@ -721,6 +739,48 @@ class SyncRepository {
     if (v is int) return v;
     if (v is num) return v.toInt();
     return int.tryParse('$v') ?? 0;
+  }
+
+  /// Read-only queue summary for the account dialog. Never reads payloads or
+  /// identifies another account to the currently signed-in user.
+  Future<List<PendingSyncDiagnostic>> fetchPendingDiagnostics() async {
+    final db = await _database.database;
+    final rows = await db.rawQuery('''
+      SELECT operation.entity_type, operation.operation_type,
+        operation.status, operation.attempt_count, operation.last_error,
+        CASE
+          WHEN ownership.operation_id IS NULL THEN 'missing'
+          WHEN ownership.attribution_state IN (
+            '${SyncOperationOwnership.historicalUnattributed}',
+            '${SyncOperationOwnership.reviewRequired}'
+          ) THEN 'review'
+          WHEN ownership.owner_user_local_id IS NULL THEN 'unknown'
+          WHEN ownership.owner_user_local_id = session.user_local_id
+            THEN 'current'
+          ELSE 'other'
+        END AS owner_state
+      FROM sync_operations AS operation
+      LEFT JOIN ${SyncOperationOwnership.tableName} AS ownership
+        ON ownership.operation_id = operation.id
+      LEFT JOIN app_session AS session ON session.id = 1
+      WHERE operation.status != 'completed'
+      ORDER BY operation.created_at ASC, operation.id ASC
+      LIMIT 20
+    ''');
+    return rows
+        .map(
+          (row) => PendingSyncDiagnostic(
+            entityType: row['entity_type'] as String,
+            operationType: row['operation_type'] as String,
+            status: row['status'] as String,
+            ownerState: row['owner_state'] as String,
+            attemptCount: (row['attempt_count'] as int?) ?? 0,
+            lastError: row['owner_state'] == 'current'
+                ? row['last_error'] as String?
+                : null,
+          ),
+        )
+        .toList(growable: false);
   }
 
   /// Compte uniquement les écritures encore en attente qui alimentent le

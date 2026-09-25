@@ -300,4 +300,35 @@ void main() {
       );
     },
   );
+  test(
+    'pending diagnostics show ownership without another user error',
+    () async {
+      await SyncOperationOwnership.installMigration(db);
+      await user('ergo-a');
+      await write('mine');
+      await db.update(
+        'sync_operations',
+        {'status': 'failed', 'last_error': 'My server error'},
+        where: 'id = ?',
+        whereArgs: ['mine'],
+      );
+      await user('ergo-b');
+      await write('theirs');
+      await db.update(
+        'sync_operations',
+        {'status': 'failed', 'last_error': 'Private error for B'},
+        where: 'id = ?',
+        whereArgs: ['theirs'],
+      );
+      await user('ergo-a');
+
+      final diagnostics = await queue.fetchPendingDiagnostics();
+      expect(diagnostics.length, 2);
+      expect(diagnostics[0].ownerState, 'current');
+      expect(diagnostics[0].lastError, 'My server error');
+      expect(diagnostics[1].ownerState, 'other');
+      expect(diagnostics[1].lastError, isNull);
+      expect((await db.query('sync_operations')).length, 2);
+    },
+  );
 }

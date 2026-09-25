@@ -8,6 +8,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../models/types.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
+import '../services/sync_repository.dart';
 import '../services/web_file_picker.dart';
 import '../services/profile_photo_image.dart';
 import 'brand_colors.dart';
@@ -108,6 +109,10 @@ class _AccountDialogState extends State<AccountDialog> {
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
+      if (e is PendingSyncBeforeForceResyncException) {
+        await _showPendingSyncDetails(total: e.count);
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Synchronisation impossible : $e'),
@@ -116,6 +121,76 @@ class _AccountDialogState extends State<AccountDialog> {
       );
     } finally {
       if (mounted) setState(() => _isResyncing = false);
+    }
+  }
+
+  Future<void> _showPendingSyncDetails({int? total}) async {
+    try {
+      final repository = SyncRepository();
+      final operations = await repository.fetchPendingDiagnostics();
+      final count = total ?? await repository.countPendingOperations();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(
+            '$count sauvegarde${count > 1 ? 's' : ''} locale${count > 1 ? 's' : ''} en attente',
+          ),
+          content: SizedBox(
+            width: 520,
+            height: operations.isEmpty ? 110 : 320,
+            child: operations.isEmpty
+                ? const Text('Aucune opération en attente sur cet appareil.')
+                : ListView.separated(
+                    itemCount: operations.length,
+                    separatorBuilder: (_, _) => const Divider(),
+                    itemBuilder: (_, index) {
+                      final operation = operations[index];
+                      final owner = switch (operation.ownerState) {
+                        'current' => 'Compte actuel',
+                        'other' => 'Autre compte',
+                        'review' => 'Auteur à confirmer',
+                        _ => 'Auteur non identifié',
+                      };
+                      final status = switch (operation.status) {
+                        'pending' => 'En attente',
+                        'running' => 'Envoi en cours',
+                        'failed' => 'Échec',
+                        'conflict' => 'Conflit',
+                        _ => operation.status,
+                      };
+                      final error = operation.lastError?.trim();
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          '${operation.entityType} · ${operation.operationType}',
+                        ),
+                        subtitle: Text(
+                          '$status · $owner · ${operation.attemptCount} tentative(s)'
+                          '${error == null || error.isEmpty ? '' : '\n$error'}',
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Détails indisponibles. Les sauvegardes locales sont conservées.',
+          ),
+          backgroundColor: Color(0xFFB91C1C),
+        ),
+      );
     }
   }
 
@@ -412,6 +487,13 @@ class _AccountDialogState extends State<AccountDialog> {
                       foregroundColor: kBrandPurple,
                       side: const BorderSide(color: Color(0xFFD8CFE0)),
                     ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _isUploadingPhoto || _isResyncing
+                        ? null
+                        : _showPendingSyncDetails,
+                    icon: const Icon(LucideIcons.list, size: 16),
+                    label: const Text('Sauvegardes en attente'),
                   ),
                   if (widget.onLogout != null)
                     OutlinedButton.icon(
