@@ -125,8 +125,8 @@ class AccompanimentBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = accompanimentPaletteFor(_resolveRawType());
-    // Refonte 2026-05-13 : variante `large` alignée sur AnahStatusBadge
-    // et le bouton « Générer » du header (13px w600, padding 14×6).
+    // La variante `large` garde le padding du header ; tous les libellés
+    // des badges restent à 14 px.
     return Container(
       padding: large
           ? const EdgeInsets.symmetric(horizontal: 14, vertical: 6)
@@ -140,7 +140,7 @@ class AccompanimentBadge extends StatelessWidget {
         // Refonte 2026-05-13 : Nunito w800 pour plus de poids visuel
         // sur les badges du header (Quicksand plafonne à w700).
         style: GoogleFonts.nunito(
-          fontSize: 16,
+          fontSize: 14,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.2,
           color: palette.fg,
@@ -221,7 +221,6 @@ IncomeCategoryPalette incomePaletteFor(String value) {
 class IncomeCategoryBadge extends StatelessWidget {
   final String value;
   final bool large;
-  final bool compact;
 
   /// Variante sans couleur : fond gris neutre (slate-100), texte
   /// gris foncé. Utilisée dans la liste « Mes dossiers » où le badge
@@ -234,7 +233,6 @@ class IncomeCategoryBadge extends StatelessWidget {
     required this.value,
     this.large = false,
     this.monochrome = false,
-    this.compact = false,
   });
 
   @override
@@ -242,8 +240,8 @@ class IncomeCategoryBadge extends StatelessWidget {
     final palette = incomePaletteFor(value);
     final bg = monochrome ? const Color(0xFFF2F4F6) : palette.bg;
     final fg = monochrome ? const Color(0xFF2B323A) : palette.fg;
-    // Refonte 2026-05-13 : variante `large` alignée sur AnahStatusBadge
-    // et le bouton « Générer » du header (13px w600, padding 14×6).
+    // La variante `large` garde le padding du header ; tous les libellés
+    // des badges restent à 14 px.
     return Container(
       padding: large
           ? const EdgeInsets.symmetric(horizontal: 14, vertical: 6)
@@ -256,7 +254,7 @@ class IncomeCategoryBadge extends StatelessWidget {
         value,
         // Refonte 2026-05-13 : Nunito w800 (cf. AccompanimentBadge).
         style: GoogleFonts.nunito(
-          fontSize: compact ? 14 : 16,
+          fontSize: 14,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.2,
           color: fg,
@@ -320,7 +318,7 @@ class AnahStatusBadge extends StatelessWidget {
         label,
         // Refonte 2026-05-13 : Nunito w800 (cf. AccompanimentBadge).
         style: GoogleFonts.nunito(
-          fontSize: 16,
+          fontSize: 14,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.2,
           color: fg,

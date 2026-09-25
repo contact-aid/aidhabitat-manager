@@ -963,7 +963,6 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
                         child: IncomeCategoryBadge(
                           value: income,
                           monochrome: true,
-                          compact: true,
                         ),
                       ),
               ),
