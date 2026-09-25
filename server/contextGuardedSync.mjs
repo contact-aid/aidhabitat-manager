@@ -219,7 +219,9 @@ export function contextRecordToSections(record) {
   return {
     medicalContext,
     autonomy: {
-      done: Boolean(occupants[0]?.autonomyDone) || checklist.some((item) => item.checked),
+      done: occupants.length > 0
+        ? occupants[0].autonomyDone
+        : checklist.some((item) => item.checked),
       checklist,
       occupants,
     },
