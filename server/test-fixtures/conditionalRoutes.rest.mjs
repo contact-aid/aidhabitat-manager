@@ -65,7 +65,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
     observation_accessibilite: 'initial', sous_sol: null, acces_facile_rue: null,
     veranda: false, terrasse: false, jardin: false, portail_id1: null,
     type_de_logement_id: null, type_de_logement: null,
-    app_sync_revision: revision, UpdatedAt: timestamp }];
+    app_sync_revision: revision, CreatedAt: timestamp, UpdatedAt: timestamp }];
   const schemas = {
     [tables.dossier]: columns({ compte_anah: 'SingleLineText', nature_accompagnement: 'SingleLineText',
       beneficiaire_prepare: 'Checkbox', visit_date: 'Date', status: 'SingleLineText' }),
@@ -111,13 +111,15 @@ export function createRestMock({ referenceRows = {} } = {}) {
     }).every(Boolean);
   };
 
+  let missingUpdatedAtOnWrite = false;
   return {
     calls, violations, schemas,
     row: (entity) => rows[tables[entity]][0],
     rows: (entity) => rows[tables[entity]],
     removeHousing() { rows[tables.logement] = []; },
     patches: () => calls.filter((call) => call.method === 'PATCH'),
-    reset() { rows = structuredClone(initial); calls.length = 0; race = null; loseNextResponse = false; },
+    reset() { rows = structuredClone(initial); calls.length = 0; race = null; loseNextResponse = false; missingUpdatedAtOnWrite = false; },
+    leaveUpdatedAtNullOnWrite() { missingUpdatedAtOnWrite = true; },
     loseNextResponse() { loseNextResponse = true; },
     raceNextTwoPatches() {
       let release;
@@ -228,7 +230,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
           const matched = rows[tableId].filter((row) => matches(where, row));
           call.matched = matched.length;
           for (const row of matched) {
-            Object.assign(row, call.body, { UpdatedAt: '2026-09-02T10:00:00.000Z' });
+            Object.assign(row, call.body, { UpdatedAt: missingUpdatedAtOnWrite ? null : '2026-09-02T10:00:00.000Z' });
           }
           if (loseNextResponse) { loseNextResponse = false; throw new Error('SIMULATED_RESPONSE_LOST_AFTER_COMMIT'); }
           return json({ count: matched.length });

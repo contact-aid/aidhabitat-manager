@@ -45,6 +45,7 @@ bash "$script_dir/test_safely.sh" \
   test/services/document_revision_save_test.dart \
   test/services/document_remote_revision_test.dart \
   test/services/document_imported_upload_test.dart \
+  test/services/aggir_document_test.dart \
   test/services/document_page_save_test.dart \
   test/services/image_rotation_worker_test.dart \
   test/services/visit_date_time_test.dart \

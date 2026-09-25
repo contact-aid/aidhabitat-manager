@@ -433,7 +433,7 @@ const FIELD_SETS = {
     // identique à avant (pas de pièces affichées).
     'rooms_breakdown_json',
     'type_de_logement_id', 'porte_de_garage_id', 'portail_id1',
-    'UpdatedAt',
+    'CreatedAt', 'UpdatedAt',
   ],
   contexteDeVie: [
     'uuid_source', 'dossier_id', 'beneficiaire_id', 'beneficiaires_id', 'aide_technique_deplacement', 'restrictions_conduite',

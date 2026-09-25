@@ -230,6 +230,18 @@ try {
     }
   });
 
+  if (entity === 'logement') {
+    await check('a confirmed housing write accepts CreatedAt when NocoDB leaves UpdatedAt empty', async () => {
+      mock.row(entity).UpdatedAt = null;
+      mock.leaveUpdatedAtNullOnWrite();
+      const body = mutation({ comments: 'saved despite empty UpdatedAt' }, { comments: 'initial' });
+      const result = expectStatus(await patch(clientA, body), 200);
+      assert.equal(result.data.updatedAt, timestamp);
+      assert.equal(mock.row(entity).commentaire, 'saved despite empty UpdatedAt');
+      assert.equal(mock.row(entity).app_sync_revision, body.concurrency.writeId);
+    });
+  }
+
   await check('two clients editing same field: guarded success, replay, then local priority', async () => {
     const baselineA = await read(clientA);
     const baselineB = await read(clientB);

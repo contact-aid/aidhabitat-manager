@@ -148,6 +148,35 @@ void main() {
     },
   );
 
+  test('remote AGGIR alias and local form show as one signed grid', () async {
+    final repo = MemoryDocuments();
+    final service = AggirDocumentService(repository: repo);
+    final birth = '${DateTime.now().year - 65}-01-01';
+    final id = AggirDocumentService.documentId('test-primary');
+    repo.docs = [
+      DocItem(
+        id: id,
+        type: 'pdf',
+        name: 'grille_aggir.pdf',
+        title: 'Grille AGGIR',
+        tags: const ['AGGIR'],
+        date: '2026-09-17',
+      ),
+      DocItem(
+        id: 'remote-alias',
+        type: 'pdf',
+        name: 'grille_aggir.pdf',
+        title: 'Grille AGGIR',
+        tags: const ['AGGIR'],
+        date: '2026-09-17',
+        annotationsJson: '{"1":"signed"}',
+      ),
+    ];
+    final visible = await service.documentsFor(dossier(patient(birth)));
+    expect(visible.map((doc) => doc.id), ['remote-alias']);
+    expect(repo.writes, 0);
+  });
+
   test(
     'prefill PDF from the supplied template for visual verification',
     () async {
