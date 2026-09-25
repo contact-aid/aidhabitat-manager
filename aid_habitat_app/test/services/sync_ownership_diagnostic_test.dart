@@ -340,7 +340,7 @@ void main() {
         .toIso8601String();
     await db.update(
       'sync_operations',
-      {'status': 'running', 'updated_at': startedAt},
+      {'status': 'running', 'updated_at': startedAt, 'attempt_count': 5},
       where: 'id = ?',
       whereArgs: ['stuck'],
     );
@@ -369,6 +369,7 @@ void main() {
     );
     final after = (await db.query('sync_operations')).single;
     expect(after['status'], 'pending');
+    expect(after['attempt_count'], 0);
     expect(after['payload_json'], beforePayload);
     expect(
       await protectedQueue.resumeStaleRunningOperation(
@@ -377,5 +378,29 @@ void main() {
       ),
       isFalse,
     );
+  });
+  test('only the author can restart a pending write without backoff', () async {
+    await SyncOperationOwnership.installMigration(db);
+    await user('ergo-a');
+    await write('waiting', value: 'preserve this');
+    await db.update(
+      'sync_operations',
+      {'attempt_count': 5, 'last_error': 'Remote update failed (503)'},
+      where: 'id = ?',
+      whereArgs: ['waiting'],
+    );
+    final queue = SyncRepository(databaseProvider: () async => db);
+    final beforePayload = (await db.query(
+      'sync_operations',
+    )).single['payload_json'];
+    await user('ergo-b');
+    expect(await queue.retryPendingOperationNow('waiting'), isFalse);
+    await user('ergo-a');
+    expect(await queue.retryPendingOperationNow('waiting'), isTrue);
+    final after = (await db.query('sync_operations')).single;
+    expect(after['status'], 'pending');
+    expect(after['attempt_count'], 0);
+    expect(after['last_error'], isNull);
+    expect(after['payload_json'], beforePayload);
   });
 }

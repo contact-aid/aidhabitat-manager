@@ -821,6 +821,7 @@ class SyncRepository {
         'sync_operations',
         {
           'status': SyncOperationStatus.pending.name,
+          'attempt_count': 0,
           'last_error': 'Envoi repris après interruption',
           'updated_at': DateTime.now().toIso8601String(),
         },
@@ -830,6 +831,29 @@ class SyncRepository {
           SyncOperationStatus.running.name,
           observedUpdatedAt,
         ],
+      );
+      return changed == 1;
+    });
+  }
+
+  /// Relance sans délai une écriture déjà en attente après un échec réseau.
+  /// Le payload et son identifiant restent inchangés.
+  Future<bool> retryPendingOperationNow(String operationId) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership &&
+          !await SyncOperationOwnership.mayClaim(txn, operationId)) {
+        return false;
+      }
+      final changed = await txn.update(
+        'sync_operations',
+        {
+          'attempt_count': 0,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND status = ? AND attempt_count > 0',
+        whereArgs: [operationId, SyncOperationStatus.pending.name],
       );
       return changed == 1;
     });
