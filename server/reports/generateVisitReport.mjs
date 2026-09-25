@@ -34,6 +34,7 @@ import {
   rgb,
 } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
+import sharp from 'sharp';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1500,9 +1501,9 @@ function nudgeFieldRect({ fieldsByName, fieldName, dy }) {
 
 /**
  * Embeds des bytes d'image dans le PDF en détectant le format
- * (JPEG / PNG) à la magic number. Renvoie un PDFImage ou null si
- * le format n'est pas géré (pdf-lib ne sait pas faire de WebP, par
- * exemple — on log et on skip plutôt que de bloquer).
+ * (JPEG / PNG) à la magic number. Les images WebP et GIF, acceptées
+ * dans le Wiki de l'application, sont converties en PNG avant insertion
+ * car pdf-lib ne sait pas les intégrer directement.
  */
 async function embedImageAuto(pdfDoc, buffer, mimeHint) {
   if (!buffer || buffer.length < 8) return null;
@@ -1512,9 +1513,19 @@ async function embedImageAuto(pdfDoc, buffer, mimeHint) {
     buffer[2] === 0x4e &&
     buffer[3] === 0x47;
   const isJpg = buffer[0] === 0xff && buffer[1] === 0xd8;
+  const signature = Buffer.from(buffer.subarray(0, 12));
+  const isWebp = signature.toString('ascii', 0, 4) === 'RIFF' &&
+    signature.toString('ascii', 8, 12) === 'WEBP';
+  const isGif = signature.toString('ascii', 0, 3) === 'GIF';
   try {
     if (isPng) return await pdfDoc.embedPng(buffer);
     if (isJpg) return await pdfDoc.embedJpg(buffer);
+    if (isWebp || isGif) {
+      const png = await sharp(buffer, { page: 0, limitInputPixels: 40_000_000 })
+        .png()
+        .toBuffer();
+      return await pdfDoc.embedPng(png);
+    }
     // Hint mime — on tente quand même
     if (/png/i.test(String(mimeHint || ''))) return await pdfDoc.embedPng(buffer);
     if (/jpe?g/i.test(String(mimeHint || ''))) return await pdfDoc.embedJpg(buffer);

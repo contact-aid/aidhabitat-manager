@@ -105,6 +105,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   late TabController _tabController;
   final DossierRepository _repository = DossierRepository();
   final DataService _dataService = DataService();
+  final BeneficiaryTabController _beneficiaryController =
+      BeneficiaryTabController();
   final AccessibilityTabController _accessibilityController =
       AccessibilityTabController();
   final RecommendationsTabController _recommendationsController =
@@ -1381,6 +1383,12 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // _refreshDossier` après save ; les autres onglets persistent
     // directement en SQLite via leur propre `_save()`. On force ici un
     // re-fetch pour aligner le modèle in-memory avec le disque.
+    try {
+      await _beneficiaryController.flushPendingSave();
+    } catch (error) {
+      _showReportError('Enregistrement du bénéficiaire impossible : $error');
+      return;
+    }
     await _accessibilityController.flushPendingSave();
     await _bathroomController.flushPendingSave();
     await _wcController.flushPendingSave();
@@ -1821,6 +1829,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   ///     Sanitaires, Préconisations (Projet/Résumé)
   ///   - « Cochée mais pas de précision » : Santé (APA→GIR, MDPH→%,
   ///     aide à domicile→texte) ; Volets roulants Localisé→localisation
+  ///   - Coordonnées bénéficiaire/personne de confiance et date de visite
   Future<List<_MissingField>> _collectMissingFields() async {
     final missing = <_MissingField>[];
     await _checkBeneficiaryProfil(missing);
@@ -1865,7 +1874,16 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     if (p.phone.trim().isEmpty) {
       missing.add(
         _MissingField(
-          label: 'Profil — téléphone',
+          label: 'Profil — téléphone du bénéficiaire',
+          tabIndex: tab,
+          subSectionIndex: 0,
+        ),
+      );
+    }
+    if (p.email.trim().isEmpty) {
+      missing.add(
+        _MissingField(
+          label: 'Profil — mail du bénéficiaire',
           tabIndex: tab,
           subSectionIndex: 0,
         ),
@@ -1875,6 +1893,33 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       missing.add(
         _MissingField(
           label: 'Profil — personne de confiance',
+          tabIndex: tab,
+          subSectionIndex: 0,
+        ),
+      );
+    }
+    if (p.trustedPerson.phone.trim().isEmpty) {
+      missing.add(
+        _MissingField(
+          label: 'Profil — téléphone de la personne de confiance',
+          tabIndex: tab,
+          subSectionIndex: 0,
+        ),
+      );
+    }
+    if (p.trustedPerson.email.trim().isEmpty) {
+      missing.add(
+        _MissingField(
+          label: 'Profil — mail de la personne de confiance',
+          tabIndex: tab,
+          subSectionIndex: 0,
+        ),
+      );
+    }
+    if ((_dossier.visitDate ?? '').trim().isEmpty) {
+      missing.add(
+        _MissingField(
+          label: 'Visite — date de visite (fiche dossier)',
           tabIndex: tab,
           subSectionIndex: 0,
         ),
@@ -2745,6 +2790,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           'Bénéficiaire',
           BeneficiaryTab(
             dossier: _dossier,
+            controller: _beneficiaryController,
             conflictRefreshToken: widget.patientConflictRefreshToken,
             repository: _repository,
             onPatientChanged: _refreshDossier,

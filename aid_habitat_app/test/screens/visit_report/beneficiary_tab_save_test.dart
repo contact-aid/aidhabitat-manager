@@ -101,6 +101,7 @@ Future<void> _mount(
   int section = 0,
   int conflictRefreshToken = 0,
   VoidCallback? onChanged,
+  BeneficiaryTabController? controller,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 1200));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -110,6 +111,7 @@ Future<void> _mount(
         body: BeneficiaryTab(
           dossier: dossier ?? _dossier(),
           repository: repository,
+          controller: controller,
           initialSubSection: section,
           conflictRefreshToken: conflictRefreshToken,
           onPatientChanged: onChanged,
@@ -157,6 +159,22 @@ Future<void> _exhaustRetries(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('generation flushes the latest beneficiary edit before debounce', (
+    tester,
+  ) async {
+    final repository = _Repository();
+    final controller = BeneficiaryTabController();
+    await _mount(tester, repository, controller: controller);
+    await _edit(tester, 'Téléphone', '');
+
+    await tester.runAsync(controller.flushPendingSave);
+    await tester.pump();
+
+    expect(repository.patientWrites, [
+      {'phone': ''},
+    ]);
+  });
+
   testWidgets('server choice refreshes dependence without saving stale form', (
     tester,
   ) async {

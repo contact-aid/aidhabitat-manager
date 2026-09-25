@@ -30,6 +30,7 @@ import 'retirement_fund_selection.dart' as retirement_fund_selection;
 class BeneficiaryTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final BeneficiaryTabController? controller;
   final int conflictRefreshToken;
 
   /// Called after each successful save so the parent can re-fetch the
@@ -51,6 +52,7 @@ class BeneficiaryTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.controller,
     this.conflictRefreshToken = 0,
     this.onPatientChanged,
     this.onSubSectionChanged,
@@ -59,6 +61,20 @@ class BeneficiaryTab extends StatefulWidget {
 
   @override
   State<BeneficiaryTab> createState() => _BeneficiaryTabState();
+}
+
+class BeneficiaryTabController {
+  Future<void> Function()? _flushPendingSave;
+
+  Future<void> flushPendingSave() async {
+    await _flushPendingSave?.call();
+  }
+
+  void _attach(Future<void> Function() flush) => _flushPendingSave = flush;
+
+  void _detach(Future<void> Function() flush) {
+    if (_flushPendingSave == flush) _flushPendingSave = null;
+  }
 }
 
 enum _RetirementFundKind { principal, complementary }
@@ -242,6 +258,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   @override
   void initState() {
     super.initState();
+    widget.controller?._attach(_flushPendingSave);
     _subSectionIndex = widget.initialSubSection.clamp(0, 3);
     _loadFromDossier();
     _references.ensureLoaded();
@@ -426,6 +443,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   @override
   void didUpdateWidget(covariant BeneficiaryTab oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._detach(_flushPendingSave);
+      widget.controller?._attach(_flushPendingSave);
+    }
     if (oldWidget.conflictRefreshToken != widget.conflictRefreshToken) {
       // A reviewed patient conflict has replaced the local row. The form's
       // saved snapshot and observation baseline must follow that decision.
@@ -484,6 +505,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
 
   @override
   void dispose() {
+    widget.controller?._detach(_flushPendingSave);
     _disposed = true;
     _refSub?.cancel();
     _saveTimer?.cancel();
@@ -506,6 +528,13 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     // mid-mot. Avant 150 ms, des frappes "BALS" ressortaient parfois
     // en "BAL" en SQLite (fix dossier_screen Apr 2026).
     _saveTimer = Timer(kSaveDebounceText, _save);
+  }
+
+  Future<void> _flushPendingSave() async {
+    await _save();
+    if (_hasPendingSave) {
+      throw StateError('Les informations du bénéficiaire ne sont pas encore enregistrées.');
+    }
   }
 
   void _setSaveError(bool visible) {
