@@ -12,8 +12,8 @@
 - `npm run test:server` : 288/288 réussis.
 - `npm run test:sync-contract` : 12/12 réussis et contrôle des contrats réussi.
 - `npm run check:critical` : 20/20 réussis.
-- `bash aid_habitat_app/tool/test_sync_critical.sh` dans un répertoire temporaire sans apostrophe : 741/741 réussis.
-- `flutter analyze --no-pub` dans la copie temporaire : aucune anomalie.
+- `bash aid_habitat_app/tool/test_sync_critical.sh` depuis une copie propre du commit candidat, dans un répertoire temporaire sans apostrophe : 741/741 réussis.
+- `flutter analyze --no-pub` dans cette copie propre : aucune anomalie.
 - `AIDHABITAT_API_BASE_URL=https://api.aidhabitat.fr bash aid_habitat_app/tool/release_preflight.sh --ios-only` : Xcode 26.6, SDK iOS 26.5, configuration iPad et espace disque OK ; **certificat Apple Distribution absent du trousseau**, donc préflight en échec.
 
 ## Avant archive et diffusion
