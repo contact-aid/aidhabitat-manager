@@ -1600,7 +1600,7 @@ const loadBundledWikiItems = async () => {
   return bundledWikiItemsCache;
 };
 
-const readWikiLibraryStore = async () => {
+const readWikiLibraryStore = async ({ requirePrimary = false } = {}) => {
   // Bug fix 2026-05-12 — NocoDB devient la SOURCE PRIMAIRE.
   //
   // Avant ce changement, le filesystem `/tmp/aidhabitat-data/
@@ -1645,7 +1645,13 @@ const readWikiLibraryStore = async () => {
       }
       return normalized;
     }
+    if (requirePrimary) {
+      throw new Error('Bibliothèque NocoDB vide pendant la génération du rapport');
+    }
   } catch (err) {
+    // A fallback copy may lack recently added base64 photos. The report must
+    // fail instead of silently producing a PDF with empty illustration cells.
+    if (requirePrimary) throw err;
     console.warn(
       '[wiki] NocoDB unavailable, fallback to filesystem/bundle:',
       err?.message || err,
@@ -2198,24 +2204,28 @@ const invalidateWikiLibraryCache = () => {
   _wikiLibraryCacheExpiresAt = 0;
 };
 
-const loadWikiLibrary = async () => {
-  if (_wikiLibraryCache && Date.now() < _wikiLibraryCacheExpiresAt) {
+const loadWikiLibrary = async ({ requirePrimary = false } = {}) => {
+  if (!requirePrimary && _wikiLibraryCache && Date.now() < _wikiLibraryCacheExpiresAt) {
     return _wikiLibraryCache;
   }
 
-  const localStore = await readWikiLibraryStore();
+  const localStore = await readWikiLibraryStore({ requirePrimary });
 
-  try {
-    await syncLocalWikiStoreToNocodb();
-  } catch (error) {
-    console.error('Wiki sync failed, serving local library', error);
+  if (!requirePrimary) {
+    try {
+      await syncLocalWikiStoreToNocodb();
+    } catch (error) {
+      console.error('Wiki sync failed, serving local library', error);
+    }
   }
 
   const items = localStore.items
     .map(mapWikiLibraryItem)
     .sort((a, b) => a.title.localeCompare(b.title));
-  _wikiLibraryCache = items;
-  _wikiLibraryCacheExpiresAt = Date.now() + _WIKI_LIBRARY_CACHE_TTL_MS;
+  if (!requirePrimary) {
+    _wikiLibraryCache = items;
+    _wikiLibraryCacheExpiresAt = Date.now() + _WIKI_LIBRARY_CACHE_TTL_MS;
+  }
   return items;
 };
 
@@ -6442,7 +6452,8 @@ const fetchVisitRecommendationsForDossier = async (dossierId) => {
       return asArray(store.dossiers?.[dossierId]?.items);
     },
   });
-  const wikiItems = await loadWikiLibrary();
+  if (items.length === 0) return items;
+  const wikiItems = await loadWikiLibrary({ requirePrimary: true });
   const wikiLookup = buildWikiRecommendationLookup(wikiItems);
   return items.map((item) => {
     const matchedWikiItem = resolveRecommendationWikiItem(item, wikiLookup);
@@ -7126,6 +7137,12 @@ app.post(
       // round-trip). Fallback sur le fetcher d'origine (NocoDB / URL).
       fetchImageBytes: buildInlineFirstFetcher(inlineAssets),
     });
+    if (stats.recoImagesApplied !== stats.recoImagesRequested) {
+      throw httpError(
+        503,
+        'Une illustration de préconisation est momentanément indisponible. Réessayez la génération du rapport.',
+      );
+    }
     const fileName = buildReportFileName(dossier);
 
     // Sauvegarde IMMÉDIATE du PDF dans NocoDB côté serveur.

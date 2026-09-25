@@ -1568,44 +1568,46 @@ async function setImageInField(
   pdfDoc, form, fieldName, descriptor, fetchImageBytes, stats,
   { fit = 'contain' } = {},
 ) {
-  if (!fieldName || !descriptor || !fetchImageBytes) return;
+  if (!fieldName || !descriptor || !fetchImageBytes) return false;
   let field;
   try {
     field = form.getField(fieldName);
   } catch {
     stats.imagesMissingField += 1;
-    return;
+    return false;
   }
   if (!(field instanceof PDFButton)) {
     console.warn(`[generateVisitReport] "${fieldName}" n'est pas un PDFButton (got ${field.constructor.name})`);
-    return;
+    return false;
   }
   const fetched = await fetchImageBytes(descriptor);
   if (!fetched?.buffer || fetched.buffer.length === 0) {
     stats.imagesMissingValue += 1;
-    return;
+    return false;
   }
   const pdfImage = await embedImageAuto(pdfDoc, fetched.buffer, fetched.mimeType);
   if (!pdfImage) {
     stats.imagesFailedEmbed += 1;
-    return;
+    return false;
   }
 
   if (fit === 'cover') {
     try {
       drawImageWithCoverFit(pdfDoc, field, pdfImage);
       stats.imagesApplied += 1;
+      return true;
     } catch (error) {
       console.warn(`[generateVisitReport] cover-fit("${fieldName}") a échoué :`, error?.message || error);
       // Fallback contain manuel.
       try {
         drawImageWithContainFit(pdfDoc, field, pdfImage);
         stats.imagesApplied += 1;
+        return true;
       } catch (e2) {
         stats.imagesFailedEmbed += 1;
+        return false;
       }
     }
-    return;
   }
 
   // fit === 'contain' : redraw manuel (cf. JSDoc de
@@ -1615,13 +1617,16 @@ async function setImageInField(
   try {
     drawImageWithContainFit(pdfDoc, field, pdfImage);
     stats.imagesApplied += 1;
+    return true;
   } catch (error) {
     console.warn(`[generateVisitReport] contain-fit("${fieldName}") a échoué :`, error?.message || error);
     try {
       field.setImage(pdfImage);
       stats.imagesApplied += 1;
+      return true;
     } catch (e2) {
       stats.imagesFailedEmbed += 1;
+      return false;
     }
   }
 }
@@ -3468,6 +3473,8 @@ export async function generateVisitReport({
     imagesMissingValue: 0,
     imagesFailedEmbed: 0,
     recoTextApplied: 0,
+    recoImagesRequested: 0,
+    recoImagesApplied: 0,
     recoOverflow: 0,
     recoPagesRemoved: 0,
     descriptifMerged: false,
@@ -3876,7 +3883,8 @@ export async function generateVisitReport({
       ));
     }
   }
-  await Promise.all(recoImageTasks);
+  stats.recoImagesRequested = recoImageTasks.length;
+  stats.recoImagesApplied = (await Promise.all(recoImageTasks)).filter(Boolean).length;
 
   // ---------------------------------------------------------------
   // Élision des cases de préconisation vides (demande utilisateur :

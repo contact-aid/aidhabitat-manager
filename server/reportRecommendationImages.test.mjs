@@ -41,8 +41,28 @@ test('four recommendations keep their images in JPEG, WebP, PNG and GIF', async 
 
   assert.equal(stats.recoTextApplied, 4);
   assert.equal(stats.imagesApplied, 4);
+  assert.equal(stats.recoImagesRequested, 4);
+  assert.equal(stats.recoImagesApplied, 4);
   assert.equal(stats.imagesMissingField, 0);
   assert.equal(stats.imagesMissingValue, 0);
   assert.equal(stats.imagesFailedEmbed, 0);
   assert.ok((await PDFDocument.load(bytes)).getPageCount() > 10);
+});
+
+test('a missing recommendation image is reported separately from other images', async () => {
+  const { stats } = await generateVisitReport({
+    dossier: {
+      id: 'missing-recommendation-image',
+      patient: { firstName: 'Test', lastName: 'Images' },
+      housing: {},
+    },
+    recommendations: [{ wikiTitle: 'Agrandir une porte', wikiImageUrl: 'missing-image' }],
+    documents: [],
+    notePages: [],
+    fetchImageBytes: async () => null,
+  });
+
+  assert.equal(stats.recoImagesRequested, 1);
+  assert.equal(stats.recoImagesApplied, 0);
+  assert.equal(stats.imagesMissingValue, 1);
 });
