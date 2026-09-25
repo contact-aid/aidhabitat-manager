@@ -681,6 +681,17 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
   _SaveState _saveState = _SaveState.idle;
   bool _isEditing = false;
 
+  bool get _isModified =>
+      _nameController.text.trim() != _currentFund.name ||
+      _audienceController.text != _currentFund.audience ||
+      _requestDelayController.text != _currentFund.requestDelay ||
+      _aidAmountController.text != _currentFund.aidAmount ||
+      _requestMethodController.text != _currentFund.requestMethod ||
+      _therapistNoteController.text != _currentFund.therapistNote ||
+      _websiteController.text.trim() != _currentFund.website ||
+      _phoneController.text.trim() != _currentFund.phone ||
+      _draftLogoUrl != _currentFund.logoUrl;
+
   @override
   void initState() {
     super.initState();
@@ -743,6 +754,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
   }
 
   Future<void> _save() async {
+    if (_saveState == _SaveState.saving || !_isModified) return;
     setState(() => _saveState = _SaveState.saving);
     final draft = _currentFund.copyWith(
       name: _nameController.text.trim(),
@@ -762,7 +774,6 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
         _currentFund = saved;
         _draftLogoUrl = saved.logoUrl;
         _saveState = _SaveState.saved;
-        _isEditing = false; // leave edit mode after successful save
       });
       widget.onSaved(saved);
     } catch (_) {
@@ -1041,6 +1052,30 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
                           letterSpacing: -0.3,
                         ),
                       ),
+                if (_isEditing && _isModified) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3E8D0),
+                        borderRadius: BorderRadius.circular(50),
+                      ),
+                      child: const Text(
+                        '• Modifié',
+                        style: TextStyle(
+                          color: Color(0xFF92400E),
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
                 // Last edited chip — aligné à gauche.
                 Container(
@@ -1091,7 +1126,11 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
               tooltip: 'Annuler',
             ),
             const SizedBox(width: 6),
-            _SaveStateIndicator(state: _saveState, onSave: _save),
+            _SaveStateIndicator(
+              state: _saveState,
+              enabled: _isModified,
+              onSave: _save,
+            ),
           ] else
             _IconCircleButton(
               icon: LucideIcons.pencil,
@@ -1234,8 +1273,7 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
                     ),
                   ],
                 ),
-              if (_saveState == _SaveState.saved ||
-                  _saveState == _SaveState.error) ...[
+              if (_saveState == _SaveState.error) ...[
                 const SizedBox(height: 20),
                 _buildSaveStatus(),
               ],
@@ -1247,17 +1285,6 @@ class _RetirementFundDialogState extends State<_RetirementFundDialog> {
   }
 
   Widget _buildSaveStatus() {
-    if (_saveState == _SaveState.saved) {
-      return const Text(
-        'ENREGISTRÉ',
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1,
-          color: Color(0xFF059669),
-        ),
-      );
-    }
     return const Text(
       "ERREUR D'ENREGISTREMENT",
       style: TextStyle(
@@ -1508,14 +1535,19 @@ class _Input extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _SaveStateIndicator extends StatelessWidget {
-  const _SaveStateIndicator({required this.state, required this.onSave});
+  const _SaveStateIndicator({
+    required this.state,
+    required this.enabled,
+    required this.onSave,
+  });
 
   final _SaveState state;
+  final bool enabled;
   final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
-    if (state == _SaveState.idle) {
+    if (state != _SaveState.saving && enabled) {
       return Tooltip(
         message: 'Enregistrer',
         child: Material(
@@ -1542,10 +1574,10 @@ class _SaveStateIndicator extends StatelessWidget {
         label: 'Enregistrement en cours',
       ),
       _SaveState.saved => const _IndicatorConfig(
-        bg: Color(0xFFECFDF5),
-        border: Color(0xFFA7F3D0),
-        fg: Color(0xFF047857),
-        label: 'Enregistrement terminé',
+        bg: Color(0xFFE4E7EB),
+        border: Color(0xFFE4E7EB),
+        fg: Color(0xFF8A939D),
+        label: 'Aucune modification à enregistrer',
       ),
       _SaveState.error => const _IndicatorConfig(
         bg: Color(0xFFFEF2F2),
@@ -1571,7 +1603,7 @@ class _SaveStateIndicator extends StatelessWidget {
         );
         break;
       case _SaveState.saved:
-        icon = Icon(LucideIcons.checkCheck, size: 18, color: config.fg);
+        icon = Icon(LucideIcons.save, size: 18, color: config.fg);
         break;
       case _SaveState.error:
         icon = Icon(LucideIcons.x, size: 18, color: config.fg);

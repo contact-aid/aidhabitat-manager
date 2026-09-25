@@ -24,6 +24,7 @@ import '../components/brand_colors.dart';
 import '../components/confirmation_dialog.dart';
 import '../components/dashed_border_painter.dart';
 import '../components/doc_card.dart';
+import '../components/document_page_slide.dart';
 import '../components/doc_thumbnails.dart';
 import '../components/file_drop_zone.dart';
 import '../models/types.dart';
@@ -3665,6 +3666,8 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
   int _currentPage = 1;
   int _totalPages = 1;
   Uint8List? _currentImage;
+  final Map<int, Uint8List> _pagePreviews = {};
+  final GlobalKey<DocumentPageSlideState> _pageSlideKey = GlobalKey();
   int _renderTicket = 0;
   bool _loading = true;
   String? _error;
@@ -3884,9 +3887,13 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
       setState(() {
         _currentImage = raster?.bytes;
         _currentOverlay = _flatPagesByPage[pageNumber];
+        _pagePreviews.removeWhere(
+          (number, _) => (number - pageNumber).abs() > 1,
+        );
         _loading = false;
       });
       widget.onChanged();
+      unawaited(_prefetchNeighbors(pageNumber));
     } catch (e) {
       if (!mounted || ticket != _renderTicket || pageNumber != _currentPage) {
         return;
@@ -3898,6 +3905,57 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     } finally {
       await page?.close();
     }
+  }
+
+  Future<void> _prefetchNeighbors(int center) async {
+    final doc = _doc;
+    if (doc == null) return;
+    for (final number in [center - 1, center + 1]) {
+      if (number < 1 ||
+          number > _totalPages ||
+          _pagePreviews.containsKey(number)) {
+        continue;
+      }
+      PdfPage? page;
+      try {
+        page = await doc.getPage(number);
+        final scale = math.min(2.0, 4096 / math.max(page.width, page.height));
+        final image = await page.render(
+          width: page.width * scale,
+          height: page.height * scale,
+          format: PdfPageImageFormat.png,
+        );
+        if (!mounted || image == null) return;
+        setState(() => _pagePreviews[number] = image.bytes);
+      } catch (_) {
+        // The current page remains usable if a neighboring preview fails.
+      } finally {
+        await page?.close();
+      }
+    }
+  }
+
+  Widget? _neighborPreview(int number) {
+    final bytes = _pagePreviews[number];
+    if (bytes == null) return null;
+    return ColoredBox(
+      color: const Color(0xFF0E1116),
+      child: Center(
+        child: RotatedBox(
+          quarterTurns: widget.rotationQuarterTurns,
+          child: Image.memory(bytes, fit: BoxFit.contain),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _turnPage(int direction) async {
+    final target = _currentPage + direction;
+    if (_changingPage || target < 1 || target > _totalPages) return;
+    if (!_pagePreviews.containsKey(target)) {
+      await _prefetchNeighbors(_currentPage);
+    }
+    await _pageSlideKey.currentState?.turnPage(direction);
   }
 
   /// Capture les strokes courants en aplat PNG et les stocke en
@@ -3963,9 +4021,6 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     }
   }
 
-  Future<void> _goPrev() => _goToPage(_currentPage - 1);
-  Future<void> _goNext() => _goToPage(_currentPage + 1);
-
   Future<void> _goToPage(int page) async {
     if (_changingPage || _loading || page < 1 || page > _totalPages) return;
     setState(() => _changingPage = true);
@@ -4007,20 +4062,24 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
             absorbing: _changingPage,
             child: _currentImage == null
                 ? const SizedBox.shrink()
-                : _ImageAnnotator(
-                    key: _liveAnnotatorKey,
-                    imageBytes: _currentImage,
-                    pdfOverlayBytes: _currentOverlay,
-                    pageAspectRatio: _pageAspects[_currentPage],
-                    rotationQuarterTurns: widget.rotationQuarterTurns,
-                    onChanged: widget.onChanged,
-                    onPageSwipe: (delta) {
-                      if (delta > 0 && _currentPage < _totalPages) {
-                        unawaited(_goNext());
-                      } else if (delta < 0 && _currentPage > 1) {
-                        unawaited(_goPrev());
-                      }
-                    },
+                : DocumentPageSlide(
+                    key: _pageSlideKey,
+                    page: _currentPage,
+                    previous: _neighborPreview(_currentPage - 1),
+                    next: _neighborPreview(_currentPage + 1),
+                    canSwipe: () =>
+                        _liveAnnotatorKey.currentState?.canChangePage ?? true,
+                    onPageChange: (direction) =>
+                        _goToPage(_currentPage + direction),
+                    current: _ImageAnnotator(
+                      key: _liveAnnotatorKey,
+                      imageBytes: _currentImage,
+                      pdfOverlayBytes: _currentOverlay,
+                      pageAspectRatio: _pageAspects[_currentPage],
+                      rotationQuarterTurns: widget.rotationQuarterTurns,
+                      onChanged: widget.onChanged,
+                      onPageSwipe: (_) {},
+                    ),
                   ),
           ),
         ),
@@ -4037,7 +4096,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
                     color: Colors.white,
                   ),
                   onPressed: !_changingPage && !_loading && _currentPage > 1
-                      ? _goPrev
+                      ? () => _turnPage(-1)
                       : null,
                   tooltip: 'Page précédente',
                 ),
@@ -4054,7 +4113,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
                   ),
                   onPressed:
                       !_changingPage && !_loading && _currentPage < _totalPages
-                      ? _goNext
+                      ? () => _turnPage(1)
                       : null,
                   tooltip: 'Page suivante',
                 ),
@@ -4317,6 +4376,8 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
   int _currentPage = 1;
   int _totalPages = 1;
   final Map<int, String> _pagePngPaths = {};
+  final Map<int, Future<void>> _pageRenderJobs = {};
+  final GlobalKey<DocumentPageSlideState> _pageSlideKey = GlobalKey();
   bool _rendering = false;
   String? _error;
   // L'état du canvas est page-scoped; les snapshots assurent la continuité
@@ -4542,44 +4603,13 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
       }
     });
     try {
-      // On ne rerend le PNG que si on ne l'a pas déjà fait pour cette page.
-      var pngPath = _pagePngPaths[pageNumber];
-      if (pngPath == null) {
-        final page = await doc.getPage(pageNumber);
-        _pageAspects[pageNumber] = page.width / page.height;
-        try {
-          if (PdfInkService.instance.supported) {
-            await _ensurePageStrokes(pageNumber);
-            pngPath = await PdfInkService.instance.render(
-              sourcePath: widget.pdfPath,
-              page: pageNumber,
-              width: math.min(page.width * 2, 2048),
-              omitManagedInk: true,
-            );
-          } else {
-            final rendered = await page.render(
-              width: page.width * 2,
-              height: page.height * 2,
-              format: PdfPageImageFormat.png,
-              backgroundColor: '#FFFFFF',
-            );
-            if (rendered == null) throw StateError('Rendu PDF vide');
-            pngPath = '${widget.pdfPath}.page$pageNumber.png';
-            await NativeFileProtection.instance.writeProtectedBytes(
-              pngPath,
-              rendered.bytes,
-            );
-          }
-        } finally {
-          await page.close();
-        }
-        _pagePngPaths[pageNumber] = pngPath;
-      }
+      await _ensurePagePng(pageNumber);
       if (!mounted) return;
       setState(() {
         _rendering = false;
       });
       widget.onChanged();
+      unawaited(_prefetchNeighbors(pageNumber));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -4587,6 +4617,94 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
         _rendering = false;
       });
     }
+  }
+
+  Future<void> _ensurePagePng(int pageNumber) async {
+    if (_pagePngPaths.containsKey(pageNumber)) return;
+    final existing = _pageRenderJobs[pageNumber];
+    if (existing != null) return existing;
+    final job = _renderPagePng(pageNumber);
+    _pageRenderJobs[pageNumber] = job;
+    try {
+      await job;
+    } finally {
+      _pageRenderJobs.remove(pageNumber);
+    }
+  }
+
+  Future<void> _renderPagePng(int pageNumber) async {
+    final doc = _doc;
+    if (doc == null) return;
+    String? pngPath;
+    final page = await doc.getPage(pageNumber);
+    _pageAspects[pageNumber] = page.width / page.height;
+    try {
+      if (PdfInkService.instance.supported) {
+        await _ensurePageStrokes(pageNumber);
+        pngPath = await PdfInkService.instance.render(
+          sourcePath: widget.pdfPath,
+          page: pageNumber,
+          width: math.min(page.width * 2, 2048),
+          omitManagedInk: true,
+        );
+      } else {
+        final rendered = await page.render(
+          width: page.width * 2,
+          height: page.height * 2,
+          format: PdfPageImageFormat.png,
+          backgroundColor: '#FFFFFF',
+        );
+        if (rendered == null) throw StateError('Rendu PDF vide');
+        pngPath = '${widget.pdfPath}.page$pageNumber.png';
+        await NativeFileProtection.instance.writeProtectedBytes(
+          pngPath,
+          rendered.bytes,
+        );
+      }
+    } finally {
+      await page.close();
+    }
+    _pagePngPaths[pageNumber] = pngPath;
+  }
+
+  Future<void> _prefetchNeighbors(int center) async {
+    for (final number in [center - 1, center + 1]) {
+      if (number < 1 ||
+          number > _totalPages ||
+          _pagePngPaths.containsKey(number)) {
+        continue;
+      }
+      try {
+        await _ensurePagePng(number);
+        if (mounted) setState(() {});
+      } catch (_) {
+        // Keep the displayed page available if preloading fails.
+      }
+    }
+  }
+
+  Widget? _neighborPreview(int number) {
+    final path = _pagePngPaths[number];
+    if (path == null) return null;
+    return ColoredBox(
+      color: const Color(0xFF0E1116),
+      child: Center(
+        child: RotatedBox(
+          quarterTurns: widget.rotationQuarterTurns,
+          child: Image.file(File(path), fit: BoxFit.contain),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _turnPage(int direction) async {
+    final target = _currentPage + direction;
+    if (_rendering || target < 1 || target > _totalPages) return;
+    if (!_pagePngPaths.containsKey(target)) {
+      await _ensurePagePng(target);
+      if (mounted) setState(() {});
+    }
+    await _pageSlideKey.currentState?.turnPage(direction);
   }
 
   @override
@@ -4620,24 +4738,28 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
     return Stack(
       children: [
         Positioned.fill(
-          child: _ImageAnnotator(
-            key: _liveAnnotatorKey,
-            imagePath: pngPath,
-            pageAspectRatio: PdfInkService.instance.supported
-                ? _pageAspects[_currentPage]
-                : null,
-            rotationQuarterTurns: widget.rotationQuarterTurns,
-            onChanged: widget.onChanged,
-            onPageSwipe: (delta) {
-              final target = _currentPage + delta;
-              if (target >= 1 && target <= _totalPages) {
-                unawaited(_renderPage(target));
-              }
-            },
-            initialStrokes: seeded,
-            // Le save est piloté par le wrapper (`saveAll()`), pas par
-            // chaque annotator individuel.
-            autoPersistToDisk: false,
+          child: DocumentPageSlide(
+            key: _pageSlideKey,
+            page: _currentPage,
+            previous: _neighborPreview(_currentPage - 1),
+            next: _neighborPreview(_currentPage + 1),
+            canSwipe: () =>
+                _liveAnnotatorKey.currentState?.canChangePage ?? true,
+            onPageChange: (direction) => _renderPage(_currentPage + direction),
+            current: _ImageAnnotator(
+              key: _liveAnnotatorKey,
+              imagePath: pngPath,
+              pageAspectRatio: PdfInkService.instance.supported
+                  ? _pageAspects[_currentPage]
+                  : null,
+              rotationQuarterTurns: widget.rotationQuarterTurns,
+              onChanged: widget.onChanged,
+              onPageSwipe: (_) {},
+              initialStrokes: seeded,
+              // Le save est piloté par le wrapper (`saveAll()`), pas par
+              // chaque annotator individuel.
+              autoPersistToDisk: false,
+            ),
           ),
         ),
         // Navigation entre pages (seulement si > 1 page).
@@ -4667,9 +4789,7 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
-                      onPressed: _currentPage > 1
-                          ? () => _renderPage(_currentPage - 1)
-                          : null,
+                      onPressed: _currentPage > 1 ? () => _turnPage(-1) : null,
                       icon: const Icon(LucideIcons.chevronLeft, size: 18),
                       visualDensity: VisualDensity.compact,
                       tooltip: 'Page précédente',
@@ -4686,7 +4806,7 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
                     ),
                     IconButton(
                       onPressed: _currentPage < _totalPages
-                          ? () => _renderPage(_currentPage + 1)
+                          ? () => _turnPage(1)
                           : null,
                       icon: const Icon(LucideIcons.chevronRight, size: 18),
                       visualDensity: VisualDensity.compact,
@@ -4952,7 +5072,7 @@ class _ImageAnnotator extends StatefulWidget {
 }
 
 class _ImageAnnotatorState extends State<_ImageAnnotator>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   // Strokes actuellement affichés.
   List<_AnnotStroke> _strokes = [];
   // Hash des strokes lors du dernier save → permet de détecter des modifs.
@@ -4962,6 +5082,8 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   final TransformationController _transformationController =
       TransformationController();
   late final AnimationController _zoomResetController;
+  late final AnimationController _rotationController;
+  double _rotationStartAngle = 0;
   Animation<Matrix4>? _zoomResetAnimation;
   StreamSubscription<PencilDoubleTapEvent>? _pencilDoubleTapSubscription;
   int? _activeDrawingPointer;
@@ -4974,6 +5096,7 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
   double _zoom = 1;
   Size _viewportSize = Size.zero;
   bool _webPanMode = false;
+  bool get canChangePage => _zoom <= 1.05 && !_webPanMode;
 
   void _stepWebZoom(int direction) {
     if (!widget.webViewportControls || _viewportSize.isEmpty) return;
@@ -5032,6 +5155,10 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
             _transformationController.value = animation.value;
           }
         });
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    )..addListener(() => setState(() {}));
     _transformationController.addListener(_handleTransformationChanged);
     final seeded = widget.initialStrokes;
     if (seeded != null) {
@@ -5055,6 +5182,7 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
     _pencilDoubleTapSubscription?.cancel();
     _pencilDoubleTapSubscription = null;
     _zoomResetController.dispose();
+    _rotationController.dispose();
     _transformationController
       ..removeListener(_handleTransformationChanged)
       ..dispose();
@@ -5067,6 +5195,10 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
     if (oldWidget.rotationQuarterTurns != widget.rotationQuarterTurns) {
       _zoomResetController.stop();
       _transformationController.value = Matrix4.identity();
+      final delta =
+          widget.rotationQuarterTurns - oldWidget.rotationQuarterTurns;
+      _rotationStartAngle = -delta * math.pi / 2;
+      _rotationController.forward(from: 0);
     }
   }
 
@@ -5490,14 +5622,22 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
                     width: viewportSize.width,
                     height: viewportSize.height,
                     child: Center(
-                      child: RotatedBox(
-                        quarterTurns: turns,
-                        child: SizedBox(
-                          width: surfaceSize.width,
-                          height: surfaceSize.height,
-                          child: RepaintBoundary(
-                            key: _boundaryKey,
-                            child: _buildImageWithOverlay(),
+                      child: Transform.rotate(
+                        angle:
+                            _rotationStartAngle *
+                            (1 -
+                                Curves.easeInOutCubic.transform(
+                                  _rotationController.value,
+                                )),
+                        child: RotatedBox(
+                          quarterTurns: turns,
+                          child: SizedBox(
+                            width: surfaceSize.width,
+                            height: surfaceSize.height,
+                            child: RepaintBoundary(
+                              key: _boundaryKey,
+                              child: _buildImageWithOverlay(),
+                            ),
                           ),
                         ),
                       ),
