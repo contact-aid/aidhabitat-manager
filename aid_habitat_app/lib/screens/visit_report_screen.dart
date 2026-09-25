@@ -129,6 +129,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   }
 
   int _housingVersion = 0;
+  int? _lastHandledTabIndex;
   // Maps (patientId::tabKey) -> secondary OS windowId, so when the user
   // types in the in-app NotesWidget we can forward the change to the
   // detached window via `pushNote`.
@@ -354,6 +355,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       vsync: this,
       initialIndex: initialTabIndex,
     );
+    _lastHandledTabIndex = initialTabIndex;
     _tabController.addListener(_handleTabChange);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _notifyContextChanged();
@@ -763,9 +765,28 @@ class _VisitReportScreenState extends State<VisitReportScreen>
 
   void _handleTabChange() {
     if (!mounted) return;
+    final previousIndex = _lastHandledTabIndex;
+    final currentIndex = _tabController.index;
+    if (previousIndex != currentIndex) {
+      _lastHandledTabIndex = currentIndex;
+      if (currentIndex == _tabs.indexOf('Salle de bain') ||
+          currentIndex == _tabs.indexOf('WC')) {
+        // TabBar and programmatic navigation both arrive here. Finish any
+        // pending level edit before the sanitary tab reads the housing row.
+        unawaited(_refreshSanitaryTabsAfterHousingSave());
+      }
+    }
     _VisitReportStateCache.setTabIndex(_dossier.id, _tabController.index);
     _notifyContextChanged();
     setState(() {});
+  }
+
+  Future<void> _refreshSanitaryTabsAfterHousingSave() async {
+    await _accessibilityController.flushPendingSave();
+    if (!mounted) return;
+    // Also refresh when the room edit was saved by the debounce timer before
+    // navigation, or when the target tab was already mounted.
+    setState(() => _housingVersion++);
   }
 
   void _notifyContextChanged() {
@@ -1204,17 +1225,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           Expanded(
             child: TabBar(
               controller: _tabController,
-              onTap: (index) {
-                if ((index == _tabs.indexOf('Salle de bain') ||
-                        index == _tabs.indexOf('WC')) &&
-                    _tabController.previousIndex ==
-                        _tabs.indexOf('Accessibilité')) {
-                  // Persist level/room choices before the sanitary tabs read
-                  // them from SQLite. The save callback bumps _housingVersion
-                  // and triggers their reload when it completes.
-                  unawaited(_accessibilityController.flushPendingSave());
-                }
-              },
               isScrollable: true,
               // Indicateur d'onglet actif : SIMPLE TRAIT VIOLET FONCÉ en
               // bas, qui s'étend sur TOUTE la largeur cliquable du

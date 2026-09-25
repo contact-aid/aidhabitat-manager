@@ -384,12 +384,9 @@ class _RetirementFundsScreenState extends State<RetirementFundsScreen> {
                   maxCrossAxisExtent: 280,
                   mainAxisSpacing: 16,
                   crossAxisSpacing: 16,
-                  // Hauteur réduite (310 → 230) pour éviter l'espace blanc
-                  // entre les infos (nom · date · téléphone) et le bas de
-                  // la carte — demande utilisateur. 230 = 120 (hero logo) +
-                  // 12 padding + ~20 nom + 8 + ~14 date + 14 + ~30 chip
-                  // téléphone + 12 padding = cartes bien remplies.
-                  mainAxisExtent: 230,
+                  // Laisser la place à la date, la pastille et au bouton
+                  // d'actions sans les comprimer en bas de carte.
+                  mainAxisExtent: 240,
                 ),
                 itemCount: _filteredFunds.length,
                 itemBuilder: (context, index) {
@@ -568,13 +565,13 @@ class _FundCardState extends State<_FundCard> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF8A939D),
                           letterSpacing: 1.2,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const Spacer(),
                       // Widget : pastille téléphone SOUS la date — fond
                       // gris très clair, icône + numéro en slate-700.
                       Row(
@@ -585,7 +582,7 @@ class _FundCardState extends State<_FundCard> {
                                 alignment: Alignment.centerLeft,
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
+                                    horizontal: 12,
                                     vertical: 6,
                                   ),
                                   decoration: BoxDecoration(
@@ -607,7 +604,7 @@ class _FundCardState extends State<_FundCard> {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(
-                                            fontSize: 16,
+                                            fontSize: 14,
                                             fontWeight: FontWeight.w700,
                                             color: Color(0xFF5C6670),
                                           ),
@@ -620,48 +617,54 @@ class _FundCardState extends State<_FundCard> {
                             )
                           else
                             const Spacer(),
-                          PopupMenuButton<String>(
-                            tooltip: 'Actions',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints.tightFor(
-                              width: 34,
-                              height: 34,
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 34,
+                            height: 34,
+                            child: PopupMenuButton<String>(
+                              tooltip: 'Actions',
+                              icon: const Icon(
+                                LucideIcons.moreVertical,
+                                size: 18,
+                                color: Color(0xFF8A939D),
+                              ),
+                              padding: EdgeInsets.zero,
+                              splashRadius: 18,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              onSelected: (action) {
+                                switch (action) {
+                                  case 'edit':
+                                    widget.onEdit();
+                                  case 'share':
+                                    widget.onShare();
+                                  case 'duplicate':
+                                    widget.onDuplicate();
+                                  case 'delete':
+                                    widget.onDelete();
+                                }
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(
+                                  value: 'edit',
+                                  child: Text('Modifier'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'share',
+                                  child: Text('Partager'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'duplicate',
+                                  child: Text('Dupliquer'),
+                                ),
+                                PopupMenuDivider(),
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text('Supprimer'),
+                                ),
+                              ],
                             ),
-                            icon: const Icon(
-                              LucideIcons.moreVertical,
-                              size: 18,
-                            ),
-                            onSelected: (action) {
-                              switch (action) {
-                                case 'edit':
-                                  widget.onEdit();
-                                case 'share':
-                                  widget.onShare();
-                                case 'duplicate':
-                                  widget.onDuplicate();
-                                case 'delete':
-                                  widget.onDelete();
-                              }
-                            },
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(
-                                value: 'edit',
-                                child: Text('Modifier'),
-                              ),
-                              PopupMenuItem(
-                                value: 'share',
-                                child: Text('Partager'),
-                              ),
-                              PopupMenuItem(
-                                value: 'duplicate',
-                                child: Text('Dupliquer'),
-                              ),
-                              PopupMenuDivider(),
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Text('Supprimer'),
-                              ),
-                            ],
                           ),
                         ],
                       ),

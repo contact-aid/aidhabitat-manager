@@ -758,19 +758,22 @@ void main() {
     await repository.updateHousing(_dossier, {
       'rdc': true,
       'floor': true,
+      'second_floor': true,
       'rdc_rooms_json': jsonEncode(['WC']),
       'floor_rooms_json': jsonEncode(['Salle de bain']),
+      'second_floor_rooms_json': jsonEncode(['WC', 'Salle de bain']),
     });
     var housing = await repository.fetchHousingRaw(_dossier);
     expect(buildSanitaryLevelSelections(housing, 'WC').map((e) => e.field), [
       'rdc',
+      'second_floor',
     ]);
     expect(
       buildSanitaryLevelSelections(
         housing,
         'Salle de bain',
       ).map((e) => e.field),
-      ['floor'],
+      ['floor', 'second_floor'],
     );
 
     await repository.updateHousing(_dossier, {
@@ -781,13 +784,14 @@ void main() {
     expect(buildSanitaryLevelSelections(housing, 'WC').map((e) => e.field), [
       'rdc',
       'floor',
+      'second_floor',
     ]);
     expect(
       buildSanitaryLevelSelections(
         housing,
         'Salle de bain',
       ).map((e) => e.field),
-      ['rdc', 'floor'],
+      ['rdc', 'floor', 'second_floor'],
     );
   });
 

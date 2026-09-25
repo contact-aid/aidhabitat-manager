@@ -630,7 +630,7 @@ class _PrincipalFundCardState extends State<_PrincipalFundCard> {
                                 alignment: Alignment.centerLeft,
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
+                                    horizontal: 12,
                                     vertical: 6,
                                   ),
                                   decoration: BoxDecoration(
@@ -652,7 +652,7 @@ class _PrincipalFundCardState extends State<_PrincipalFundCard> {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(
-                                            fontSize: 16,
+                                            fontSize: 14,
                                             fontWeight: FontWeight.w700,
                                             color: Color(0xFF5C6670),
                                           ),
@@ -665,48 +665,54 @@ class _PrincipalFundCardState extends State<_PrincipalFundCard> {
                             )
                           else
                             const Spacer(),
-                          PopupMenuButton<String>(
-                            tooltip: 'Actions',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints.tightFor(
-                              width: 34,
-                              height: 34,
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 34,
+                            height: 34,
+                            child: PopupMenuButton<String>(
+                              tooltip: 'Actions',
+                              icon: const Icon(
+                                LucideIcons.moreVertical,
+                                size: 18,
+                                color: Color(0xFF8A939D),
+                              ),
+                              padding: EdgeInsets.zero,
+                              splashRadius: 18,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              onSelected: (action) {
+                                switch (action) {
+                                  case 'edit':
+                                    widget.onEdit();
+                                  case 'share':
+                                    widget.onShare();
+                                  case 'duplicate':
+                                    widget.onDuplicate();
+                                  case 'delete':
+                                    widget.onDelete();
+                                }
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(
+                                  value: 'edit',
+                                  child: Text('Modifier'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'share',
+                                  child: Text('Partager'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'duplicate',
+                                  child: Text('Dupliquer'),
+                                ),
+                                PopupMenuDivider(),
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text('Supprimer'),
+                                ),
+                              ],
                             ),
-                            icon: const Icon(
-                              LucideIcons.moreVertical,
-                              size: 18,
-                            ),
-                            onSelected: (action) {
-                              switch (action) {
-                                case 'edit':
-                                  widget.onEdit();
-                                case 'share':
-                                  widget.onShare();
-                                case 'duplicate':
-                                  widget.onDuplicate();
-                                case 'delete':
-                                  widget.onDelete();
-                              }
-                            },
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(
-                                value: 'edit',
-                                child: Text('Modifier'),
-                              ),
-                              PopupMenuItem(
-                                value: 'share',
-                                child: Text('Partager'),
-                              ),
-                              PopupMenuItem(
-                                value: 'duplicate',
-                                child: Text('Dupliquer'),
-                              ),
-                              PopupMenuDivider(),
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Text('Supprimer'),
-                              ),
-                            ],
                           ),
                         ],
                       ),

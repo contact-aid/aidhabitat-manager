@@ -93,6 +93,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
   bool _loaded = false;
   Timer? _saveTimer;
   Future<void>? _saveFuture;
+  int _loadGeneration = 0;
   int _activeLevelIndex = 0;
   String? _pendingLevelField;
   // (Ancien Set de clés d'édition pour le repli "CollapsedValueRow"
@@ -122,8 +123,10 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     // Phase 1 — rendu immédiat depuis le cache local SQLite.
-    await _hydrateFromLocal();
+    await _hydrateFromLocal(generation);
+    if (!mounted || generation != _loadGeneration) return;
     // Phase 2 — refresh serveur en arrière-plan ; rehydrate si nouvelles
     // données. En offline on reste sur le cache local.
     try {
@@ -134,10 +137,10 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
       return;
     }
     if (!mounted) return;
-    await _hydrateFromLocal();
+    await _hydrateFromLocal(generation);
   }
 
-  Future<void> _hydrateFromLocal() async {
+  Future<void> _hydrateFromLocal(int generation) async {
     final result = await widget.repository.fetchDiagnosticSanitaire(
       widget.dossier.id,
     );
@@ -145,7 +148,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
       widget.dossier.id,
     );
     final selectedLevels = buildSanitaryLevelSelections(housingRow, 'WC');
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
 
     final previous = result?.wcInstances ?? const <WcInstance>[];
     final nextInstances = <WcInstance>[];

@@ -283,6 +283,7 @@ class _BathroomTabState extends State<BathroomTab>
   bool _loaded = false;
   Timer? _saveTimer;
   Future<void>? _saveFuture;
+  int _loadGeneration = 0;
   int _activeLevelIndex = 0;
   String? _pendingLevelField;
   // (Anciens Sets d'édition/repli retirés : les toggles et listes
@@ -323,12 +324,14 @@ class _BathroomTabState extends State<BathroomTab>
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     // Phase 1 — rendu immédiat à partir des données locales (SQLite).
     // La partie réseau (NocoDB) tournera en arrière-plan dans la
     // phase 2 ci-dessous. Permet d'afficher les pills de niveaux et
     // d'éditer les équipements sans attendre l'aller-retour serveur,
     // surtout sur la PWA iPad via Vercel où la latence est visible.
-    await _hydrateFromLocal();
+    await _hydrateFromLocal(generation);
+    if (!mounted || generation != _loadGeneration) return;
     // Phase 2 — refresh depuis le serveur en arrière-plan. Si des
     // données plus récentes arrivent, on rehydrate silencieusement.
     try {
@@ -339,10 +342,10 @@ class _BathroomTabState extends State<BathroomTab>
       return; // offline : le cache local suffit
     }
     if (!mounted) return;
-    await _hydrateFromLocal();
+    await _hydrateFromLocal(generation);
   }
 
-  Future<void> _hydrateFromLocal() async {
+  Future<void> _hydrateFromLocal(int generation) async {
     final result = await widget.repository.fetchDiagnosticSanitaire(
       widget.dossier.id,
     );
@@ -353,7 +356,7 @@ class _BathroomTabState extends State<BathroomTab>
       housingRow,
       'Salle de bain',
     );
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
 
     final previous = result?.sdbInstances ?? const <BathroomInstance>[];
     // One instance per level with "Salle de bain" selected. Preserve any
