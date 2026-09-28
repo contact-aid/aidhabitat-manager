@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/types.dart';
 import 'app_config.dart';
@@ -445,6 +446,7 @@ class NocodbApiClient {
         .post(
           Uri.parse('$_baseUrl/api/airtable/sync-current-dossiers'),
           headers: _headers,
+          body: jsonEncode({'enhancedWeb': kIsWeb}),
         )
         .timeout(const Duration(seconds: 120));
     if (response.statusCode < 200 || response.statusCode >= 300) {

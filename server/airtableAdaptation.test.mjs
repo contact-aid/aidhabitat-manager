@@ -82,19 +82,22 @@ test('Airtable rate limiting retries the same page', async () => {
 test('projection only contains authorized dossier identity and scheduling fields', () => {
   const result = projectAirtableDossier({
     dossier: row(id('a'), { 'Dossier ID': 'FICTIF-2026', Commentaires: 'Note fictive',
-      Commune: ['Ville fictive'], 'Communauté de communes': ['EPCI fictif'],
+      Commune: ['recBBBBBBBBBBBBBB'], 'Commune texte': 'Ville fictive',
+      'Communauté de communes': ['EPCI fictif'],
+      'Audit ou Eval': [{ type: 'application/pdf', filename: 'rapport.pdf' }],
       'Date du RDV avec heure': '2026-10-01T08:00:00.000Z',
       'Nature des travaux conca': "MaPrimeAdapt' Complet",
       autonomy: 'must be ignored', wcInstances: ['must be ignored'] }),
     client: row(id('x'), { Prénom: 'Camille', Nom: 'Exemple',
-      'Nb du foyer': '2', Ressources: 12345, 'Catégorie': 'Très modeste',
+      'Nb du foyer': '2', Ressources: 12345,
+      'Catégorie sans emoji': 'Très modeste',
       'M./Mme': 'Madame', 'Date de naissance': '1950-01-01',
       'N° et rue': '1 rue fictive' }),
   });
   assert.deepEqual(result.beneficiary, {
     prenom: 'Camille', nom: 'Exemple', adresse_logement: '1 rue fictive',
     ville_libre: 'Ville fictive', nombre_personnes: 2,
-    revenu_fiscal_reference: 12345, date_naissance_madame: '1950-01-01',
+    revenu_fiscal_reference: 12345, date_naissance_monsieur: '1950-01-01',
   });
   assert.deepEqual(result.dossier, {
     visit_date: '2026-10-01T08:00:00.000Z', nature_accompagnement: 'complet',
@@ -105,6 +108,7 @@ test('projection only contains authorized dossier identity and scheduling fields
   assert.equal(result.airtableDossierLabel, 'FICTIF-2026');
   assert.equal(result.epciLabel, 'EPCI fictif');
   assert.equal(result.incomeCategoryLabel, 'Très modeste');
+  assert.equal(result.hasAirtableReport, true);
   assert(!JSON.stringify(result).includes('must be ignored'));
 });
 

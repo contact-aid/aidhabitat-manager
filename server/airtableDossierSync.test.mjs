@@ -57,3 +57,57 @@ test('an existing exact Airtable ID updates source fields without touching visit
     { table: 'dossier', patch: { visit_date: '2026-09-29T08:00:00.000Z' } },
   ]);
 });
+
+test('an Airtable PDF promotes the dossier while visit fields already entered are preserved', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  input.dossier.fields['Audit ou Eval'] = [{ type: 'application/pdf', filename: 'rapport.pdf' }];
+  input.dossier.fields['Commune texte'] = 'Ville lisible';
+  input.client.fields['Date de naissance'] = '1950-01-01';
+  input.client.fields['Catégorie sans emoji'] = 'Modeste';
+  input.client.fields['Nb du foyer'] = '1';
+  const patches = [];
+  await syncCurrentCoralieDossiers({
+    sourceRows: [input],
+    dossierRows: [{ id: 10, fields: { uuid_source: 'airtable:recAAAAAAAAAAAAAA',
+      beneficiaires_id: 11, ergo_id: 'Coralie', status: 'À visiter',
+      visit_date: '2026-09-29T08:00:00.000Z' } }],
+    beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple',
+      ville_libre: 'recBBBBBBBBBBBBBB', date_naissance_monsieur: '1949-01-01' } }],
+    baremeRows: [{ id: 42, fields: { nombre_personnes: 1, annee_plafond: 2026 } }],
+    createBeneficiary: async () => assert.fail('unexpected creation'),
+    createDossier: async () => assert.fail('unexpected creation'),
+    updateBeneficiary: async (_, patch) => patches.push({ table: 'beneficiary', patch }),
+    updateDossier: async (_, patch) => patches.push({ table: 'dossier', patch }),
+  });
+  assert.deepEqual(patches, [
+    { table: 'beneficiary', patch: {
+      ville_libre: 'Ville lisible', nombre_personnes: 1,
+      categorie_revenu_id1: 42,
+    } },
+    { table: 'dossier', patch: { status: 'En cours' } },
+  ]);
+});
+
+test('the earlier iPad request keeps its original import behavior', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  input.dossier.fields['Audit ou Eval'] = [{ type: 'application/pdf', filename: 'rapport.pdf' }];
+  input.dossier.fields.Commune = ['recBBBBBBBBBBBBBB'];
+  input.dossier.fields['Commune texte'] = 'Ville lisible';
+  input.client.fields['M./Mme'] = 'Madame';
+  input.client.fields['Date de naissance'] = '1950-01-01';
+  input.client.fields['Nb du foyer'] = '1';
+  const created = [];
+  await syncCurrentCoralieDossiers({
+    sourceRows: [input], dossierRows: [], beneficiaryRows: [],
+    baremeRows: [{ id: 42, fields: { nombre_personnes: 1, annee_plafond: 2026 } }],
+    enhancedWeb: false,
+    createBeneficiary: async (fields) => { created.push(fields); return { id: 1 }; },
+    createDossier: async (fields) => { created.push(fields); return { id: 2 }; },
+    updateBeneficiary: async () => assert.fail('unexpected update'),
+    updateDossier: async () => assert.fail('unexpected update'),
+  });
+  assert.equal(created[0].ville_libre, undefined);
+  assert.equal(created[0].date_naissance_madame, '1950-01-01');
+  assert.equal(created[0].categorie_revenu_id1, undefined);
+  assert.equal(created[1].status, 'À visiter');
+});

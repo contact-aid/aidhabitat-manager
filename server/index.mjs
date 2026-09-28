@@ -5747,10 +5747,11 @@ app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, ne
     }
     const result = await serializeCoralieAirtableSync('Coralie', async () => {
       const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
-      const [sourceRows, dossierRows, beneficiaryRows] = await Promise.all([
+      const [sourceRows, dossierRows, beneficiaryRows, baremeRows] = await Promise.all([
         read('Coralie'),
         queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
         queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
+        queryAll(TABLES.baremesAnah, { fields: FIELD_SETS.baremesAnah }),
       ]);
       const updateFromAirtable = async (tableId, row, fields) => {
         if (!conditionalWriter) {
@@ -5767,7 +5768,8 @@ app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, ne
         }
       };
       return syncCurrentCoralieDossiers({
-        sourceRows, dossierRows, beneficiaryRows,
+        sourceRows, dossierRows, beneficiaryRows, baremeRows,
+        enhancedWeb: req.body?.enhancedWeb === true,
         createBeneficiary: (fields) => createRecord(TABLES.beneficiaires, fields),
         createDossier: (fields) => createRecord(TABLES.dossiers, fields),
         updateBeneficiary: (row, fields) => updateFromAirtable(TABLES.beneficiaires, row, fields),

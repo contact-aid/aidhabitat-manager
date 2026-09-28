@@ -9,14 +9,14 @@ export const AIRTABLE_ADAPTATION = Object.freeze({
 const dossierFields = [
   'Dossier ID', 'Adaptation ou énergie', 'Intervenant couleur', 'Nom intervenant',
   'No Client', 'Commentaires', 'Date du RDV avec heure',
-  'Nature des travaux conca', 'Commune', 'Communauté de communes',
-  'Annulé ?',
+  'Nature des travaux conca', 'Commune', 'Commune texte', 'Communauté de communes',
+  'Audit ou Eval', 'Annulé ?',
 ];
 const clientFields = [
   'Prénom', 'Nom', 'Téléphone', 'Adresse mail', 'N° et rue',
   'Communes', 'Code postal (from Communes)',
   'Communauté de commune (from Communes)', 'Nb du foyer',
-  'Ressources', 'Catégorie', 'M./Mme', 'Date de naissance',
+  'Ressources', 'Catégorie', 'Catégorie sans emoji', 'M./Mme', 'Date de naissance',
 ];
 
 const labels = (value) => {
@@ -41,7 +41,7 @@ const asNumber = (value) => {
 };
 
 /** Explicit allowlist: no accessibility, autonomy, bathroom, WC, or report note. */
-export function projectAirtableDossier({ dossier, client }) {
+export function projectAirtableDossier({ dossier, client }, { enhancedWeb = true } = {}) {
   const source = dossier?.fields || {};
   const person = client?.fields || {};
   const beneficiary = {};
@@ -57,18 +57,26 @@ export function projectAirtableDossier({ dossier, client }) {
   add(beneficiary, 'telephone', first(person.Téléphone).replace(/\D/g, ''));
   add(beneficiary, 'mail', first(person['Adresse mail']).toLowerCase());
   add(beneficiary, 'adresse_logement', first(person['N° et rue']));
-  add(beneficiary, 'ville_libre', first(source.Commune));
+  // The Airtable "Commune" lookup can contain a linked record ID.
+  const city = first(enhancedWeb ? source['Commune texte'] : source.Commune);
+  if (!/^rec[A-Za-z0-9]{14}$/.test(city)) add(beneficiary, 'ville_libre', city);
   add(beneficiary, 'code_postal_libre', first(person['Code postal (from Communes)']));
   const people = asNumber(person['Nb du foyer']);
   if (Number.isSafeInteger(people) && people > 0) beneficiary.nombre_personnes = people;
   const revenue = asNumber(person.Ressources);
   if (revenue != null && revenue >= 0) beneficiary.revenu_fiscal_reference = revenue;
   const birthDate = first(person['Date de naissance']);
-  const civility = normalized(first(person['M./Mme']));
   if (/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
-    if (civility === 'monsieur') beneficiary.date_naissance_monsieur = birthDate;
-    if (civility === 'madame') beneficiary.date_naissance_madame = birthDate;
+    if (enhancedWeb) {
+      // This NocoDB column is the primary occupant's date, irrespective of title.
+      beneficiary.date_naissance_monsieur = birthDate;
+    } else {
+      const civility = normalized(first(person['M./Mme']));
+      if (civility === 'monsieur') beneficiary.date_naissance_monsieur = birthDate;
+      if (civility === 'madame') beneficiary.date_naissance_madame = birthDate;
+    }
   }
+  const incomeCategory = first(person[enhancedWeb ? 'Catégorie sans emoji' : 'Catégorie']);
   add(dossierPatch, 'visit_date', first(source['Date du RDV avec heure']));
   const nature = normalized(first(source['Nature des travaux conca']));
   if (nature.includes('complet')) dossierPatch.nature_accompagnement = 'complet';
@@ -83,7 +91,11 @@ export function projectAirtableDossier({ dossier, client }) {
     dossier: dossierPatch,
     quickNote: first(source.Commentaires),
     epciLabel: first(source['Communauté de communes']),
-    incomeCategoryLabel: first(person['Catégorie']),
+    incomeCategoryLabel: incomeCategory,
+    hasAirtableReport: enhancedWeb && Array.isArray(source['Audit ou Eval'])
+      && source['Audit ou Eval'].some((attachment) =>
+        attachment?.type === 'application/pdf'
+        && /rapport/i.test(String(attachment.filename ?? ''))),
   };
 }
 
