@@ -77,6 +77,50 @@ void main() {
     expect(await db.query('note_pages'), hasLength(1));
   });
 
+  test(
+    'restores the iPad beneficiary drawing over a newer empty web cache',
+    () async {
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      final local = LocalDatabase.forTesting(db);
+      await local.createSchemaForTesting();
+      final repository = NoteRepository(database: local);
+      const empty = '{"version":1,"text":"","strokes":[]}';
+      const drawing =
+          '{"version":1,"text":"","strokes":[{"tool":"pen","color":"#111827","size":2,"points":[{"x":0.1,"y":0.2}]}]}';
+
+      await repository.mergeRemoteNotePage(
+        patientId: 'patient',
+        dossierId: 'dossier',
+        tabKey: 'Bénéficiaire-Notes',
+        pageNumber: 0,
+        drawingJson: empty,
+        revision: 'empty-cache',
+        updatedAt: '2026-09-28T16:30:00+02:00',
+      );
+      final merged = await repository.mergeRemoteNotePage(
+        patientId: 'patient',
+        dossierId: 'dossier',
+        tabKey: 'Bénéficiaire-Notes',
+        pageNumber: 0,
+        drawingJson: drawing,
+        revision: 'ipad-drawing',
+        updatedAt: '2026-09-28T14:26:00Z',
+      );
+
+      expect(merged, isTrue);
+      expect(
+        await repository.fetchDrawingJson(
+          patientId: 'patient',
+          dossierId: 'dossier',
+          tabKey: 'Bénéficiaire-Notes',
+        ),
+        drawing,
+      );
+      expect(await db.query('sync_operations'), isEmpty);
+    },
+  );
+
   test('a newer server note cannot erase an unsent local edit', () async {
     final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     addTearDown(db.close);
@@ -87,24 +131,39 @@ void main() {
     const localDrawing = '{"version":1,"text":"saisie locale","strokes":[]}';
     const remoteDrawing = '{"version":1,"text":"autre appareil","strokes":[]}';
     await repository.mergeRemoteNotePage(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides', pageNumber: 0, drawingJson: base,
-      revision: 'revision-base', updatedAt: '2026-09-23T08:00:00.000Z',
+      patientId: 'patient-fictif',
+      dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides',
+      pageNumber: 0,
+      drawingJson: base,
+      revision: 'revision-base',
+      updatedAt: '2026-09-23T08:00:00.000Z',
     );
     await repository.saveDrawingJson(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides', drawingJson: localDrawing,
+      patientId: 'patient-fictif',
+      dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides',
+      drawingJson: localDrawing,
       mutationOrigin: SyncMutationOrigin.userEdit,
     );
     final merged = await repository.mergeRemoteNotePage(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides', pageNumber: 0, drawingJson: remoteDrawing,
-      revision: 'revision-newer', updatedAt: '2026-09-24T08:00:00.000Z',
+      patientId: 'patient-fictif',
+      dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides',
+      pageNumber: 0,
+      drawingJson: remoteDrawing,
+      revision: 'revision-newer',
+      updatedAt: '2026-09-24T08:00:00.000Z',
     );
     expect(merged, isFalse);
-    expect(await repository.fetchDrawingJson(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides'), localDrawing);
+    expect(
+      await repository.fetchDrawingJson(
+        patientId: 'patient-fictif',
+        dossierId: 'dossier-fictif',
+        tabKey: 'notes_rapides',
+      ),
+      localDrawing,
+    );
     expect((await db.query('sync_operations')).single['status'], 'pending');
   });
 

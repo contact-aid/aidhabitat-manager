@@ -487,7 +487,21 @@ class NoteRepository {
         remoteUpdatedAt: updatedAt,
         localUpdatedAt: localUpdatedAt,
       );
-      if (localHasUnpublishedChanges || remoteIsOlder) {
+      // An older empty web cache can have a later local timestamp than the
+      // iPad drawing. The server copy is authoritative once the cache is
+      // synced and there is no outstanding local edit.
+      var recoverMissingBeneficiaryDrawing = false;
+      if (remoteIsOlder &&
+          !localHasUnpublishedChanges &&
+          tabKey == 'Bénéficiaire-Notes' &&
+          _hasDrawingStrokes(drawingJson)) {
+        final localDrawing = await OfflineVault.instance.openString(
+          existing['drawing_json'] as String? ?? '',
+        );
+        recoverMissingBeneficiaryDrawing = !_hasDrawingStrokes(localDrawing);
+      }
+      if (localHasUnpublishedChanges ||
+          (remoteIsOlder && !recoverMissingBeneficiaryDrawing)) {
         return false;
       }
     }
@@ -595,6 +609,17 @@ class NoteRepository {
     final local = DateTime.tryParse(localUpdatedAt);
     if (remote == null || local == null) return false;
     return remote.isBefore(local);
+  }
+
+  bool _hasDrawingStrokes(String drawingJson) {
+    try {
+      final decoded = jsonDecode(drawingJson);
+      return decoded is Map &&
+          decoded['strokes'] is List &&
+          (decoded['strokes'] as List).isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Migration locale (demande utilisateur 2026-04-29, option « 3 ») :
