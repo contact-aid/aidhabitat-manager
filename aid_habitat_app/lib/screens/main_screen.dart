@@ -366,10 +366,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       final sessionReady = await _authService.resumePendingRemoteSession();
       if (!sessionReady) throw StateError('Session distante indisponible');
       if (!mounted || _isOffline || ConnectivityService().isOffline) return;
-      if (kIsWeb &&
-          (widget.currentUser.role == LocalUserRole.admin ||
-              widget.currentUser.role == LocalUserRole.ergo ||
-              widget.currentUser.role == LocalUserRole.technician)) {
+      final shouldImportAirtable = kIsWeb
+          ? widget.currentUser.role == LocalUserRole.admin ||
+                widget.currentUser.role == LocalUserRole.ergo ||
+                widget.currentUser.role == LocalUserRole.technician
+          : widget.currentUser.ergoLabel?.trim().toLowerCase() == 'coralie';
+      if (shouldImportAirtable) {
         var remaining = 1;
         for (var batch = 0; batch < 100 && remaining > 0; batch++) {
           final result = await _dataService.syncCurrentCoralieDossiers();
