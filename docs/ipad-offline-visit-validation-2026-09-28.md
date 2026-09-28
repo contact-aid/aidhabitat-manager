@@ -2,10 +2,11 @@
 
 ## Portée
 
-Cette recette vise le prochain build iPad de Coralie. Le build 57 installé ne
-contient pas les corrections de cette branche. Les tests automatisés prouvent
-les règles du code avec des données fictives ; ils ne remplacent pas un essai
-sur l'iPad, son stockage réel et son réseau.
+Cette recette vise le prochain build iPad de Coralie et de Christelle. Le build
+57 installé sur l'iPad de Coralie ne contient pas les corrections de cette
+branche. Les tests automatisés prouvent les règles du code avec des données
+fictives ; ils ne remplacent pas un essai sur chaque iPad, son stockage réel et
+son réseau. Réaliser le cycle complet ci-dessous avec les deux comptes.
 
 ## Préparation
 
