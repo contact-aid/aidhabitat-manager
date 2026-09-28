@@ -191,7 +191,7 @@ try {
       const dossiers = expectStatus(await request('/api/dossiers', { token: admin }), 200);
       assert(dossiers.some((item) => item.id === 'airtable:recDDDDDDDDDDDDDD'));
     });
-    await check('Coralie refresh updates an existing dossier without replacing visit data', async () => {
+    await check('Coralie refresh fills empty fields without replacing existing data', async () => {
       mock.row('dossier').uuid_source = 'airtable:recDDDDDDDDDDDDDD';
       mock.row('dossier').ergo_id = 'Coralie';
       mock.row('dossier').compte_anah = 'saisie conservée';
@@ -202,7 +202,7 @@ try {
       assert.equal(result.data.updated, 1);
       assert.equal(mock.row('dossier').visit_date, '2026-09-29T08:00:00.000Z');
       assert.equal(mock.row('dossier').compte_anah, 'saisie conservée');
-      assert.equal(mock.row('beneficiaire').prenom, 'Coralie');
+      assert.equal(mock.row('beneficiaire').prenom, 'Synthetic');
     });
   }
 

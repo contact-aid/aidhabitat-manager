@@ -63,22 +63,17 @@ test('another profile imports the same canonical note only for its own dossier',
   assert.equal(saved[0].tabKey, 'notes_rapides');
 });
 
-test('archives an existing note and preserves drawing when applying the description', async () => {
+test('an existing written note remains unchanged when Airtable differs', async () => {
   const existing = { id: 'old-page', scopeType: 'dossier_detail',
     scopeId: `airtable:${recordId}`, tabKey: 'notes_rapides', subTabKey: '',
     pageNumber: 0, textContent: 'Note déjà saisie\nNote inscription',
     drawingJson: '{"strokes":[1]}', previewDataUrl: 'data:image/png;base64,x',
     layoutKind: 'freeform', revision: 'old-revision' };
   const pages = [existing];
-  const { saved } = await importRows({ pages });
-  assert.equal(saved.length, 2);
-  assert.equal(saved[0].tabKey, 'notes_rapides_avant_description');
-  assert.equal(saved[0].textContent, existing.textContent);
-  assert.equal(saved[1].notePageId, 'old-page');
-  assert.equal(saved[1].expectedRevision, 'old-revision');
-  assert.deepEqual(JSON.parse(saved[1].drawingJson).strokes, [1]);
-  assert.equal(JSON.parse(saved[1].drawingJson).text, 'Description exacte des travaux');
-  assert.equal(saved[1].previewDataUrl, existing.previewDataUrl);
+  const { saved, result } = await importRows({ pages });
+  assert.equal(saved.length, 0);
+  assert.equal(result.alreadyPresent, 1);
+  assert.equal(pages[0].textContent, existing.textContent);
   const again = await importRows({ pages });
   assert.equal(again.result.imported, 0);
   assert.equal(again.saved.length, 0);
@@ -95,27 +90,39 @@ test('does not create notes for cancelled or out-of-period dossiers', async () =
   assert.equal(saved.length, 0);
 });
 
-test('replaces inconsistent old display text after archiving it', async () => {
+test('keeps both display text and handwritten note text when they differ', async () => {
   const existing = { id: 'old-page', scopeType: 'dossier_detail',
     scopeId: `airtable:${recordId}`, tabKey: 'notes_rapides', subTabKey: '',
     pageNumber: 0, textContent: 'Commentaire d’inscription (Airtable)\nNote inscription\n\nCommentaire du dossier (Airtable)\nNote dossier',
     drawingJson: JSON.stringify({ version: 1, text: 'Note personnelle', strokes: [{ x: 1 }] }),
     revision: 'old-revision' };
   const { saved } = await importRows({ pages: [existing] });
-  assert.equal(saved.length, 2);
-  const drawing = JSON.parse(saved[1].drawingJson);
-  assert.deepEqual(drawing.strokes, [{ x: 1 }]);
-  assert.equal(drawing.text, 'Description exacte des travaux');
-  assert.equal(saved[1].textContent, drawing.text);
+  assert.equal(saved.length, 0);
+  assert.equal(existing.textContent.startsWith('Commentaire d’inscription'), true);
+  assert.equal(JSON.parse(existing.drawingJson).text, 'Note personnelle');
 });
 
-test('the work description replaces old drawing text and is not appended twice', async () => {
+test('a note present only in drawing JSON is not overwritten', async () => {
   const existing = { id: 'old-page', scopeType: 'dossier_detail',
     scopeId: `airtable:${recordId}`, tabKey: 'notes_rapides', subTabKey: '',
     pageNumber: 0, textContent: '',
     drawingJson: JSON.stringify({ version: 1, text: 'Note inscription\nNote dossier', strokes: [] }),
     revision: 'old-revision' };
   const { saved } = await importRows({ pages: [existing] });
-  assert.equal(saved.length, 2);
-  assert.equal(saved[1].textContent, 'Description exacte des travaux');
+  assert.equal(saved.length, 0);
+  assert.equal(JSON.parse(existing.drawingJson).text, 'Note inscription\nNote dossier');
+});
+
+test('fills an empty text note while preserving its drawing and revision', async () => {
+  const existing = { id: 'empty-page', scopeType: 'dossier_detail',
+    scopeId: `airtable:${recordId}`, tabKey: 'notes_rapides', subTabKey: '',
+    pageNumber: 0, textContent: '  ',
+    drawingJson: JSON.stringify({ version: 1, text: '', strokes: [{ x: 1 }] }),
+    previewDataUrl: 'data:image/png;base64,x', revision: 'old-revision' };
+  const { saved } = await importRows({ pages: [existing] });
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].notePageId, 'empty-page');
+  assert.equal(saved[0].expectedRevision, 'old-revision');
+  assert.equal(saved[0].textContent, 'Description exacte des travaux');
+  assert.deepEqual(JSON.parse(saved[0].drawingJson).strokes, [{ x: 1 }]);
 });

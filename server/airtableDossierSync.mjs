@@ -4,9 +4,7 @@ import { isCurrentAdaptationDossier, projectAirtableDossier } from './airtableAd
 const value = (record, key) => record?.fields?.[key] ?? record?.[key];
 const normalized = (input) => String(input ?? '').trim().replace(/\s+/g, ' ');
 const same = (left, right) => normalized(left) === normalized(right);
-const prefillOnly = new Set([
-  'date_naissance_monsieur', 'categorie_revenu_id1', 'statut_occupation_id1',
-]);
+const isEmpty = (input) => input == null || (typeof input === 'string' && !input.trim());
 const validYear = (raw) => /^(18|19|20)\d{2}$/.test(String(raw ?? '').trim())
   ? String(raw).trim() : '';
 const labelId = (rows, label) => rows.find((row) =>
@@ -82,22 +80,20 @@ export async function syncCurrentProfileDossiers({
       continue;
     }
     const beneficiaryPatch = Object.fromEntries(Object.entries(source.beneficiary)
-      .filter(([key, desired]) => !same(value(beneficiary, key), desired)
-        && (!prefillOnly.has(key) || !normalized(value(beneficiary, key)))));
+      .filter(([key]) => isEmpty(value(beneficiary, key))));
     if (enhancedWeb && same(source.housing.ownerType, 'Propriétaire occupant')) {
       const ownerId = labelId(occupationTypes, 'Propriétaire');
-      if (ownerId && !value(beneficiary, 'statut_occupation_id1')) {
+      if (ownerId && isEmpty(value(beneficiary, 'statut_occupation_id1'))) {
         beneficiaryPatch.statut_occupation_id1 = Number(ownerId);
       }
     }
     const dossierPatch = Object.fromEntries(Object.entries(source.dossier)
-      .filter(([key, desired]) => !same(value(existingDossier, key), desired)));
+      .filter(([key]) => isEmpty(value(existingDossier, key))));
     const housing = housingByBeneficiary.get(String(value(existingDossier, 'beneficiaires_id')));
     const housingPatch = enhancedWeb ? Object.fromEntries(
       Object.entries(housingPrefill(source, housingTypes)).filter(([key]) =>
-        !normalized(value(housing, key)))) : {};
-    if (source.hasAirtableReport && ['À visiter', 'Visité'].includes(
-      normalized(value(existingDossier, 'status')))) {
+        isEmpty(value(housing, key)))) : {};
+    if (source.hasAirtableReport && isEmpty(value(existingDossier, 'status'))) {
       dossierPatch.status = 'En cours';
     }
     if (Object.keys(beneficiaryPatch).length || Object.keys(dossierPatch).length

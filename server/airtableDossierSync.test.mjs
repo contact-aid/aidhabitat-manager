@@ -55,7 +55,7 @@ test('another profile imports its own records and cannot overwrite another assig
   assert.deepEqual(result.skipped, [{ id: 'recBBBBBBBBBBBBBB', reason: 'attribution différente' }]);
 });
 
-test('an existing exact Airtable ID updates source fields without touching visit notes', async () => {
+test('an existing dossier keeps every populated field when Airtable differs', async () => {
   const patches = [];
   const result = await syncCurrentCoralieDossiers({
     sourceRows: [source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z')],
@@ -69,15 +69,12 @@ test('an existing exact Airtable ID updates source fields without touching visit
     updateDossier: async (_, patch) => patches.push({ table: 'dossier', patch }),
   });
   assert.equal(result.created, 0);
-  assert.equal(result.updated, 1);
+  assert.equal(result.updated, 0);
   assert.equal(result.remaining, 0);
-  assert.deepEqual(patches, [
-    { table: 'beneficiary', patch: { prenom: 'Camille' } },
-    { table: 'dossier', patch: { visit_date: '2026-09-29T08:00:00.000Z' } },
-  ]);
+  assert.deepEqual(patches, []);
 });
 
-test('an Airtable PDF promotes the dossier while visit fields already entered are preserved', async () => {
+test('Airtable fills only empty beneficiary fields and preserves the dossier status', async () => {
   const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
   input.dossier.fields['Audit ou Eval'] = [{ type: 'application/pdf', filename: 'rapport.pdf' }];
   input.dossier.fields['Commune texte'] = 'Ville lisible';
@@ -100,11 +97,27 @@ test('an Airtable PDF promotes the dossier while visit fields already entered ar
   });
   assert.deepEqual(patches, [
     { table: 'beneficiary', patch: {
-      ville_libre: 'Ville lisible', nombre_personnes: 1,
+      nombre_personnes: 1,
       categorie_revenu_id1: 42,
     } },
-    { table: 'dossier', patch: { status: 'En cours' } },
   ]);
+});
+
+test('an empty visit date and status can be prefilled without changing other fields', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  input.dossier.fields['Audit ou Eval'] = [{ type: 'application/pdf', filename: 'rapport.pdf' }];
+  const patches = [];
+  await syncCurrentCoralieDossiers({
+    sourceRows: [input],
+    dossierRows: [{ id: 10, fields: { uuid_source: 'airtable:recAAAAAAAAAAAAAA',
+      beneficiaires_id: 11, ergo_id: 'Coralie', visit_date: ' ', status: '' } }],
+    beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple' } }],
+    updateBeneficiary: async () => assert.fail('unexpected beneficiary update'),
+    updateDossier: async (_, patch) => patches.push(patch),
+  });
+  assert.deepEqual(patches, [{
+    visit_date: '2026-09-29T08:00:00.000Z', status: 'En cours',
+  }]);
 });
 
 test('the earlier iPad request keeps its original import behavior', async () => {

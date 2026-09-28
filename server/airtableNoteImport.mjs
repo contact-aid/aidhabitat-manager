@@ -10,14 +10,8 @@ export const importedNoteId = (airtableRecordId) => {
     .update(`aidhabitat:airtable-note:${airtableRecordId}`).digest('hex');
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 };
-export const archivedNoteId = (airtableRecordId) => {
-  const hash = crypto.createHash('sha256')
-    .update(`aidhabitat:airtable-note-before-description:${airtableRecordId}`).digest('hex');
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-};
-
 // The current dossier note and the beneficiary visit note share one canonical
-// page. Keep a read-only copy of its previous content before replacing it.
+// page. Airtable only fills an empty note; later user edits take precedence.
 export async function importCurrentProfileNotes({
   ergoLabel,
   sourceRows, dossierRows, beneficiaryRows, listNotePages, upsertNotePage,
@@ -65,14 +59,10 @@ export async function importCurrentProfileNotes({
     }
     const previousText = plain(drawing.text) || plain(firstPage?.textContent);
     const desiredText = plain(source.workDescription);
-    if (previousText === desiredText && plain(firstPage?.textContent) === desiredText) {
+    if (previousText) {
       alreadyPresent += 1;
       continue;
     }
-    const archive = allPages.find((page) => page.scopeType === 'dossier_detail'
-      && page.scopeId === dossierId && page.tabKey === 'notes_rapides_avant_description'
-      && Number(page.pageNumber) === 0);
-    const needsArchive = Boolean(firstPage && previousText && previousText !== desiredText && !archive);
     const firstName = plain(value(beneficiary, 'prenom'));
     const lastName = plain(value(beneficiary, 'nom'));
     operations.push({ noteId: firstPage?.id ?? importedNoteId(source.airtableRecordId),
@@ -82,27 +72,10 @@ export async function importCurrentProfileNotes({
       previewDataUrl: firstPage?.previewDataUrl ?? '',
       layoutKind: firstPage?.layoutKind ?? 'freeform',
       expectedRevision: firstPage?.revision ?? null,
-      firstName, lastName,
-      archive: needsArchive ? {
-        noteId: archivedNoteId(source.airtableRecordId),
-        textContent: plain(firstPage.textContent) || previousText,
-        drawingJson: firstPage.drawingJson || JSON.stringify(drawing),
-      } : null });
+      firstName, lastName });
   }
 
   for (const item of operations.slice(0, maxChanges)) {
-    if (item.archive) {
-      await upsertNotePage({
-        notePageId: item.archive.noteId,
-        patientId: item.patientId, dossierId: item.dossierId,
-        scopeType: 'dossier_detail', scopeId: item.dossierId,
-        tabKey: 'notes_rapides_avant_description', subTabKey: '',
-        pageNumber: 0, textContent: item.archive.textContent,
-        drawingJson: item.archive.drawingJson, layoutKind: item.layoutKind,
-        patientFirstName: item.firstName, patientLastName: item.lastName,
-        expectedRevision: null, writeId: crypto.randomUUID(),
-      });
-    }
     await upsertNotePage({
       notePageId: item.noteId,
       patientId: item.patientId,
