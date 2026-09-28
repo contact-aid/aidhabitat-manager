@@ -1142,6 +1142,66 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                               tabKey == 'notes_rapides')
                       ? 'Bénéficiaire'
                       : (pdfPlaceholder ?? section);
+                  if (_useDossierDescriptionNote &&
+                      activeTab == 'Bénéficiaire') {
+                    // Web shares the written description with the dossier.
+                    // iPad build 57 still stores the drawing in the original
+                    // Bénéficiaire-Notes page. Read and save each separately.
+                    return _NotesPanelLayer(
+                      isActive: isActive,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          NotesPanelTitleBanner(
+                            title: bannerTitle,
+                            attachedToBelow: true,
+                          ),
+                          SizedBox(
+                            height: 156,
+                            child: NotesWidget(
+                              key: ValueKey('$liveKey:text'),
+                              patientId: _dossier.patient.id,
+                              tabKey: 'notes_rapides',
+                              dossierId: _dossier.id,
+                              scopeType: 'dossier_detail',
+                              scopeId: _dossier.id,
+                              title: section,
+                              placeholder: '',
+                              liveText: _liveText[liveKey],
+                              externalRefreshToken: _notesBulkPullToken,
+                              onDraftChange: (draft) => _pushDraftToOpenWindow(
+                                'notes_rapides',
+                                draft.text,
+                              ),
+                              onExpandToTab: () =>
+                                  _openNoteInSeparateWindow('notes_rapides'),
+                              showCanvas: false,
+                              showSaveButton: false,
+                              fillParentHeight: true,
+                              allowPagination: false,
+                              attachedToTitleBanner: true,
+                            ),
+                          ),
+                          Expanded(
+                            child: NotesWidget(
+                              key: ValueKey('$liveKey:drawing'),
+                              patientId: _dossier.patient.id,
+                              tabKey: _kSharedBeneficiaireNotesTabKey,
+                              title: section,
+                              placeholder: '',
+                              externalRefreshToken: _notesBulkPullToken,
+                              showText: false,
+                              showSaveButton: false,
+                              fillParentHeight: true,
+                              allowPagination: true,
+                              stackedCards: true,
+                              allowTextModal: false,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
                   return _NotesPanelLayer(
                     isActive: isActive,
                     child: Column(
