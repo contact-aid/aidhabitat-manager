@@ -14,6 +14,7 @@ class _Repository extends Fake implements DossierRepository {
 
   final List<VisitRecommendationItem>? items;
   int saveCalls = 0;
+  List<String> savedOrder = [];
 
   @override
   Future<List<VisitRecommendationItem>> fetchVisitRecommendations(
@@ -35,6 +36,7 @@ class _Repository extends Fake implements DossierRepository {
     bool forceSync = false,
   }) async {
     saveCalls += 1;
+    savedOrder = items.map((item) => item.id).toList();
   }
 }
 
@@ -120,4 +122,45 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('desktop mouse drag reorders across the full target card', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _Repository(
+      items: const [
+        VisitRecommendationItem(id: 'one', wikiTitle: 'First item'),
+        VisitRecommendationItem(id: 'two', wikiTitle: 'Second item'),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RecommendationsTab(
+            dossier: _Dossier(),
+            repository: repository,
+            immediateReorder: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final handles = find.byType(Draggable<String>);
+    expect(handles, findsNWidgets(2));
+    final first = tester.getCenter(handles.at(0));
+    final target = find.ancestor(
+      of: handles.at(1),
+      matching: find.byType(DragTarget<String>),
+    );
+    final second = tester.getRect(target).bottomRight - const Offset(20, 20);
+    final gesture = await tester.startGesture(first);
+    await gesture.moveTo(second);
+    await tester.pump(const Duration(milliseconds: 50));
+    await gesture.moveBy(const Offset(2, 2));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(repository.savedOrder, ['two', 'one']);
+  });
 }
