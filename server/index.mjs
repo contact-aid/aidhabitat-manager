@@ -415,7 +415,7 @@ const FIELD_SETS = {
     'nature_accompagnement', 'envoi_rapport', 'personnes_presentes_visite', 'beneficiaire_prepare', 'created_at', 'CreatedAt', 'UpdatedAt',
   ],
   logements: [
-    'uuid_source', 'beneficiaire_id', 'beneficiaires_id', 'type_de_logement', 'annee_construction', 'annee_habitation',
+    'uuid_source', 'beneficiaire_id', 'beneficiaires_id', 'type_de_logement', 'type_de_logement_id', 'annee_construction', 'annee_habitation',
     'surface_habitable', 'nombre_niveaux', 'sous_sol', 'description_sous_sol', 'rdc', 'description_rdc',
     'etage', 'second_etage', 'third_etage', 'description_etage', 'garage', 'veranda', 'balcon', 'terrasse', 'jardin', 'chauffage',
     'radiateurs_electrique', 'chaudiere_gaz', 'chaudiere_fioul', 'pompe_a_chaleur', 'chaudiere_collective',
@@ -5748,11 +5748,14 @@ app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, ne
     }
     const result = await serializeCoralieAirtableSync('Coralie', async () => {
       const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
-      const [sourceRows, dossierRows, beneficiaryRows, baremeRows] = await Promise.all([
+      const [sourceRows, dossierRows, beneficiaryRows, baremeRows, housingRows, housingTypes, occupationTypes] = await Promise.all([
         read('Coralie'),
         queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
         queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
         queryAll(TABLES.baremesAnah, { fields: FIELD_SETS.baremesAnah }),
+        queryAll(TABLES.logements, { fields: FIELD_SETS.logements }),
+        queryAll(TABLES.typeDeLogement, { fields: FIELD_SETS.referencesLibelle }),
+        queryAll(TABLES.statutOccupation, { fields: FIELD_SETS.referencesLibelle }),
       ]);
       const updateFromAirtable = async (tableId, row, fields) => {
         if (!conditionalWriter) {
@@ -5769,12 +5772,15 @@ app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, ne
         }
       };
       return syncCurrentCoralieDossiers({
-        sourceRows, dossierRows, beneficiaryRows, baremeRows,
+        sourceRows, dossierRows, beneficiaryRows, baremeRows, housingRows,
+        housingTypes, occupationTypes,
         enhancedWeb: req.body?.enhancedWeb === true,
         createBeneficiary: (fields) => createRecord(TABLES.beneficiaires, fields),
         createDossier: (fields) => createRecord(TABLES.dossiers, fields),
         updateBeneficiary: (row, fields) => updateFromAirtable(TABLES.beneficiaires, row, fields),
         updateDossier: (row, fields) => updateFromAirtable(TABLES.dossiers, row, fields),
+        createHousing: (fields) => createRecord(TABLES.logements, fields),
+        updateHousing: (row, fields) => updateFromAirtable(TABLES.logements, row, fields),
       });
     });
     res.json({ success: true, error: null, data: result });

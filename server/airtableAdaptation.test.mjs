@@ -93,7 +93,12 @@ test('projection only contains authorized dossier identity and scheduling fields
       'Catégorie sans emoji': 'Très modeste',
       'M./Mme': 'Madame', 'Date de naissance': '1950-01-01',
       'N° et rue': '1 rue fictive',
-      'Inscription commentaires': 'Note d’inscription fictive' }),
+      'Inscription commentaires': 'Note d’inscription fictive',
+      'Description des travaux': 'Travaux envisagés fictifs',
+      'Inscription Maison ou appart ?': 'Maison',
+      "Inscription Année d'achat": '2004',
+      'Inscription Anné de construction': '1978',
+      'Inscription PO ou PB': 'Propriétaire occupant' }),
   });
   assert.deepEqual(result.beneficiary, {
     prenom: 'Camille', nom: 'Exemple', adresse_logement: '1 rue fictive',
@@ -105,6 +110,11 @@ test('projection only contains authorized dossier identity and scheduling fields
   });
   assert.equal(result.quickNote, 'Note fictive');
   assert.equal(result.intakeNote, 'Note d’inscription fictive');
+  assert.equal(result.workDescription, 'Travaux envisagés fictifs');
+  assert.deepEqual(result.housing, {
+    typology: 'Maison', purchaseYear: '2004',
+    yearConstruction: '1978', ownerType: 'Propriétaire occupant',
+  });
   assert.equal(result.airtableRecordId, id('a'));
   assert.equal(result.airtableClientRecordId, id('x'));
   assert.equal(result.airtableDossierLabel, 'FICTIF-2026');

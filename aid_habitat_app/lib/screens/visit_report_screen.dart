@@ -246,6 +246,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// que `Accessibilité-Notes` : une seule note écrite + dessin, conservée
   /// quand l'ergo change de sous-section.
   static const String _kSharedBeneficiaireNotesTabKey = 'Bénéficiaire-Notes';
+  bool get _useDossierDescriptionNote =>
+      kIsWeb &&
+      _dossier.ergoId.trim().toLowerCase() == 'coralie' &&
+      _dossier.id.startsWith('airtable:');
 
   /// TabKey unique pour la note partagée entre les 4 sous-sections de
   /// l'onglet « Accessibilité » (Général, Niveaux, Équipements,
@@ -275,12 +279,14 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   ///     [_kSharedAccessibiliteNotesTabKey] (réintroduit 2026-05-15
   ///     sur demande user : note unique partagée entre Général /
   ///     Niveaux / Équipements / Extérieur).
-  static String _resolveNotesTabKey(String activeTab, String section) {
+  String _resolveNotesTabKey(String activeTab, String section) {
     if (activeTab == 'Salle de bain' || activeTab == 'WC') {
       return _kSharedSanitairesNotesTabKey;
     }
     if (activeTab == 'Bénéficiaire') {
-      return _kSharedBeneficiaireNotesTabKey;
+      return _useDossierDescriptionNote
+          ? 'notes_rapides'
+          : _kSharedBeneficiaireNotesTabKey;
     }
     if (activeTab == 'Accessibilité') {
       return _kSharedAccessibiliteNotesTabKey;
@@ -547,6 +553,15 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       tabKey: tabKey,
       pageNumber: 0,
       drawingJson: merged,
+      dossierId: tabKey == 'notes_rapides' && _useDossierDescriptionNote
+          ? _dossier.id
+          : null,
+      scopeType: tabKey == 'notes_rapides' && _useDossierDescriptionNote
+          ? 'dossier_detail'
+          : null,
+      scopeId: tabKey == 'notes_rapides' && _useDossierDescriptionNote
+          ? _dossier.id
+          : null,
       mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
@@ -868,6 +883,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// Text is persisted to the shared SQLite file so both windows stay in
   /// sync via the 1-second polling in [NoteWindowScreen].
   Future<void> _openNoteInSeparateWindow(String sourceTab) async {
+    if (sourceTab == 'notes_rapides' && _useDossierDescriptionNote) {
+      await _openNoteModalFallback(sourceTab);
+      return;
+    }
     final patientId = _dossier.patient.id;
     final existingJson = await _dataService.fetchNoteDrawingJson(
       patientId: patientId,
@@ -1121,7 +1140,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   // NotesWidget reçoit donc `placeholder: ''` (pas de hint).
                   final bannerTitle =
                       activeTab == 'Bénéficiaire' &&
-                          tabKey == _kSharedBeneficiaireNotesTabKey
+                          (tabKey == _kSharedBeneficiaireNotesTabKey ||
+                              tabKey == 'notes_rapides')
                       ? 'Bénéficiaire'
                       : (pdfPlaceholder ?? section);
                   return _NotesPanelLayer(
@@ -1138,6 +1158,21 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                             key: ValueKey(liveKey),
                             patientId: _dossier.patient.id,
                             tabKey: tabKey,
+                            dossierId:
+                                tabKey == 'notes_rapides' &&
+                                    _useDossierDescriptionNote
+                                ? _dossier.id
+                                : null,
+                            scopeType:
+                                tabKey == 'notes_rapides' &&
+                                    _useDossierDescriptionNote
+                                ? 'dossier_detail'
+                                : null,
+                            scopeId:
+                                tabKey == 'notes_rapides' &&
+                                    _useDossierDescriptionNote
+                                ? _dossier.id
+                                : null,
                             title: section,
                             placeholder: '',
                             liveText: _liveText[liveKey],

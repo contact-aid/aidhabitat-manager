@@ -5,8 +5,22 @@ const value = (record, key) => record?.fields?.[key] ?? record?.[key];
 const normalized = (input) => String(input ?? '').trim().replace(/\s+/g, ' ');
 const same = (left, right) => normalized(left) === normalized(right);
 const prefillOnly = new Set([
-  'date_naissance_monsieur', 'categorie_revenu_id1',
+  'date_naissance_monsieur', 'categorie_revenu_id1', 'statut_occupation_id1',
 ]);
+const validYear = (raw) => /^(18|19|20)\d{2}$/.test(String(raw ?? '').trim())
+  ? String(raw).trim() : '';
+const labelId = (rows, label) => rows.find((row) =>
+  same(value(row, 'libelle'), label))?.id;
+const housingPrefill = (source, housingTypes) => {
+  const patch = {};
+  const type = labelId(housingTypes, source.housing.typology);
+  if (type) patch.type_de_logement_id = Number(type);
+  const construction = validYear(source.housing.yearConstruction);
+  if (construction) patch.annee_construction = construction;
+  const purchase = validYear(source.housing.purchaseYear);
+  if (purchase) patch.annee_habitation = purchase;
+  return patch;
+};
 
 const baremeFor = (records, householdSize) => {
   const size = Number(householdSize);
@@ -25,8 +39,10 @@ const baremeFor = (records, householdSize) => {
 // This first rollout is deliberately limited to the 22 non-cancelled Coralie
 // appointments dated 1 August 2026 or later. Airtable remains read only.
 export async function syncCurrentCoralieDossiers({
-  sourceRows, dossierRows, beneficiaryRows, baremeRows = [], createBeneficiary, createDossier,
-  updateBeneficiary, updateDossier, maxChanges = 5, enhancedWeb = true,
+  sourceRows, dossierRows, beneficiaryRows, housingRows = [], housingTypes = [],
+  occupationTypes = [], baremeRows = [], createBeneficiary, createDossier,
+  updateBeneficiary, updateDossier, createHousing, updateHousing,
+  maxChanges = 5, enhancedWeb = true,
 }) {
   const eligible = sourceRows.filter(isCurrentCoralieDossier)
     .map((row) => projectAirtableDossier(row, { enhancedWeb }));
@@ -38,6 +54,8 @@ export async function syncCurrentCoralieDossiers({
   }
   const dossiersByUuid = new Map(dossierRows.map((row) => [normalized(value(row, 'uuid_source')), row]));
   const beneficiariesById = new Map(beneficiaryRows.map((row) => [String(row.id), row]));
+  const housingByBeneficiary = new Map(housingRows.map((row) =>
+    [String(value(row, 'beneficiaires_id')), row]));
   const operations = [];
   const skipped = [];
 
@@ -64,15 +82,26 @@ export async function syncCurrentCoralieDossiers({
     const beneficiaryPatch = Object.fromEntries(Object.entries(source.beneficiary)
       .filter(([key, desired]) => !same(value(beneficiary, key), desired)
         && (!prefillOnly.has(key) || !normalized(value(beneficiary, key)))));
+    if (enhancedWeb && same(source.housing.ownerType, 'Propriétaire occupant')) {
+      const ownerId = labelId(occupationTypes, 'Propriétaire');
+      if (ownerId && !value(beneficiary, 'statut_occupation_id1')) {
+        beneficiaryPatch.statut_occupation_id1 = Number(ownerId);
+      }
+    }
     const dossierPatch = Object.fromEntries(Object.entries(source.dossier)
       .filter(([key, desired]) => !same(value(existingDossier, key), desired)));
+    const housing = housingByBeneficiary.get(String(value(existingDossier, 'beneficiaires_id')));
+    const housingPatch = enhancedWeb ? Object.fromEntries(
+      Object.entries(housingPrefill(source, housingTypes)).filter(([key]) =>
+        !normalized(value(housing, key)))) : {};
     if (source.hasAirtableReport && ['À visiter', 'Visité'].includes(
       normalized(value(existingDossier, 'status')))) {
       dossierPatch.status = 'En cours';
     }
-    if (Object.keys(beneficiaryPatch).length || Object.keys(dossierPatch).length) {
+    if (Object.keys(beneficiaryPatch).length || Object.keys(dossierPatch).length
+      || Object.keys(housingPatch).length) {
       operations.push({ kind: 'update', source, existingDossier, beneficiary,
-        beneficiaryPatch, dossierPatch });
+        beneficiaryPatch, dossierPatch, housing, housingPatch });
     }
   }
 
@@ -82,6 +111,10 @@ export async function syncCurrentCoralieDossiers({
     if (operation.kind === 'create') {
       const beneficiary = await createBeneficiary({
         ...operation.source.beneficiary,
+        ...(enhancedWeb && same(operation.source.housing.ownerType, 'Propriétaire occupant')
+          && labelId(occupationTypes, 'Propriétaire')
+          ? { statut_occupation_id1: Number(labelId(occupationTypes, 'Propriétaire')) }
+          : {}),
         app_sync_revision: crypto.randomUUID(),
       });
       if (!beneficiary?.id) throw new Error('Création du bénéficiaire non confirmée');
@@ -96,6 +129,16 @@ export async function syncCurrentCoralieDossiers({
         app_sync_revision: crypto.randomUUID(),
       });
       if (!dossier?.id) throw new Error('Création du dossier non confirmée');
+      const housingFields = enhancedWeb ? housingPrefill(operation.source, housingTypes) : {};
+      if (Object.keys(housingFields).length && createHousing) {
+        await createHousing({
+          uuid_source: crypto.randomUUID(),
+          beneficiaire_id: `nocodb-beneficiaire-${beneficiary.id}`,
+          beneficiaires_id: Number(beneficiary.id),
+          ...housingFields,
+          app_sync_revision: crypto.randomUUID(),
+        });
+      }
       created += 1;
     } else {
       if (Object.keys(operation.beneficiaryPatch).length) {
@@ -103,6 +146,19 @@ export async function syncCurrentCoralieDossiers({
       }
       if (Object.keys(operation.dossierPatch).length) {
         await updateDossier(operation.existingDossier, operation.dossierPatch);
+      }
+      if (Object.keys(operation.housingPatch).length) {
+        if (operation.housing) {
+          await updateHousing(operation.housing, operation.housingPatch);
+        } else if (createHousing) {
+          await createHousing({
+            uuid_source: crypto.randomUUID(),
+            beneficiaire_id: `nocodb-beneficiaire-${operation.beneficiary.id}`,
+            beneficiaires_id: Number(operation.beneficiary.id),
+            ...operation.housingPatch,
+            app_sync_revision: crypto.randomUUID(),
+          });
+        }
       }
       updated += 1;
     }

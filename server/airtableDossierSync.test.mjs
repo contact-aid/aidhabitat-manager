@@ -111,3 +111,31 @@ test('the earlier iPad request keeps its original import behavior', async () => 
   assert.equal(created[0].categorie_revenu_id1, undefined);
   assert.equal(created[1].status, 'À visiter');
 });
+
+test('prefills housing and ownership from new-client Airtable fields without replacing visit edits', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  Object.assign(input.client.fields, {
+    'Inscription Maison ou appart ?': 'Maison',
+    "Inscription Année d'achat": '1988',
+    'Inscription Anné de construction': '1975',
+    'Inscription PO ou PB': 'Propriétaire occupant',
+  });
+  const patches = [];
+  const result = await syncCurrentCoralieDossiers({
+    sourceRows: [input],
+    dossierRows: [{ id: 10, fields: { uuid_source: 'airtable:recAAAAAAAAAAAAAA',
+      beneficiaires_id: 11, ergo_id: 'Coralie', visit_date: '2026-09-29T08:00:00.000Z' } }],
+    beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple' } }],
+    housingRows: [{ id: 21, fields: { beneficiaires_id: 11, annee_construction: '1981' } }],
+    housingTypes: [{ id: 1, fields: { libelle: 'Maison' } }],
+    occupationTypes: [{ id: 1, fields: { libelle: 'Propriétaire' } }],
+    updateBeneficiary: async (_, patch) => patches.push({ table: 'beneficiary', patch }),
+    updateDossier: async () => assert.fail('unexpected dossier update'),
+    updateHousing: async (_, patch) => patches.push({ table: 'housing', patch }),
+  });
+  assert.equal(result.updated, 1);
+  assert.deepEqual(patches, [
+    { table: 'beneficiary', patch: { statut_occupation_id1: 1 } },
+    { table: 'housing', patch: { type_de_logement_id: 1, annee_habitation: '1988' } },
+  ]);
+});
