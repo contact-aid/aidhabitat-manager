@@ -67,7 +67,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
     type_de_logement_id: null, type_de_logement: null,
     app_sync_revision: revision, CreatedAt: timestamp, UpdatedAt: timestamp }];
   const schemas = {
-    [tables.dossier]: columns({ compte_anah: 'SingleLineText', nature_accompagnement: 'SingleLineText',
+    [tables.dossier]: columns({ ergo_id: 'SingleLineText', compte_anah: 'SingleLineText', nature_accompagnement: 'SingleLineText',
       beneficiaire_prepare: 'Checkbox', visit_date: 'Date', status: 'SingleLineText' }),
     [tables.beneficiaire]: columns({ prenom: 'SingleLineText', nom: 'SingleLineText',
       nombre_personnes: 'Number',

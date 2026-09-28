@@ -32,6 +32,7 @@ const mock = createRestMock({ referenceRows: {
 const nativeFetch = globalThis.fetch;
 let apiOrigin;
 const airtableCalls = [];
+let reassignFixture = false;
 globalThis.fetch = (input, init = {}) => {
   const url = new URL(input instanceof Request ? input.url : input);
   if (apiOrigin && url.origin === apiOrigin) {
@@ -45,7 +46,12 @@ globalThis.fetch = (input, init = {}) => {
       return Promise.resolve(Response.json({ records: [
         { id: 'recAAAAAAAAAAAAAA', fields: {
           'Dossier ID': 'FICTIF-1', 'Adaptation ou énergie': ['Adaptation'],
-          'Intervenant couleur': ['Test'], 'Nom intervenant': ['Test Owner'],
+          'Intervenant couleur': ['Test'],
+          'Nom intervenant': [reassignFixture ? 'Test Other' : 'Test Owner'],
+          ...(reassignFixture ? {
+            'Date du RDV avec heure': '2026-09-29T08:00:00.000Z',
+            'Annulé ?': 'NON',
+          } : {}),
           'No Client': ['recCCCCCCCCCCCCCC'], Commentaires: 'Note fictive',
         } },
         { id: 'recBBBBBBBBBBBBBB', fields: {
@@ -203,6 +209,25 @@ try {
       assert.equal(mock.row('dossier').visit_date, '2026-09-29T08:00:00.000Z');
       assert.equal(mock.row('dossier').compte_anah, 'saisie conservée');
       assert.equal(mock.row('beneficiaire').prenom, 'Synthetic');
+    });
+    await check('refresh follows an Airtable reassignment without replacing visit data', async () => {
+      reassignFixture = true;
+      try {
+        mock.row('dossier').uuid_source = 'airtable:recAAAAAAAAAAAAAA';
+        mock.row('dossier').ergo_id = 'Test Owner';
+        mock.row('dossier').compte_anah = 'saisie conservée';
+        const result = expectStatus(await request('/api/airtable/sync-current-dossiers', {
+          token: otherErgo, method: 'POST',
+        }), 200);
+        assert.equal(result.data.created, 0);
+        assert.equal(result.data.updated, 1);
+        assert.equal(mock.row('dossier').ergo_id, 'Test Other');
+        assert.equal(mock.row('dossier').compte_anah, 'saisie conservée');
+        const destination = expectStatus(await request('/api/dossiers', { token: otherErgo }), 200);
+        assert(destination.some((item) => item.id === 'airtable:recAAAAAAAAAAAAAA'));
+      } finally {
+        reassignFixture = false;
+      }
     });
   }
 

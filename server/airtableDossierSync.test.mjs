@@ -36,23 +36,51 @@ test('only the agreed recent, non-cancelled cohort is imported in bounded batche
   assert.equal(created[1].fields.ergo_id, 'Coralie');
 });
 
-test('another profile imports its own records and cannot overwrite another assignment', async () => {
+test('an Airtable reassignment moves the existing dossier without replacing its visit data', async () => {
   const christelle = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
   christelle.dossier.fields['Intervenant couleur'] = ['Christelle'];
   const conflicting = source('recBBBBBBBBBBBBBB', '2026-09-29T08:00:00.000Z');
   conflicting.dossier.fields['Intervenant couleur'] = ['Christelle'];
   const created = [];
+  const patches = [];
   const result = await syncCurrentProfileDossiers({
     ergoLabel: 'Christelle', sourceRows: [christelle, conflicting],
     dossierRows: [{ id: 9, fields: { uuid_source: 'airtable:recBBBBBBBBBBBBBB',
-      ergo_id: 'Coralie', beneficiaires_id: 8 } }],
-    beneficiaryRows: [],
+      ergo_id: 'Coralie', beneficiaires_id: 8,
+      visit_date: '2026-09-29T08:00:00.000Z', status: 'En cours',
+      compte_anah: 'déjà saisi' } }],
+    beneficiaryRows: [{ id: 8, fields: { prenom: 'Camille', nom: 'Exemple' } }],
     createBeneficiary: async (fields) => { created.push(fields); return { id: 1 }; },
     createDossier: async (fields) => { created.push(fields); return { id: 2 }; },
+    updateBeneficiary: async () => assert.fail('unexpected beneficiary update'),
+    updateDossier: async (_, patch) => patches.push(patch),
   });
   assert.equal(result.created, 1);
+  assert.equal(result.updated, 1);
   assert.equal(created[1].ergo_id, 'Christelle');
-  assert.deepEqual(result.skipped, [{ id: 'recBBBBBBBBBBBBBB', reason: 'attribution différente' }]);
+  assert.deepEqual(patches, [{ ergo_id: 'Christelle' }]);
+  assert.deepEqual(result.skipped, []);
+});
+
+test('an existing dossier can be reassigned even when the Airtable client is incomplete', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  input.dossier.fields['Intervenant couleur'] = ['Fabien'];
+  input.client.fields = {};
+  const patches = [];
+  const result = await syncCurrentProfileDossiers({
+    ergoLabel: 'Fabien CRIBIER', sourceRows: [input],
+    dossierRows: [{ id: 10, fields: {
+      uuid_source: 'airtable:recAAAAAAAAAAAAAA', beneficiaires_id: 11,
+      ergo_id: 'Christelle', visit_date: '2026-09-29T08:00:00.000Z',
+    } }],
+    beneficiaryRows: [{ id: 11, fields: { prenom: 'Déjà', nom: 'Saisi' } }],
+    createBeneficiary: async () => assert.fail('unexpected creation'),
+    createDossier: async () => assert.fail('unexpected creation'),
+    updateBeneficiary: async () => assert.fail('unexpected beneficiary update'),
+    updateDossier: async (_, patch) => patches.push(patch),
+  });
+  assert.equal(result.updated, 1);
+  assert.deepEqual(patches, [{ ergo_id: 'Fabien CRIBIER' }]);
 });
 
 test('an existing dossier keeps every populated field when Airtable differs', async () => {

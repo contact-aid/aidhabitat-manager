@@ -62,15 +62,11 @@ export async function syncCurrentProfileDossiers({
   for (const source of eligible) {
     const uuid = `airtable:${source.airtableRecordId}`;
     const existingDossier = dossiersByUuid.get(uuid);
-    if (existingDossier && !same(value(existingDossier, 'ergo_id'), ergoLabel)) {
-      skipped.push({ id: source.airtableRecordId, reason: 'attribution différente' });
-      continue;
-    }
-    if (!source.beneficiary.prenom || !source.beneficiary.nom || !source.airtableClientRecordId) {
-      skipped.push({ id: source.airtableRecordId, reason: 'fiche client incomplète' });
-      continue;
-    }
     if (!existingDossier) {
+      if (!source.beneficiary.prenom || !source.beneficiary.nom || !source.airtableClientRecordId) {
+        skipped.push({ id: source.airtableRecordId, reason: 'fiche client incomplète' });
+        continue;
+      }
       operations.push({ kind: 'create', source, uuid });
       continue;
     }
@@ -89,6 +85,11 @@ export async function syncCurrentProfileDossiers({
     }
     const dossierPatch = Object.fromEntries(Object.entries(source.dossier)
       .filter(([key]) => isEmpty(value(existingDossier, key))));
+    // Ownership follows the verified Airtable assignment; all other existing
+    // dossier fields remain fill-only, including notes and visit work.
+    if (!same(value(existingDossier, 'ergo_id'), ergoLabel)) {
+      dossierPatch.ergo_id = ergoLabel;
+    }
     const housing = housingByBeneficiary.get(String(value(existingDossier, 'beneficiaires_id')));
     const housingPatch = enhancedWeb ? Object.fromEntries(
       Object.entries(housingPrefill(source, housingTypes)).filter(([key]) =>
