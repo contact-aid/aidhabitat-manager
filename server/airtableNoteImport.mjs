@@ -12,13 +12,40 @@ export const importedNoteId = (airtableRecordId) => {
 };
 
 export function pendingAirtableNoteText(source, pages) {
-  const existing = pages.map((page) => plain(page.textContent));
+  const existing = pages.flatMap((page) => {
+    let displayed = '';
+    try { displayed = String(JSON.parse(page.drawingJson || '{}').text ?? ''); } catch {}
+    return [plain(page.textContent), plain(displayed)];
+  });
   const blocks = [
     ['Commentaire d’inscription (Airtable)', source.intakeNote],
     ['Commentaire du dossier (Airtable)', source.quickNote],
   ].filter(([, note]) => plain(note))
     .filter(([, note]) => !existing.some((text) => text.includes(plain(note))));
   return blocks.map(([heading, note]) => `${heading}\n${plain(note)}`).join('\n\n');
+}
+
+// The quick-note editor reads drawingJson.text, whereas older integrations
+// also read textContent. Keep both representations in sync without touching
+// strokes or other drawing metadata.
+export function mergeQuickNoteText(page, importedText) {
+  const rawDrawing = plain(page?.drawingJson);
+  let drawing = { version: 1, text: '', strokes: [] };
+  if (rawDrawing) {
+    try {
+      drawing = JSON.parse(rawDrawing);
+    } catch {
+      return null;
+    }
+    if (!drawing || typeof drawing !== 'object' || Array.isArray(drawing)) return null;
+  }
+  const displayed = String(drawing.text ?? '');
+  const stored = String(page?.textContent ?? '');
+  const base = displayed && stored && !stored.includes(displayed.trim())
+    ? `${displayed}\n\n${stored}` : (stored || displayed);
+  const text = [base, importedText].filter((item) => plain(item)).join('\n\n');
+  return { textContent: text, drawingJson: JSON.stringify({ ...drawing, text }),
+    changed: !page || text !== stored || text !== displayed };
 }
 
 // Import only missing source text into a new quick-note page. Existing pages,
@@ -53,25 +80,34 @@ export async function importCurrentCoralieNotes({
     const pages = allPages.filter((page) => page.scopeType === 'dossier_detail'
       && page.scopeId === dossierId && page.tabKey === 'notes_rapides'
       && !plain(page.subTabKey));
-    const textContent = pendingAirtableNoteText(source, pages);
-    if (!textContent) {
-      alreadyPresent += 1;
-      continue;
-    }
+    const sourceText = pendingAirtableNoteText(source, pages);
     // The dossier's quick note shares its text across drawing pages. Put the
     // import in page 0, preserving its content and drawing, so it is visible
     // immediately and remains editable in the existing note UI.
     const firstPage = pages.find((page) => Number(page.pageNumber) === 0);
+    if (!firstPage && !sourceText) {
+      alreadyPresent += 1;
+      continue;
+    }
     if (firstPage && !plain(firstPage.revision)) {
       skipped.push({ id: source.airtableRecordId, reason: 'révision de note absente' });
+      continue;
+    }
+    const merged = mergeQuickNoteText(firstPage, sourceText);
+    if (!merged) {
+      skipped.push({ id: source.airtableRecordId, reason: 'dessin de note illisible' });
+      continue;
+    }
+    if (!merged.changed) {
+      alreadyPresent += 1;
       continue;
     }
     const firstName = plain(value(beneficiary, 'prenom'));
     const lastName = plain(value(beneficiary, 'nom'));
     operations.push({ noteId: firstPage?.id ?? importedNoteId(source.airtableRecordId),
       patientId, dossierId, pageNumber: 0,
-      textContent: [plain(firstPage?.textContent), textContent].filter(Boolean).join('\n\n'),
-      drawingJson: firstPage?.drawingJson ?? '',
+      textContent: merged.textContent,
+      drawingJson: merged.drawingJson,
       previewDataUrl: firstPage?.previewDataUrl ?? '',
       layoutKind: firstPage?.layoutKind ?? 'freeform',
       expectedRevision: firstPage?.revision ?? null,

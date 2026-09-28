@@ -25,7 +25,8 @@ const importRows = async ({ sourceRows = [source({ Commentaires: 'Note dossier' 
     upsertNotePage: async (payload) => { saved.push(payload); pages.push({
       id: payload.notePageId, scopeType: payload.scopeType, scopeId: payload.scopeId,
       tabKey: payload.tabKey, subTabKey: payload.subTabKey, pageNumber: payload.pageNumber,
-      textContent: payload.textContent, revision: payload.writeId,
+      textContent: payload.textContent, drawingJson: payload.drawingJson,
+      revision: payload.writeId,
     }); },
   });
   return { saved, result, pages };
@@ -54,7 +55,8 @@ test('appends missing source text while preserving an existing note and drawing'
   assert.equal(saved.length, 1);
   assert.equal(saved[0].notePageId, 'old-page');
   assert.equal(saved[0].expectedRevision, 'old-revision');
-  assert.equal(saved[0].drawingJson, existing.drawingJson);
+  assert.deepEqual(JSON.parse(saved[0].drawingJson).strokes, [1]);
+  assert.equal(JSON.parse(saved[0].drawingJson).text, saved[0].textContent);
   assert.equal(saved[0].previewDataUrl, existing.previewDataUrl);
   assert(saved[0].textContent.startsWith(existing.textContent));
   assert(!saved[0].textContent.includes('Commentaire d’inscription (Airtable)'));
@@ -75,4 +77,31 @@ test('does not create notes for cancelled or out-of-period dossiers', async () =
 test('a source excerpt already present in any page is not copied twice', () => {
   assert.equal(pendingAirtableNoteText({ intakeNote: 'déjà là', quickNote: 'autre' },
     [{ textContent: 'Texte\ndéjà là' }]), 'Commentaire du dossier (Airtable)\nautre');
+});
+
+test('repairs already imported text that was absent from the editor drawing JSON', async () => {
+  const existing = { id: 'old-page', scopeType: 'dossier_detail',
+    scopeId: `airtable:${recordId}`, tabKey: 'notes_rapides', subTabKey: '',
+    pageNumber: 0, textContent: 'Commentaire d’inscription (Airtable)\nNote inscription\n\nCommentaire du dossier (Airtable)\nNote dossier',
+    drawingJson: JSON.stringify({ version: 1, text: 'Note personnelle', strokes: [{ x: 1 }] }),
+    revision: 'old-revision' };
+  const { saved } = await importRows({ pages: [existing] });
+  assert.equal(saved.length, 1);
+  const drawing = JSON.parse(saved[0].drawingJson);
+  assert.deepEqual(drawing.strokes, [{ x: 1 }]);
+  assert(drawing.text.startsWith('Note personnelle'));
+  assert(drawing.text.includes('Commentaire d’inscription (Airtable)'));
+  assert.equal(saved[0].textContent, drawing.text);
+});
+
+test('source text already visible in a drawing is not appended twice', async () => {
+  const existing = { id: 'old-page', scopeType: 'dossier_detail',
+    scopeId: `airtable:${recordId}`, tabKey: 'notes_rapides', subTabKey: '',
+    pageNumber: 0, textContent: '',
+    drawingJson: JSON.stringify({ version: 1, text: 'Note inscription\nNote dossier', strokes: [] }),
+    revision: 'old-revision' };
+  const { saved } = await importRows({ pages: [existing] });
+  assert.equal(saved.length, 1);
+  assert(!saved[0].textContent.includes('(Airtable)'));
+  assert.equal(saved[0].textContent, 'Note inscription\nNote dossier');
 });
