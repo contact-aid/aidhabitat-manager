@@ -352,18 +352,28 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
     setState(() => _isRefreshingDossiersManually = true);
     try {
+      final skippedItems = <String>{};
+      void collectSkipped(Map<String, dynamic> result) {
+        for (final item in (result['skipped'] as List?) ?? const []) {
+          if (item is Map) {
+            skippedItems.add(
+              '${item['profile']}:${item['id']}:${item['reason']}',
+            );
+          }
+        }
+      }
+
       final sessionReady = await _authService.resumePendingRemoteSession();
       if (!sessionReady) throw StateError('Session distante indisponible');
       if (!mounted || _isOffline || ConnectivityService().isOffline) return;
-      if (widget.currentUser.ergoLabel?.trim().toLowerCase() == 'coralie') {
+      if (kIsWeb &&
+          (widget.currentUser.role == LocalUserRole.admin ||
+              widget.currentUser.role == LocalUserRole.ergo ||
+              widget.currentUser.role == LocalUserRole.technician)) {
         var remaining = 1;
-        for (var batch = 0; batch < 10 && remaining > 0; batch++) {
+        for (var batch = 0; batch < 100 && remaining > 0; batch++) {
           final result = await _dataService.syncCurrentCoralieDossiers();
-          if ((result['skipped'] as List?)?.isNotEmpty ?? false) {
-            throw StateError(
-              'Certains dossiers Airtable n’ont pas pu être importés',
-            );
-          }
+          collectSkipped(result);
           remaining = (result['remaining'] as num?)?.toInt() ?? 0;
         }
         if (remaining > 0) {
@@ -371,13 +381,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         }
         if (kIsWeb) {
           var notesRemaining = 1;
-          for (var batch = 0; batch < 10 && notesRemaining > 0; batch++) {
+          for (var batch = 0; batch < 100 && notesRemaining > 0; batch++) {
             final result = await _dataService.importCurrentCoralieNotes();
-            if ((result['skipped'] as List?)?.isNotEmpty ?? false) {
-              throw StateError(
-                'Certaines notes Airtable n’ont pas pu être importées',
-              );
-            }
+            collectSkipped(result);
             notesRemaining = (result['remaining'] as num?)?.toInt() ?? 0;
           }
           if (notesRemaining > 0) {
@@ -393,9 +399,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         throw StateError('Lecture locale des dossiers impossible');
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Dossiers actualisés.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            skippedItems.isEmpty
+                ? 'Dossiers actualisés.'
+                : 'Dossiers actualisés. ${skippedItems.length} élément(s) non importé(s).',
+          ),
+        ),
+      );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -439,7 +439,7 @@ class NocodbApiClient {
     return payload.cast<Map<String, dynamic>>();
   }
 
-  /// Imports a bounded batch of Coralie's current Airtable dossiers on the
+  /// Imports a bounded batch of the current profile's Airtable dossiers on the
   /// API server. Airtable credentials never leave the server.
   Future<Map<String, dynamic>> syncCurrentCoralieDossiers() async {
     final response = await _client

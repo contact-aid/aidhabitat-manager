@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { isCurrentCoralieDossier, projectAirtableDossier } from './airtableAdaptation.mjs';
+import { isCurrentAdaptationDossier, projectAirtableDossier } from './airtableAdaptation.mjs';
 
 const value = (row, key) => row?.fields?.[key] ?? row?.[key];
 const plain = (input) => String(input ?? '').trim();
@@ -18,7 +18,8 @@ export const archivedNoteId = (airtableRecordId) => {
 
 // The current dossier note and the beneficiary visit note share one canonical
 // page. Keep a read-only copy of its previous content before replacing it.
-export async function importCurrentCoralieNotes({
+export async function importCurrentProfileNotes({
+  ergoLabel,
   sourceRows, dossierRows, beneficiaryRows, listNotePages, upsertNotePage,
   maxChanges = 5,
 }) {
@@ -27,15 +28,16 @@ export async function importCurrentCoralieNotes({
   const operations = [];
   const skipped = [];
   let alreadyPresent = 0;
-  const eligible = sourceRows.filter(isCurrentCoralieDossier)
+  if (!ergoLabel?.trim()) throw new TypeError('Profil intervenant requis');
+  const eligible = sourceRows.filter(isCurrentAdaptationDossier)
     .map((row) => projectAirtableDossier(row));
 
   for (const source of eligible) {
     if (!plain(source.workDescription)) continue;
     const dossierId = `airtable:${source.airtableRecordId}`;
     const dossier = dossiers.get(dossierId);
-    if (!dossier || plain(value(dossier, 'ergo_id')) !== 'Coralie') {
-      skipped.push({ id: source.airtableRecordId, reason: 'dossier Coralie introuvable' });
+    if (!dossier || plain(value(dossier, 'ergo_id')) !== ergoLabel) {
+      skipped.push({ id: source.airtableRecordId, reason: 'dossier du profil introuvable' });
       continue;
     }
     const beneficiary = beneficiaries.get(String(value(dossier, 'beneficiaires_id')));
@@ -120,3 +122,6 @@ export async function importCurrentCoralieNotes({
   return { eligible: eligible.length, imported: Math.min(operations.length, maxChanges),
     alreadyPresent, remaining: Math.max(0, operations.length - maxChanges), skipped };
 }
+
+export const importCurrentCoralieNotes = (options) =>
+  importCurrentProfileNotes({ ergoLabel: 'Coralie', ...options });

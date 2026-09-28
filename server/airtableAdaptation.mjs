@@ -166,15 +166,17 @@ export const assignedAdaptationFormula = (intervenant) => {
   return `AND(FIND("adaptation",LOWER(ARRAYJOIN({Adaptation ou énergie}))),FIND(${quoted},LOWER(ARRAYJOIN({Intervenant couleur}))))`;
 };
 
-// The first import is deliberately limited to Coralie's current cohort.
-// A later migration can widen this date once older dossiers have been reviewed.
-export function isCurrentCoralieDossier({ dossier }) {
+// Keep the validated recent cohort for every profile. Older appointments
+// require a separate migration; cancelled appointments must stay excluded.
+export function isCurrentAdaptationDossier({ dossier }) {
   const fields = dossier?.fields || {};
   const visitDate = first(fields['Date du RDV avec heure']);
   return /^\d{4}-\d{2}-\d{2}/.test(visitDate)
     && visitDate.slice(0, 10) >= '2026-08-01'
     && normalized(first(fields['Annulé ?'])) === 'non';
 }
+
+export const isCurrentCoralieDossier = isCurrentAdaptationDossier;
 
 const isAssignedAdaptation = (fields, intervenant, fullName) =>
   labels(fields['Adaptation ou énergie']).some((label) => normalized(label) === 'adaptation')

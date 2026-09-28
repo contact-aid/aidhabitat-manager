@@ -247,9 +247,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// quand l'ergo change de sous-section.
   static const String _kSharedBeneficiaireNotesTabKey = 'Bénéficiaire-Notes';
   bool get _useDossierDescriptionNote =>
-      kIsWeb &&
-      _dossier.ergoId.trim().toLowerCase() == 'coralie' &&
-      _dossier.id.startsWith('airtable:');
+      kIsWeb && _dossier.id.startsWith('airtable:');
 
   /// TabKey unique pour la note partagée entre les 4 sous-sections de
   /// l'onglet « Accessibilité » (Général, Niveaux, Équipements,

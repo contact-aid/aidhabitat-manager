@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { isCurrentCoralieDossier, projectAirtableDossier } from './airtableAdaptation.mjs';
+import { isCurrentAdaptationDossier, projectAirtableDossier } from './airtableAdaptation.mjs';
 
 const value = (record, key) => record?.fields?.[key] ?? record?.[key];
 const normalized = (input) => String(input ?? '').trim().replace(/\s+/g, ' ');
@@ -36,15 +36,17 @@ const baremeFor = (records, householdSize) => {
   return candidates[0] ?? null;
 };
 
-// This first rollout is deliberately limited to the 22 non-cancelled Coralie
-// appointments dated 1 August 2026 or later. Airtable remains read only.
-export async function syncCurrentCoralieDossiers({
+// Import the validated recent, non-cancelled cohort for the authenticated
+// profile. Airtable remains read only.
+export async function syncCurrentProfileDossiers({
+  ergoLabel,
   sourceRows, dossierRows, beneficiaryRows, housingRows = [], housingTypes = [],
   occupationTypes = [], baremeRows = [], createBeneficiary, createDossier,
   updateBeneficiary, updateDossier, createHousing, updateHousing,
   maxChanges = 5, enhancedWeb = true,
 }) {
-  const eligible = sourceRows.filter(isCurrentCoralieDossier)
+  if (!ergoLabel?.trim()) throw new TypeError('Profil intervenant requis');
+  const eligible = sourceRows.filter(isCurrentAdaptationDossier)
     .map((row) => projectAirtableDossier(row, { enhancedWeb }));
   for (const source of enhancedWeb ? eligible : []) {
     const bareme = baremeFor(baremeRows, source.beneficiary.nombre_personnes);
@@ -62,7 +64,7 @@ export async function syncCurrentCoralieDossiers({
   for (const source of eligible) {
     const uuid = `airtable:${source.airtableRecordId}`;
     const existingDossier = dossiersByUuid.get(uuid);
-    if (existingDossier && !same(value(existingDossier, 'ergo_id'), 'Coralie')) {
+    if (existingDossier && !same(value(existingDossier, 'ergo_id'), ergoLabel)) {
       skipped.push({ id: source.airtableRecordId, reason: 'attribution différente' });
       continue;
     }
@@ -122,7 +124,7 @@ export async function syncCurrentCoralieDossiers({
         uuid_source: operation.uuid,
         patient_id: `nocodb-beneficiaire-${beneficiary.id}`,
         beneficiaires_id: Number(beneficiary.id),
-        ergo_id: 'Coralie',
+        ergo_id: ergoLabel,
         status: operation.source.hasAirtableReport ? 'En cours' : 'À visiter',
         ...operation.source.dossier,
         created_at: new Date().toISOString(),
@@ -172,3 +174,6 @@ export async function syncCurrentCoralieDossiers({
     skipped,
   };
 }
+
+export const syncCurrentCoralieDossiers = (options) =>
+  syncCurrentProfileDossiers({ ergoLabel: 'Coralie', ...options });

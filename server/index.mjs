@@ -23,8 +23,8 @@ import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
 import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
-import { syncCurrentCoralieDossiers } from './airtableDossierSync.mjs';
-import { importCurrentCoralieNotes } from './airtableNoteImport.mjs';
+import { syncCurrentProfileDossiers } from './airtableDossierSync.mjs';
+import { importCurrentProfileNotes } from './airtableNoteImport.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
 } from './resyncLegacyNames.mjs';
@@ -5735,21 +5735,47 @@ app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next)
   }
 });
 
-const serializeCoralieAirtableSync = createKeyedSerialExecutor();
+const serializeAirtableSync = createKeyedSerialExecutor();
+const airtableSyncProfiles = async (appUser) => {
+  if (appUser?.role === 'ADMIN') {
+    const { members } = await loadMemberRegistry();
+    return [...new Set(members
+      .filter((member) => ['ERGO', 'TECHNICIAN'].includes(member.role))
+      .map((member) => stringValue(member.ergoLabel).trim())
+      .filter(Boolean))];
+  }
+  if (['ERGO', 'TECHNICIAN'].includes(appUser?.role)) {
+    const label = stringValue(appUser.ergoLabel).trim();
+    if (label) return [label];
+  }
+  throw httpError(403, 'Profil intervenant requis');
+};
+const readAssignedAirtableDossiers = (read, ergoLabel) => {
+  const firstName = ergoLabel.split(/\s+/)[0];
+  return read(firstName, { fullName: ergoLabel.includes(' ') ? ergoLabel : '' });
+};
+const combinedAirtableResult = (results) => ({
+  profiles: results,
+  eligible: results.reduce((sum, item) => sum + (item.eligible || 0), 0),
+  created: results.reduce((sum, item) => sum + (item.created || 0), 0),
+  updated: results.reduce((sum, item) => sum + (item.updated || 0), 0),
+  imported: results.reduce((sum, item) => sum + (item.imported || 0), 0),
+  alreadyPresent: results.reduce((sum, item) => sum + (item.alreadyPresent || 0), 0),
+  remaining: results.reduce((sum, item) => sum + item.remaining, 0),
+  skipped: results.flatMap((item) => item.skipped.map((skip) => ({
+    ...skip, profile: item.profile,
+  }))),
+});
 app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, next) => {
   try {
-    if (req.appUser?.role !== 'ERGO' || stringValue(req.appUser.ergoLabel).trim() !== 'Coralie') {
-      res.status(403).json({ success: false, error: 'Profil Coralie requis' });
-      return;
-    }
+    const profiles = await airtableSyncProfiles(req.appUser);
     if (!process.env.AIRTABLE_TOKEN) {
       res.status(503).json({ success: false, error: 'Lecture Airtable indisponible' });
       return;
     }
-    const result = await serializeCoralieAirtableSync('Coralie', async () => {
+    const result = await serializeAirtableSync('all-profiles', async () => {
       const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
-      const [sourceRows, dossierRows, beneficiaryRows, baremeRows, housingRows, housingTypes, occupationTypes] = await Promise.all([
-        read('Coralie'),
+      const [dossierRows, beneficiaryRows, baremeRows, housingRows, housingTypes, occupationTypes] = await Promise.all([
         queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
         queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
         queryAll(TABLES.baremesAnah, { fields: FIELD_SETS.baremesAnah }),
@@ -5771,17 +5797,23 @@ app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, ne
           throw httpError(409, 'Le dossier a changé pendant l’actualisation. Réessayez.');
         }
       };
-      return syncCurrentCoralieDossiers({
-        sourceRows, dossierRows, beneficiaryRows, baremeRows, housingRows,
-        housingTypes, occupationTypes,
-        enhancedWeb: req.body?.enhancedWeb === true,
-        createBeneficiary: (fields) => createRecord(TABLES.beneficiaires, fields),
-        createDossier: (fields) => createRecord(TABLES.dossiers, fields),
-        updateBeneficiary: (row, fields) => updateFromAirtable(TABLES.beneficiaires, row, fields),
-        updateDossier: (row, fields) => updateFromAirtable(TABLES.dossiers, row, fields),
-        createHousing: (fields) => createRecord(TABLES.logements, fields),
-        updateHousing: (row, fields) => updateFromAirtable(TABLES.logements, row, fields),
-      });
+      const results = [];
+      for (const ergoLabel of profiles) {
+        const sourceRows = await readAssignedAirtableDossiers(read, ergoLabel);
+        const profileResult = await syncCurrentProfileDossiers({
+          ergoLabel, sourceRows, dossierRows, beneficiaryRows, baremeRows,
+          housingRows, housingTypes, occupationTypes,
+          enhancedWeb: req.body?.enhancedWeb === true,
+          createBeneficiary: (fields) => createRecord(TABLES.beneficiaires, fields),
+          createDossier: (fields) => createRecord(TABLES.dossiers, fields),
+          updateBeneficiary: (row, fields) => updateFromAirtable(TABLES.beneficiaires, row, fields),
+          updateDossier: (row, fields) => updateFromAirtable(TABLES.dossiers, row, fields),
+          createHousing: (fields) => createRecord(TABLES.logements, fields),
+          updateHousing: (row, fields) => updateFromAirtable(TABLES.logements, row, fields),
+        });
+        results.push({ profile: ergoLabel, ...profileResult });
+      }
+      return combinedAirtableResult(results);
     });
     res.json({ success: true, error: null, data: result });
   } catch (error) {
@@ -5791,27 +5823,32 @@ app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, ne
 
 app.post('/api/airtable/import-current-notes', requireAuth, async (req, res, next) => {
   try {
-    if (req.appUser?.role !== 'ERGO' || stringValue(req.appUser.ergoLabel).trim() !== 'Coralie'
-      || req.body?.enhancedWeb !== true) {
-      res.status(403).json({ success: false, error: 'Import web Coralie requis' });
+    if (req.body?.enhancedWeb !== true) {
+      res.status(403).json({ success: false, error: 'Import web requis' });
       return;
     }
+    const profiles = await airtableSyncProfiles(req.appUser);
     if (!process.env.AIRTABLE_TOKEN) {
       res.status(503).json({ success: false, error: 'Lecture Airtable indisponible' });
       return;
     }
-    const result = await serializeCoralieAirtableSync('Coralie', async () => {
+    const result = await serializeAirtableSync('all-profiles', async () => {
       const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
-      const [sourceRows, dossierRows, beneficiaryRows] = await Promise.all([
-        read('Coralie'),
+      const [dossierRows, beneficiaryRows] = await Promise.all([
         queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
         queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
       ]);
-      return importCurrentCoralieNotes({
-        sourceRows, dossierRows, beneficiaryRows,
-        listNotePages: (patientId) => mobileSyncStore.listNotePagesByPatient(patientId),
-        upsertNotePage: (payload) => mobileSyncStore.upsertNotePage(payload),
-      });
+      const results = [];
+      for (const ergoLabel of profiles) {
+        const sourceRows = await readAssignedAirtableDossiers(read, ergoLabel);
+        const profileResult = await importCurrentProfileNotes({
+          ergoLabel, sourceRows, dossierRows, beneficiaryRows,
+          listNotePages: (patientId) => mobileSyncStore.listNotePagesByPatient(patientId),
+          upsertNotePage: (payload) => mobileSyncStore.upsertNotePage(payload),
+        });
+        results.push({ profile: ergoLabel, ...profileResult });
+      }
+      return combinedAirtableResult(results);
     });
     res.json({ success: true, error: null, data: result });
   } catch (error) {

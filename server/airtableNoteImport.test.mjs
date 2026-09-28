@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { importCurrentCoralieNotes } from './airtableNoteImport.mjs';
+import { importCurrentCoralieNotes, importCurrentProfileNotes } from './airtableNoteImport.mjs';
 
 const recordId = 'recAAAAAAAAAAAAAA';
 const source = (fields = {}, clientFields = {}) => ({
@@ -45,6 +45,22 @@ test('imports the work description into visible page zero and is repeatable', as
   const second = await importRows({ pages: first.pages });
   assert.equal(second.result.imported, 0);
   assert.equal(second.result.alreadyPresent, 1);
+});
+
+test('another profile imports the same canonical note only for its own dossier', async () => {
+  const input = source({}, { 'Description des travaux': 'Note Christelle' });
+  input.dossier.fields['Intervenant couleur'] = ['Christelle'];
+  const saved = [];
+  const result = await importCurrentProfileNotes({
+    ergoLabel: 'Christelle', sourceRows: [input],
+    dossierRows: [{ ...dossier, fields: { ...dossier.fields, ergo_id: 'Christelle' } }],
+    beneficiaryRows: [beneficiary],
+    listNotePages: async () => [],
+    upsertNotePage: async (payload) => saved.push(payload),
+  });
+  assert.equal(result.imported, 1);
+  assert.equal(saved[0].textContent, 'Note Christelle');
+  assert.equal(saved[0].tabKey, 'notes_rapides');
 });
 
 test('archives an existing note and preserves drawing when applying the description', async () => {

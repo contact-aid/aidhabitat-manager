@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { syncCurrentCoralieDossiers } from './airtableDossierSync.mjs';
+import { syncCurrentCoralieDossiers, syncCurrentProfileDossiers } from './airtableDossierSync.mjs';
 
 const source = (id, date, cancelled = 'NON', first = 'Camille') => ({
   dossier: { id, fields: {
@@ -34,6 +34,25 @@ test('only the agreed recent, non-cancelled cohort is imported in bounded batche
   assert.equal(result.remaining, 1);
   assert.equal(created[1].fields.uuid_source, 'airtable:recAAAAAAAAAAAAAA');
   assert.equal(created[1].fields.ergo_id, 'Coralie');
+});
+
+test('another profile imports its own records and cannot overwrite another assignment', async () => {
+  const christelle = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  christelle.dossier.fields['Intervenant couleur'] = ['Christelle'];
+  const conflicting = source('recBBBBBBBBBBBBBB', '2026-09-29T08:00:00.000Z');
+  conflicting.dossier.fields['Intervenant couleur'] = ['Christelle'];
+  const created = [];
+  const result = await syncCurrentProfileDossiers({
+    ergoLabel: 'Christelle', sourceRows: [christelle, conflicting],
+    dossierRows: [{ id: 9, fields: { uuid_source: 'airtable:recBBBBBBBBBBBBBB',
+      ergo_id: 'Coralie', beneficiaires_id: 8 } }],
+    beneficiaryRows: [],
+    createBeneficiary: async (fields) => { created.push(fields); return { id: 1 }; },
+    createDossier: async (fields) => { created.push(fields); return { id: 2 }; },
+  });
+  assert.equal(result.created, 1);
+  assert.equal(created[1].ergo_id, 'Christelle');
+  assert.deepEqual(result.skipped, [{ id: 'recBBBBBBBBBBBBBB', reason: 'attribution différente' }]);
 });
 
 test('an existing exact Airtable ID updates source fields without touching visit notes', async () => {

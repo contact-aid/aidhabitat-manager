@@ -91,10 +91,10 @@ const expectStatus = (result, status) => {
   assert.equal(result.status, status, JSON.stringify(result.body));
   return result.body;
 };
-const login = async (email) => {
+const login = async (email, role = 'ERGO') => {
   const body = expectStatus(await request('/api/auth/login', { method: 'POST', body: { email, password } }), 200);
   assert.equal(body.data.user.email, email);
-  assert.equal(body.data.user.role, 'ERGO');
+  assert.equal(body.data.user.role, role);
   assert.match(body.data.token, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
   const session = expectStatus(await request('/api/auth/session', { token: body.data.token }), 200);
   assert.equal(session.data.user.email, email);
@@ -137,6 +137,7 @@ try {
   const clientB = await login(ownerEmail);
   const otherErgo = await login(otherEmail);
   const coralie = await login('c.demenais@aidhabitat.fr');
+  const admin = await login('contact@aidhabitat.fr', 'ADMIN');
   assert.deepEqual(mock.violations, [], 'Startup and real logins must use only known REST calls');
 
   await check('wrong password rejected by real login', async () => {
@@ -161,10 +162,12 @@ try {
       assert(airtableCalls.every((call) => call.init.method === 'GET'));
       assert.equal(mock.patches().length, 0);
     });
-    await check('Coralie refresh imports only her recent Airtable dossier and is idempotent', async () => {
-      expectStatus(await request('/api/airtable/sync-current-dossiers', {
+    await check('each profile refreshes only its own recent Airtable dossiers', async () => {
+      const other = expectStatus(await request('/api/airtable/sync-current-dossiers', {
         token: otherErgo, method: 'POST',
-      }), 403);
+      }), 200);
+      assert.equal(other.data.created, 0);
+      assert.equal(other.data.profiles[0].profile, 'Test Other');
       const first = expectStatus(await request('/api/airtable/sync-current-dossiers', {
         token: coralie, method: 'POST',
       }), 200);
@@ -174,6 +177,18 @@ try {
       }), 200);
       assert.equal(second.data.created, 0);
       const dossiers = expectStatus(await request('/api/dossiers', { token: coralie }), 200);
+      assert(dossiers.some((item) => item.id === 'airtable:recDDDDDDDDDDDDDD'));
+    });
+    await check('admin refresh covers every registered intervenant', async () => {
+      const result = expectStatus(await request('/api/airtable/sync-current-dossiers', {
+        token: admin, method: 'POST',
+      }), 200);
+      const profiles = result.data.profiles.map((item) => item.profile);
+      assert(profiles.includes('Coralie'));
+      assert(profiles.includes('Test Owner'));
+      assert(profiles.includes('Test Other'));
+      assert.equal(result.data.created, 1);
+      const dossiers = expectStatus(await request('/api/dossiers', { token: admin }), 200);
       assert(dossiers.some((item) => item.id === 'airtable:recDDDDDDDDDDDDDD'));
     });
     await check('Coralie refresh updates an existing dossier without replacing visit data', async () => {
