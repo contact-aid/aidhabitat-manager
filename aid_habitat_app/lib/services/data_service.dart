@@ -1110,6 +1110,9 @@ class DataService {
   Future<Map<String, dynamic>> syncCurrentCoralieDossiers() =>
       _nocodbApiClient.syncCurrentCoralieDossiers();
 
+  Future<Map<String, dynamic>> importCurrentCoralieNotes() =>
+      _nocodbApiClient.importCurrentCoralieNotes();
+
   Future<void> _preloadWorkspaceNotePages(
     List<Map<String, dynamic>> rawPayloads,
   ) async {

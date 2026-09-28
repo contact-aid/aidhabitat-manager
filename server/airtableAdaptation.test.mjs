@@ -92,7 +92,8 @@ test('projection only contains authorized dossier identity and scheduling fields
       'Nb du foyer': '2', Ressources: 12345,
       'Catégorie sans emoji': 'Très modeste',
       'M./Mme': 'Madame', 'Date de naissance': '1950-01-01',
-      'N° et rue': '1 rue fictive' }),
+      'N° et rue': '1 rue fictive',
+      'Inscription commentaires': 'Note d’inscription fictive' }),
   });
   assert.deepEqual(result.beneficiary, {
     prenom: 'Camille', nom: 'Exemple', adresse_logement: '1 rue fictive',
@@ -103,6 +104,7 @@ test('projection only contains authorized dossier identity and scheduling fields
     visit_date: '2026-10-01T08:00:00.000Z', nature_accompagnement: 'complet',
   });
   assert.equal(result.quickNote, 'Note fictive');
+  assert.equal(result.intakeNote, 'Note d’inscription fictive');
   assert.equal(result.airtableRecordId, id('a'));
   assert.equal(result.airtableClientRecordId, id('x'));
   assert.equal(result.airtableDossierLabel, 'FICTIF-2026');

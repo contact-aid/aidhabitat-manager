@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../components/feedback_tab.dart';
 import '../components/dossier_loading_status.dart';
 import '../models/dossier_refresh_phase.dart';
@@ -367,6 +368,21 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         }
         if (remaining > 0) {
           throw StateError('Actualisation Airtable incomplète');
+        }
+        if (kIsWeb) {
+          var notesRemaining = 1;
+          for (var batch = 0; batch < 10 && notesRemaining > 0; batch++) {
+            final result = await _dataService.importCurrentCoralieNotes();
+            if ((result['skipped'] as List?)?.isNotEmpty ?? false) {
+              throw StateError(
+                'Certaines notes Airtable n’ont pas pu être importées',
+              );
+            }
+            notesRemaining = (result['remaining'] as num?)?.toInt() ?? 0;
+          }
+          if (notesRemaining > 0) {
+            throw StateError('Import des notes Airtable incomplet');
+          }
         }
       }
       // GET /api/dossiers is scoped by the authenticated server session:

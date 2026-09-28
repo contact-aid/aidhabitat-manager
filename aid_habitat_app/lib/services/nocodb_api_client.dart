@@ -461,6 +461,26 @@ class NocodbApiClient {
     return Map<String, dynamic>.from(payload['data'] as Map);
   }
 
+  Future<Map<String, dynamic>> importCurrentCoralieNotes() async {
+    final response = await _client
+        .post(
+          Uri.parse('$_baseUrl/api/airtable/import-current-notes'),
+          headers: _headers,
+          body: jsonEncode({'enhancedWeb': kIsWeb}),
+        )
+        .timeout(const Duration(seconds: 120));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(
+        'Import des notes Airtable impossible (${response.statusCode})',
+      );
+    }
+    final payload = jsonDecode(response.body);
+    if (payload is! Map || payload['data'] is! Map) {
+      throw Exception('Réponse des notes Airtable invalide');
+    }
+    return Map<String, dynamic>.from(payload['data'] as Map);
+  }
+
   /// Create a new beneficiary on the server. The server automatically creates
   /// the associated dossier and housing records.
   /// Returns `{ id: remotePatientId, dossierId: remoteDossierId }`.

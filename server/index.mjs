@@ -24,6 +24,7 @@ import { contextServerReference, contextRecordToSections } from './contextGuarde
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
 import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 import { syncCurrentCoralieDossiers } from './airtableDossierSync.mjs';
+import { importCurrentCoralieNotes } from './airtableNoteImport.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
 } from './resyncLegacyNames.mjs';
@@ -5774,6 +5775,36 @@ app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, ne
         createDossier: (fields) => createRecord(TABLES.dossiers, fields),
         updateBeneficiary: (row, fields) => updateFromAirtable(TABLES.beneficiaires, row, fields),
         updateDossier: (row, fields) => updateFromAirtable(TABLES.dossiers, row, fields),
+      });
+    });
+    res.json({ success: true, error: null, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/airtable/import-current-notes', requireAuth, async (req, res, next) => {
+  try {
+    if (req.appUser?.role !== 'ERGO' || stringValue(req.appUser.ergoLabel).trim() !== 'Coralie'
+      || req.body?.enhancedWeb !== true) {
+      res.status(403).json({ success: false, error: 'Import web Coralie requis' });
+      return;
+    }
+    if (!process.env.AIRTABLE_TOKEN) {
+      res.status(503).json({ success: false, error: 'Lecture Airtable indisponible' });
+      return;
+    }
+    const result = await serializeCoralieAirtableSync('Coralie', async () => {
+      const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
+      const [sourceRows, dossierRows, beneficiaryRows] = await Promise.all([
+        read('Coralie'),
+        queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
+        queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
+      ]);
+      return importCurrentCoralieNotes({
+        sourceRows, dossierRows, beneficiaryRows,
+        listNotePages: (patientId) => mobileSyncStore.listNotePagesByPatient(patientId),
+        upsertNotePage: (payload) => mobileSyncStore.upsertNotePage(payload),
       });
     });
     res.json({ success: true, error: null, data: result });

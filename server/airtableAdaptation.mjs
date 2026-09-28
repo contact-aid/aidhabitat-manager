@@ -17,6 +17,7 @@ const clientFields = [
   'Communes', 'Code postal (from Communes)',
   'Communauté de commune (from Communes)', 'Nb du foyer',
   'Ressources', 'Catégorie', 'Catégorie sans emoji', 'M./Mme', 'Date de naissance',
+  'Inscription commentaires',
 ];
 
 const labels = (value) => {
@@ -90,6 +91,7 @@ export function projectAirtableDossier({ dossier, client }, { enhancedWeb = true
     beneficiary,
     dossier: dossierPatch,
     quickNote: first(source.Commentaires),
+    intakeNote: first(person['Inscription commentaires']),
     epciLabel: first(source['Communauté de communes']),
     incomeCategoryLabel: incomeCategory,
     hasAirtableReport: enhancedWeb && Array.isArray(source['Audit ou Eval'])
