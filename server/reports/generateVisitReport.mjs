@@ -1507,28 +1507,35 @@ function nudgeFieldRect({ fieldsByName, fieldName, dy }) {
  */
 async function embedImageAuto(pdfDoc, buffer, mimeHint) {
   if (!buffer || buffer.length < 8) return null;
+  // pdf-lib's JPEG reader creates DataView(imageData.buffer) without using
+  // byteOffset. Small Node Buffers can be slices of a shared pool, so their
+  // ArrayBuffer begins before the JPEG's SOI marker. Give pdf-lib a view that
+  // starts at byte zero; otherwise valid images fail with "SOI not found".
+  const pdfBytes = buffer.byteOffset === 0 && buffer.byteLength === buffer.buffer.byteLength
+    ? buffer
+    : Uint8Array.from(buffer);
   const isPng =
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47;
-  const isJpg = buffer[0] === 0xff && buffer[1] === 0xd8;
-  const signature = Buffer.from(buffer.subarray(0, 12));
+    pdfBytes[0] === 0x89 &&
+    pdfBytes[1] === 0x50 &&
+    pdfBytes[2] === 0x4e &&
+    pdfBytes[3] === 0x47;
+  const isJpg = pdfBytes[0] === 0xff && pdfBytes[1] === 0xd8;
+  const signature = Buffer.from(pdfBytes.subarray(0, 12));
   const isWebp = signature.toString('ascii', 0, 4) === 'RIFF' &&
     signature.toString('ascii', 8, 12) === 'WEBP';
   const isGif = signature.toString('ascii', 0, 3) === 'GIF';
   try {
-    if (isPng) return await pdfDoc.embedPng(buffer);
-    if (isJpg) return await pdfDoc.embedJpg(buffer);
+    if (isPng) return await pdfDoc.embedPng(pdfBytes);
+    if (isJpg) return await pdfDoc.embedJpg(pdfBytes);
     if (isWebp || isGif) {
       const png = await sharp(buffer, { page: 0, limitInputPixels: 40_000_000 })
         .png()
         .toBuffer();
-      return await pdfDoc.embedPng(png);
+      return await pdfDoc.embedPng(Uint8Array.from(png));
     }
     // Hint mime — on tente quand même
-    if (/png/i.test(String(mimeHint || ''))) return await pdfDoc.embedPng(buffer);
-    if (/jpe?g/i.test(String(mimeHint || ''))) return await pdfDoc.embedJpg(buffer);
+    if (/png/i.test(String(mimeHint || ''))) return await pdfDoc.embedPng(pdfBytes);
+    if (/jpe?g/i.test(String(mimeHint || ''))) return await pdfDoc.embedJpg(pdfBytes);
     console.warn('[generateVisitReport] format image non supporté', {
       mime: mimeHint,
       head: buffer.slice(0, 4).toString('hex'),

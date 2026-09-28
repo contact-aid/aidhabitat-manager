@@ -66,3 +66,30 @@ test('a missing recommendation image is reported separately from other images', 
   assert.equal(stats.recoImagesApplied, 0);
   assert.equal(stats.imagesMissingValue, 1);
 });
+
+test('a JPEG in a pooled Buffer slice is embedded from its own first byte', async () => {
+  const jpeg = await sharp({
+    create: { width: 24, height: 24, channels: 3, background: '#ef713e' },
+  }).jpeg().toBuffer();
+  const pooled = Buffer.allocUnsafe(jpeg.length + 32);
+  jpeg.copy(pooled, 16);
+  const image = pooled.subarray(16, 16 + jpeg.length);
+  assert.ok(image.byteOffset > 0);
+  assert.equal(image.subarray(0, 2).toString('hex'), 'ffd8');
+
+  const { stats } = await generateVisitReport({
+    dossier: {
+      id: 'pooled-jpeg',
+      patient: { firstName: 'Test', lastName: 'Images' },
+      housing: {},
+    },
+    recommendations: [{ wikiTitle: 'Image JPEG', wikiImageUrl: 'pooled-image' }],
+    documents: [],
+    notePages: [],
+    fetchImageBytes: async () => ({ buffer: image, mimeType: 'image/jpeg' }),
+  });
+
+  assert.equal(stats.recoImagesRequested, 1);
+  assert.equal(stats.recoImagesApplied, 1);
+  assert.equal(stats.imagesFailedEmbed, 0);
+});
