@@ -51,7 +51,8 @@ Le dossier témoin ne doit contenir aucune donnée réelle de bénéficiaire.
 4. Ajouter un document et une photo.
 5. Fermer puis rouvrir l'application hors ligne.
 6. Vérifier que toutes les données locales sont encore présentes.
-7. Demander la génération du PDF hors ligne.
+7. Vérifier que « Actualiser », « Générer » et « Forcer la sync » sont gris et
+   non cliquables hors ligne. Aucun rapport PDF n'est demandé à cette étape.
 
 ### 3. Retour en ligne
 
@@ -59,7 +60,8 @@ Le dossier témoin ne doit contenir aucune donnée réelle de bénéficiaire.
 2. Vérifier que l'utilisateur n'est pas déconnecté.
 3. Attendre la fin naturelle des opérations en attente.
 4. Vérifier l'absence d'opération en échec ou encore en attente.
-5. Vérifier que le PDF demandé hors ligne est généré.
+5. Demander la génération du PDF une fois la synchronisation terminée et
+   vérifier qu'il est généré avec les données remontées.
 
 ### 4. Contrôle croisé Mac
 
