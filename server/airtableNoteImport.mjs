@@ -3,6 +3,12 @@ import { isCurrentCoralieDossier, projectAirtableDossier } from './airtableAdapt
 
 const value = (row, key) => row?.fields?.[key] ?? row?.[key];
 const plain = (input) => String(input ?? '').trim();
+const intakeHeading = 'Commentaire d’inscription (Airtable)';
+
+// Remove only the exact heading line inserted by the first import. The
+// following note content, including user edits and drawing data, stays intact.
+export const removeIntakeHeading = (text) => String(text ?? '')
+  .replace(/(^|\n)Commentaire d’inscription \(Airtable\)\r?\n/g, '$1');
 
 // A stable identity makes a retry safe even if the first response is lost.
 export const importedNoteId = (airtableRecordId) => {
@@ -18,11 +24,12 @@ export function pendingAirtableNoteText(source, pages) {
     return [plain(page.textContent), plain(displayed)];
   });
   const blocks = [
-    ['Commentaire d’inscription (Airtable)', source.intakeNote],
+    ['', source.intakeNote],
     ['Commentaire du dossier (Airtable)', source.quickNote],
   ].filter(([, note]) => plain(note))
     .filter(([, note]) => !existing.some((text) => text.includes(plain(note))));
-  return blocks.map(([heading, note]) => `${heading}\n${plain(note)}`).join('\n\n');
+  return blocks.map(([heading, note]) => heading
+    ? `${heading}\n${plain(note)}` : plain(note)).join('\n\n');
 }
 
 // The quick-note editor reads drawingJson.text, whereas older integrations
@@ -39,13 +46,15 @@ export function mergeQuickNoteText(page, importedText) {
     }
     if (!drawing || typeof drawing !== 'object' || Array.isArray(drawing)) return null;
   }
-  const displayed = String(drawing.text ?? '');
-  const stored = String(page?.textContent ?? '');
+  const originalDisplayed = String(drawing.text ?? '');
+  const originalStored = String(page?.textContent ?? '');
+  const displayed = removeIntakeHeading(originalDisplayed);
+  const stored = removeIntakeHeading(originalStored);
   const base = displayed && stored && !stored.includes(displayed.trim())
     ? `${displayed}\n\n${stored}` : (stored || displayed);
   const text = [base, importedText].filter((item) => plain(item)).join('\n\n');
   return { textContent: text, drawingJson: JSON.stringify({ ...drawing, text }),
-    changed: !page || text !== stored || text !== displayed };
+    changed: !page || text !== originalStored || text !== originalDisplayed };
 }
 
 // Import only missing source text into a new quick-note page. Existing pages,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { importCurrentCoralieNotes, pendingAirtableNoteText } from './airtableNoteImport.mjs';
+import { importCurrentCoralieNotes, pendingAirtableNoteText,
+  removeIntakeHeading } from './airtableNoteImport.mjs';
 
 const recordId = 'recAAAAAAAAAAAAAA';
 const source = (fields = {}, clientFields = {}) => ({
@@ -38,7 +39,8 @@ test('imports both Airtable comments into visible page zero and is repeatable', 
   assert.equal(first.result.imported, 1);
   assert.equal(first.saved[0].pageNumber, 0);
   assert.equal(first.saved[0].patientId, 'nocodb-beneficiaire-2');
-  assert.match(first.saved[0].textContent, /Commentaire d’inscription \(Airtable\)\nNote inscription/);
+  assert(first.saved[0].textContent.startsWith('Note inscription'));
+  assert(!first.saved[0].textContent.includes('Commentaire d’inscription (Airtable)'));
   assert.match(first.saved[0].textContent, /Commentaire du dossier \(Airtable\)\nNote dossier/);
   const second = await importRows({ pages: first.pages });
   assert.equal(second.result.imported, 0);
@@ -90,7 +92,8 @@ test('repairs already imported text that was absent from the editor drawing JSON
   const drawing = JSON.parse(saved[0].drawingJson);
   assert.deepEqual(drawing.strokes, [{ x: 1 }]);
   assert(drawing.text.startsWith('Note personnelle'));
-  assert(drawing.text.includes('Commentaire d’inscription (Airtable)'));
+  assert(!drawing.text.includes('Commentaire d’inscription (Airtable)'));
+  assert(drawing.text.includes('Note inscription'));
   assert.equal(saved[0].textContent, drawing.text);
 });
 
@@ -104,4 +107,12 @@ test('source text already visible in a drawing is not appended twice', async () 
   assert.equal(saved.length, 1);
   assert(!saved[0].textContent.includes('(Airtable)'));
   assert.equal(saved[0].textContent, 'Note inscription\nNote dossier');
+});
+
+test('removes only the exact imported intake heading and preserves other text', () => {
+  assert.equal(removeIntakeHeading('Commentaire d’inscription (Airtable)\nTexte\n'), 'Texte\n');
+  assert.equal(removeIntakeHeading('Ancienne note\n\nCommentaire d’inscription (Airtable)\nTexte'),
+    'Ancienne note\n\nTexte');
+  assert.equal(removeIntakeHeading('Citation : Commentaire d’inscription (Airtable)\nTexte'),
+    'Citation : Commentaire d’inscription (Airtable)\nTexte');
 });
