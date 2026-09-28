@@ -70,6 +70,7 @@ globalThis.fetch = (input, init = {}) => {
     return Promise.resolve(Response.json({ records: [
       { id: 'recCCCCCCCCCCCCCC', fields: {
         'Prénom': 'Camille', Nom: 'Fictif', 'Nb du foyer': 2,
+        ...(reassignFixture ? { 'Description des travaux': 'Description fictive à importer' } : {}),
       } },
       { id: 'recEEEEEEEEEEEEEE', fields: {
         'Prénom': 'Coralie', Nom: 'Fictive', 'Nb du foyer': 1,
@@ -225,6 +226,55 @@ try {
         assert.equal(mock.row('dossier').compte_anah, 'saisie conservée');
         const destination = expectStatus(await request('/api/dossiers', { token: otherErgo }), 200);
         assert(destination.some((item) => item.id === 'airtable:recAAAAAAAAAAAAAA'));
+      } finally {
+        reassignFixture = false;
+      }
+    });
+    await check('preview excludes unchecked dossiers and preserves their original assignment', async () => {
+      reassignFixture = true;
+      try {
+        mock.row('dossier').uuid_source = 'airtable:recAAAAAAAAAAAAAA';
+        mock.row('dossier').ergo_id = 'Test Owner';
+        mock.row('dossier').compte_anah = 'saisie conservée';
+        const preview = expectStatus(await request('/api/airtable/preview-current-dossiers', {
+          token: admin, method: 'POST', body: {},
+        }), 200).data;
+        assert(preview.items.some((item) => item.id === 'recAAAAAAAAAAAAAA'
+          && item.previousOwner === 'Test Owner'
+          && item.fields.note === 'Description fictive à importer'));
+        assert(preview.items.some((item) => item.id === 'recDDDDDDDDDDDDDD'
+          && item.kind === 'create'));
+        assert.equal(mock.row('dossier').ergo_id, 'Test Owner');
+        assert.equal(mock.patches().length, 0);
+        expectStatus(await request('/api/airtable/apply-current-dossiers', {
+          token: otherErgo, method: 'POST',
+          body: { previewId: preview.previewId, selectedIds: ['recAAAAAAAAAAAAAA'] },
+        }), 409);
+        const result = expectStatus(await request('/api/airtable/apply-current-dossiers', {
+          token: admin, method: 'POST',
+          body: { previewId: preview.previewId, selectedIds: ['recDDDDDDDDDDDDDD'] },
+        }), 200);
+        assert.equal(result.data.created, 1);
+        assert.equal(mock.row('dossier').ergo_id, 'Test Owner');
+        assert.equal(mock.row('dossier').compte_anah, 'saisie conservée');
+      } finally {
+        reassignFixture = false;
+      }
+    });
+    await check('a changed dossier invalidates the preview before any selected write', async () => {
+      reassignFixture = true;
+      try {
+        mock.row('dossier').uuid_source = 'airtable:recAAAAAAAAAAAAAA';
+        mock.row('dossier').ergo_id = 'Test Owner';
+        const preview = expectStatus(await request('/api/airtable/preview-current-dossiers', {
+          token: admin, method: 'POST', body: {},
+        }), 200).data;
+        mock.row('dossier').ergo_id = 'Test Other';
+        expectStatus(await request('/api/airtable/apply-current-dossiers', {
+          token: admin, method: 'POST',
+          body: { previewId: preview.previewId, selectedIds: ['recAAAAAAAAAAAAAA'] },
+        }), 409);
+        assert.equal(mock.patches().length, 0);
       } finally {
         reassignFixture = false;
       }

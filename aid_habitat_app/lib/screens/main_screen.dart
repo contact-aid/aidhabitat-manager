@@ -12,6 +12,7 @@ import 'anah_screen.dart';
 import 'dashboard_screen.dart';
 import 'documents_screen.dart';
 import 'dossiers_list_screen.dart';
+import 'dossier_refresh_preview_dialog.dart';
 import 'dossier_screen.dart';
 import 'retirement_funds_combined_screen.dart';
 import 'settings_screen.dart';
@@ -371,7 +372,22 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 widget.currentUser.role == LocalUserRole.ergo ||
                 widget.currentUser.role == LocalUserRole.technician
           : widget.currentUser.ergoLabel?.trim().toLowerCase() == 'coralie';
-      if (shouldImportAirtable) {
+      if (kIsWeb && shouldImportAirtable) {
+        final preview = await _dataService.previewCurrentDossiersRefresh();
+        if (!mounted) return;
+        final selectedIds = await showDossierRefreshPreviewDialog(
+          context,
+          preview,
+        );
+        if (selectedIds == null) return;
+        if (selectedIds.isNotEmpty) {
+          final result = await _dataService.applyCurrentDossiersRefresh(
+            preview['previewId'].toString(),
+            selectedIds,
+          );
+          collectSkipped(result);
+        }
+      } else if (shouldImportAirtable) {
         var remaining = 1;
         for (var batch = 0; batch < 100 && remaining > 0; batch++) {
           final result = await _dataService.syncCurrentCoralieDossiers();
@@ -410,11 +426,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           ),
         ),
       );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Actualisation impossible. Vérifiez la connexion.'),
+        SnackBar(
+          content: Text(
+            error.toString().contains('(409)')
+                ? 'Les dossiers ont changé ou la prévisualisation a expiré. Relancez Actualiser.'
+                : 'Actualisation impossible. Vérifiez la connexion.',
+          ),
         ),
       );
     } finally {

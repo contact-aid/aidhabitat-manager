@@ -441,6 +441,48 @@ class NocodbApiClient {
 
   /// Imports a bounded batch of the current profile's Airtable dossiers on the
   /// API server. Airtable credentials never leave the server.
+  Future<Map<String, dynamic>> previewCurrentDossiersRefresh() async {
+    final response = await _client
+        .post(
+          Uri.parse('$_baseUrl/api/airtable/preview-current-dossiers'),
+          headers: _headers,
+          body: jsonEncode({}),
+        )
+        .timeout(const Duration(seconds: 120));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Prévisualisation impossible (${response.statusCode})');
+    }
+    final payload = jsonDecode(response.body);
+    if (payload is! Map || payload['data'] is! Map) {
+      throw Exception('Prévisualisation invalide');
+    }
+    return Map<String, dynamic>.from(payload['data'] as Map);
+  }
+
+  Future<Map<String, dynamic>> applyCurrentDossiersRefresh(
+    String previewId,
+    List<String> selectedIds,
+  ) async {
+    final response = await _client
+        .post(
+          Uri.parse('$_baseUrl/api/airtable/apply-current-dossiers'),
+          headers: _headers,
+          body: jsonEncode({
+            'previewId': previewId,
+            'selectedIds': selectedIds,
+          }),
+        )
+        .timeout(const Duration(seconds: 120));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Actualisation impossible (${response.statusCode})');
+    }
+    final payload = jsonDecode(response.body);
+    if (payload is! Map || payload['data'] is! Map) {
+      throw Exception('Réponse d’actualisation invalide');
+    }
+    return Map<String, dynamic>.from(payload['data'] as Map);
+  }
+
   Future<Map<String, dynamic>> syncCurrentCoralieDossiers() async {
     final response = await _client
         .post(

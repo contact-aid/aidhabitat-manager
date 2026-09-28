@@ -5766,6 +5766,159 @@ const combinedAirtableResult = (results) => ({
     ...skip, profile: item.profile,
   }))),
 });
+const airtableRefreshPreviews = new Map();
+const airtableRefreshPreviewTtlMs = 10 * 60 * 1000;
+const currentAirtableSnapshot = async (profiles) => {
+  const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
+  const [dossierRows, beneficiaryRows, baremeRows, housingRows, housingTypes, occupationTypes] = await Promise.all([
+    queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
+    queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
+    queryAll(TABLES.baremesAnah, { fields: FIELD_SETS.baremesAnah }),
+    queryAll(TABLES.logements, { fields: FIELD_SETS.logements }),
+    queryAll(TABLES.typeDeLogement, { fields: FIELD_SETS.referencesLibelle }),
+    queryAll(TABLES.statutOccupation, { fields: FIELD_SETS.referencesLibelle }),
+  ]);
+  const sourceRowsByProfile = [];
+  for (const profile of profiles) {
+    sourceRowsByProfile.push({ profile, sourceRows: await readAssignedAirtableDossiers(read, profile) });
+  }
+  return { dossierRows, beneficiaryRows, baremeRows, housingRows,
+    housingTypes, occupationTypes, sourceRowsByProfile };
+};
+const currentAirtableRefreshPreview = async (snapshot) => {
+  const dossierChanges = [];
+  const noteChanges = [];
+  const skipped = [];
+  for (const { profile, sourceRows } of snapshot.sourceRowsByProfile) {
+    const dossierPlan = await syncCurrentProfileDossiers({
+      ergoLabel: profile, sourceRows, ...snapshot, dryRun: true, enhancedWeb: true,
+    });
+    dossierChanges.push(...dossierPlan.changes);
+    skipped.push(...dossierPlan.skipped.map((item) => ({ ...item, profile })));
+    const pendingCreateIds = new Set(dossierPlan.changes
+      .filter((item) => item.kind === 'create').map((item) => item.id));
+    const pendingReassignIds = new Set(dossierPlan.changes
+      .filter((item) => item.fields.dossier.ergo_id).map((item) => item.id));
+    const notePlan = await importCurrentProfileNotes({
+      ergoLabel: profile, sourceRows, ...snapshot, dryRun: true,
+      pendingCreateIds, pendingReassignIds,
+      listNotePages: (patientId) => mobileSyncStore.listNotePagesByPatient(patientId),
+    });
+    noteChanges.push(...notePlan.changes);
+    skipped.push(...notePlan.skipped.map((item) => ({ ...item, profile })));
+  }
+  const byId = new Map();
+  for (const change of [...dossierChanges, ...noteChanges]) {
+    const key = `${change.profile}:${change.id}`;
+    const item = byId.get(key) ?? { id: change.id, profile: change.profile,
+      name: change.name, kind: 'update', fields: {} };
+    if (change.kind !== 'note') item.kind = change.kind;
+    if (change.previousOwner) item.previousOwner = change.previousOwner;
+    Object.assign(item.fields, change.fields);
+    byId.set(key, item);
+  }
+  return {
+    items: [...byId.values()].sort((a, b) =>
+      a.profile.localeCompare(b.profile, 'fr') || a.id.localeCompare(b.id)),
+    skipped: skipped.sort((a, b) =>
+      a.profile.localeCompare(b.profile, 'fr') || a.id.localeCompare(b.id)),
+  };
+};
+const airtableRefreshPreviewSignature = (preview) => crypto.createHash('sha256')
+  .update(JSON.stringify(preview)).digest('hex');
+
+app.post('/api/airtable/preview-current-dossiers', requireAuth, async (req, res, next) => {
+  try {
+    const profiles = await airtableSyncProfiles(req.appUser);
+    if (!process.env.AIRTABLE_TOKEN) throw httpError(503, 'Lecture Airtable indisponible');
+    const preview = await serializeAirtableSync('all-profiles', async () =>
+      currentAirtableRefreshPreview(await currentAirtableSnapshot(profiles)));
+    for (const [id, entry] of airtableRefreshPreviews) {
+      if (entry.expiresAt < Date.now()) airtableRefreshPreviews.delete(id);
+    }
+    const previewId = crypto.randomUUID();
+    airtableRefreshPreviews.set(previewId, {
+      owner: req.appUser.email, profiles, expiresAt: Date.now() + airtableRefreshPreviewTtlMs,
+      signature: airtableRefreshPreviewSignature(preview),
+      itemIds: preview.items.map((item) => item.id),
+    });
+    res.json({ success: true, error: null, data: { previewId, ...preview } });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/airtable/apply-current-dossiers', requireAuth, async (req, res, next) => {
+  try {
+    const previewId = stringValue(req.body?.previewId).trim();
+    const selectedIds = req.body?.selectedIds;
+    const entry = airtableRefreshPreviews.get(previewId);
+    if (!entry || entry.expiresAt < Date.now() || entry.owner !== req.appUser.email) {
+      throw httpError(409, 'Prévisualisation expirée. Actualisez à nouveau.');
+    }
+    if (!Array.isArray(selectedIds) || selectedIds.some((id) =>
+      typeof id !== 'string' || !entry.itemIds.includes(id)) || new Set(selectedIds).size !== selectedIds.length) {
+      throw httpError(400, 'Sélection de dossiers invalide');
+    }
+    const profiles = await airtableSyncProfiles(req.appUser);
+    if (JSON.stringify(profiles) !== JSON.stringify(entry.profiles)) {
+      throw httpError(409, 'Les profils ont changé. Actualisez à nouveau.');
+    }
+    if (!process.env.AIRTABLE_TOKEN) throw httpError(503, 'Lecture Airtable indisponible');
+    const result = await serializeAirtableSync('all-profiles', async () => {
+      const snapshot = await currentAirtableSnapshot(profiles);
+      const freshPreview = await currentAirtableRefreshPreview(snapshot);
+      if (airtableRefreshPreviewSignature(freshPreview) !== entry.signature) {
+        throw httpError(409, 'Les dossiers ont changé. Actualisez à nouveau.');
+      }
+      const selected = new Set(selectedIds);
+      const updateFromAirtable = async (tableId, row, fields) => {
+        if (!conditionalWriter) {
+          await updateRecord(tableId, row.id, fields);
+          return;
+        }
+        const write = await conditionalWriter({
+          tableId, recordId: Number(row.id),
+          expectedRevision: stringValue(field(row, SYNC_REVISION_FIELD)),
+          writeId: crypto.randomUUID(), fields,
+        });
+        if (write.status !== 'applied') {
+          throw httpError(409, 'Le dossier a changé pendant l’actualisation. Réessayez.');
+        }
+      };
+      const results = [];
+      for (const { profile, sourceRows } of snapshot.sourceRowsByProfile) {
+        const profileResult = await syncCurrentProfileDossiers({
+          ergoLabel: profile, sourceRows, ...snapshot,
+          selectedIds: selected, maxChanges: Number.MAX_SAFE_INTEGER, enhancedWeb: true,
+          createBeneficiary: (fields) => createRecord(TABLES.beneficiaires, fields),
+          createDossier: (fields) => createRecord(TABLES.dossiers, fields),
+          updateBeneficiary: (row, fields) => updateFromAirtable(TABLES.beneficiaires, row, fields),
+          updateDossier: (row, fields) => updateFromAirtable(TABLES.dossiers, row, fields),
+          createHousing: (fields) => createRecord(TABLES.logements, fields),
+          updateHousing: (row, fields) => updateFromAirtable(TABLES.logements, row, fields),
+        });
+        results.push({ profile, ...profileResult });
+      }
+      const [dossierRows, beneficiaryRows] = await Promise.all([
+        queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
+        queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
+      ]);
+      for (const { profile, sourceRows } of snapshot.sourceRowsByProfile) {
+        const notesResult = await importCurrentProfileNotes({
+          ergoLabel: profile, sourceRows, dossierRows, beneficiaryRows,
+          selectedIds: selected, maxChanges: Number.MAX_SAFE_INTEGER,
+          listNotePages: (patientId) => mobileSyncStore.listNotePagesByPatient(patientId),
+          upsertNotePage: (payload) => mobileSyncStore.upsertNotePage(payload),
+        });
+        const profileResult = results.find((item) => item.profile === profile);
+        profileResult.imported = notesResult.imported;
+        profileResult.skipped.push(...notesResult.skipped);
+      }
+      return combinedAirtableResult(results);
+    });
+    airtableRefreshPreviews.delete(previewId);
+    res.json({ success: true, error: null, data: result });
+  } catch (error) { next(error); }
+});
 app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, next) => {
   try {
     const profiles = await airtableSyncProfiles(req.appUser);

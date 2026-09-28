@@ -41,7 +41,7 @@ export async function syncCurrentProfileDossiers({
   sourceRows, dossierRows, beneficiaryRows, housingRows = [], housingTypes = [],
   occupationTypes = [], baremeRows = [], createBeneficiary, createDossier,
   updateBeneficiary, updateDossier, createHousing, updateHousing,
-  maxChanges = 5, enhancedWeb = true,
+  maxChanges = 5, enhancedWeb = true, dryRun = false, selectedIds = null,
 }) {
   if (!ergoLabel?.trim()) throw new TypeError('Profil intervenant requis');
   const eligible = sourceRows.filter(isCurrentAdaptationDossier)
@@ -60,6 +60,7 @@ export async function syncCurrentProfileDossiers({
   const skipped = [];
 
   for (const source of eligible) {
+    if (selectedIds && !selectedIds.has(source.airtableRecordId)) continue;
     const uuid = `airtable:${source.airtableRecordId}`;
     const existingDossier = dossiersByUuid.get(uuid);
     if (!existingDossier) {
@@ -104,6 +105,25 @@ export async function syncCurrentProfileDossiers({
     }
   }
 
+  const changes = operations.map((operation) => ({
+    id: operation.source.airtableRecordId,
+    profile: ergoLabel,
+    name: [operation.source.beneficiary.prenom, operation.source.beneficiary.nom]
+      .filter(Boolean).join(' ') || operation.source.airtableDossierLabel || operation.source.airtableRecordId,
+    kind: operation.kind,
+    previousOwner: operation.kind === 'update' && operation.dossierPatch.ergo_id
+      ? normalized(value(operation.existingDossier, 'ergo_id')) : '',
+    fields: operation.kind === 'create'
+      ? { beneficiary: operation.source.beneficiary,
+        dossier: { ...operation.source.dossier,
+          status: operation.source.hasAirtableReport ? 'En cours' : 'À visiter' },
+        housing: enhancedWeb ? housingPrefill(operation.source, housingTypes) : {} }
+      : { beneficiary: operation.beneficiaryPatch, dossier: operation.dossierPatch,
+        housing: operation.housingPatch },
+  }));
+  if (dryRun) return { eligible: eligible.length, created: 0, updated: 0,
+    unchanged: eligible.length - operations.length - skipped.length,
+    remaining: 0, skipped, changes };
   let created = 0;
   let updated = 0;
   for (const operation of operations.slice(0, maxChanges)) {
@@ -168,7 +188,7 @@ export async function syncCurrentProfileDossiers({
     updated,
     unchanged: eligible.length - operations.length - skipped.length,
     remaining: Math.max(0, operations.length - maxChanges),
-    skipped,
+    skipped, changes,
   };
 }
 

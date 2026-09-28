@@ -15,7 +15,8 @@ export const importedNoteId = (airtableRecordId) => {
 export async function importCurrentProfileNotes({
   ergoLabel,
   sourceRows, dossierRows, beneficiaryRows, listNotePages, upsertNotePage,
-  maxChanges = 5,
+  maxChanges = 5, dryRun = false, selectedIds = null, pendingCreateIds = null,
+  pendingReassignIds = null,
 }) {
   const dossiers = new Map(dossierRows.map((row) => [plain(value(row, 'uuid_source')), row]));
   const beneficiaries = new Map(beneficiaryRows.map((row) => [String(row.id), row]));
@@ -27,10 +28,18 @@ export async function importCurrentProfileNotes({
     .map((row) => projectAirtableDossier(row));
 
   for (const source of eligible) {
+    if (selectedIds && !selectedIds.has(source.airtableRecordId)) continue;
     if (!plain(source.workDescription)) continue;
     const dossierId = `airtable:${source.airtableRecordId}`;
     const dossier = dossiers.get(dossierId);
-    if (!dossier || plain(value(dossier, 'ergo_id')) !== ergoLabel) {
+    if (!dossier && dryRun && pendingCreateIds?.has(source.airtableRecordId)) {
+      operations.push({ sourceId: source.airtableRecordId, dossierId,
+        displayName: [source.beneficiary.prenom, source.beneficiary.nom].filter(Boolean).join(' '),
+        textContent: plain(source.workDescription), pendingCreate: true });
+      continue;
+    }
+    if (!dossier || (plain(value(dossier, 'ergo_id')) !== ergoLabel
+      && !(dryRun && pendingReassignIds?.has(source.airtableRecordId)))) {
       skipped.push({ id: source.airtableRecordId, reason: 'dossier du profil introuvable' });
       continue;
     }
@@ -65,7 +74,9 @@ export async function importCurrentProfileNotes({
     }
     const firstName = plain(value(beneficiary, 'prenom'));
     const lastName = plain(value(beneficiary, 'nom'));
-    operations.push({ noteId: firstPage?.id ?? importedNoteId(source.airtableRecordId),
+    operations.push({ sourceId: source.airtableRecordId,
+      displayName: [firstName, lastName].filter(Boolean).join(' '),
+      noteId: firstPage?.id ?? importedNoteId(source.airtableRecordId),
       patientId, dossierId, pageNumber: 0,
       textContent: desiredText,
       drawingJson: JSON.stringify({ ...drawing, text: desiredText }),
@@ -75,6 +86,11 @@ export async function importCurrentProfileNotes({
       firstName, lastName });
   }
 
+  const changes = operations.map((item) => ({ id: item.sourceId,
+    profile: ergoLabel, name: item.displayName, kind: 'note',
+    fields: { note: item.textContent } }));
+  if (dryRun) return { eligible: eligible.length, imported: 0,
+    alreadyPresent, remaining: 0, skipped, changes };
   for (const item of operations.slice(0, maxChanges)) {
     await upsertNotePage({
       notePageId: item.noteId,
@@ -93,7 +109,7 @@ export async function importCurrentProfileNotes({
     });
   }
   return { eligible: eligible.length, imported: Math.min(operations.length, maxChanges),
-    alreadyPresent, remaining: Math.max(0, operations.length - maxChanges), skipped };
+    alreadyPresent, remaining: Math.max(0, operations.length - maxChanges), skipped, changes };
 }
 
 export const importCurrentCoralieNotes = (options) =>
