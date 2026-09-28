@@ -132,18 +132,10 @@ class _RecommendationsTabState extends State<RecommendationsTab>
   @override
   void dispose() {
     widget.controller?._detach(_flushPendingSave);
-    // Flush immédiat si un save était en attente (debounce non tiré).
-    // Sinon, toute modif dans les 2 dernières secondes avant fermeture
-    // de l'onglet / app était perdue.
-    final hadPending = _saveDebounce?.isActive ?? false;
     _saveDebounce?.cancel();
-    if (hadPending) {
-      // Fire-and-forget : on écrit en SQLite local + enqueue sync_op
-      // via le repository. Pas de setState (le widget se démonte).
-      widget.repository
-          .saveVisitRecommendations(widget.dossier.id, _items)
-          .catchError((_) {});
-    }
+    // Reuse the serial drain. A direct save here can race with an older
+    // in-flight write and leave the older recommendation list in SQLite.
+    if (_hasPendingSave) unawaited(_save().catchError((_) {}));
     super.dispose();
   }
 
@@ -231,7 +223,6 @@ class _RecommendationsTabState extends State<RecommendationsTab>
   }
 
   Future<void> _save() {
-    if (!mounted) return Future<void>.value();
     final inFlight = _saveInFlight;
     if (inFlight != null) return inFlight;
     _saveDebounce?.cancel();
@@ -242,8 +233,9 @@ class _RecommendationsTabState extends State<RecommendationsTab>
 
   Future<void> _drainPendingSaves() async {
     // Pas de setState(_saving) — voir dossier_screen.dart.
+    var failed = false;
     try {
-      while (mounted && _hasPendingSave) {
+      while (_hasPendingSave) {
         final generation = _saveGeneration;
         await widget.repository.saveVisitRecommendations(
           widget.dossier.id,
@@ -253,9 +245,12 @@ class _RecommendationsTabState extends State<RecommendationsTab>
           _hasPendingSave = false;
         }
       }
+    } catch (_) {
+      failed = true;
+      rethrow;
     } finally {
       _saveInFlight = null;
-      if (mounted && _hasPendingSave) {
+      if (!failed && _hasPendingSave) {
         unawaited(_save());
       }
     }

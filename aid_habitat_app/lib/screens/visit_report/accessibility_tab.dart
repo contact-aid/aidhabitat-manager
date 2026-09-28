@@ -399,6 +399,10 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   void dispose() {
     widget.controller?._detach(_flushPendingSave);
     _saveTimer?.cancel();
+    // A last edit may still be inside the debounce window. Keep draining it
+    // after this tab leaves the tree so reopening the visit reads the same
+    // housing values that were visible before navigation.
+    if (_hasPendingSave) unawaited(_save());
     _scrollController.dispose();
     for (final c in _customRoomCtrls.values) {
       c.dispose();
@@ -550,10 +554,6 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     if (_annexes.contains('Garage')) _motorisationOrder.add('Garage');
     if (_portail) _motorisationOrder.add('Portail');
 
-    // Répare également les dossiers plus anciens dont la pièce avait déjà
-    // été retirée avant que le nettoyage des diagnostics soit disponible.
-    await _pruneSanitaryRooms();
-
     if (mounted) setState(() => _loaded = true);
   }
 
@@ -596,7 +596,6 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   }
 
   Future<void> _save() {
-    if (!mounted) return Future<void>.value();
     final inFlight = _saveInFlight;
     if (inFlight != null) return inFlight;
     _saveTimer?.cancel();
@@ -616,7 +615,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     // déjà silencieusement le save async.
     var stoppedAfterFailure = false;
     try {
-      while (mounted && _hasPendingSave) {
+      while (_hasPendingSave) {
         final generation = _saveGeneration;
         try {
           await _saveImpl();
@@ -632,7 +631,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
       }
     } finally {
       _saveInFlight = null;
-      if (!stoppedAfterFailure && mounted && _hasPendingSave) {
+      if (!stoppedAfterFailure && _hasPendingSave) {
         unawaited(_save());
       }
     }
@@ -781,7 +780,6 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   }
 
   Future<void> _saveImpl() async {
-    if (!mounted) return;
     // Pas de setState(_saving) — voir dossier_screen.dart pour le
     // rationale (rebuild lourd inutile, indicateur visuel toujours vide).
     final nextSnapshot = _buildHousingSaveMap();
@@ -811,7 +809,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
         _dirtyHousingKeys.remove(key);
       }
     }
-    widget.onHousingChanged?.call();
+    if (mounted) widget.onHousingChanged?.call();
   }
 
   Future<void> _pruneSanitaryRooms() async {

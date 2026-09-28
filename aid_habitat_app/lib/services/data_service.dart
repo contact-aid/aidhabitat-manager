@@ -10,6 +10,7 @@ import '../models/dossier_refresh_phase.dart';
 import '../models/visit_report_categories.dart';
 import 'access_members_repository.dart';
 import 'auth_service.dart';
+import 'connectivity_service.dart';
 import 'dossier_repository.dart';
 import 'document_repository.dart';
 import 'note_repository.dart';
@@ -1321,6 +1322,12 @@ class DataService {
   /// donc inutile et pouvait laisser toute l'app vide si le réseau ou la
   /// session échouait entre les deux étapes.
   Future<void> forceResyncFromRemote() async {
+    // A manual remote refresh cannot make progress in airplane mode. Return
+    // before changing failed queue entries or waiting 30 seconds; the normal
+    // sync engine will send them when connectivity returns.
+    if (ConnectivityService().isOffline) {
+      throw const ForceResyncUnavailableException();
+    }
     var pending = await _syncRepository.countPendingOperations();
     if (pending > 0) {
       final engine = SyncEngine();

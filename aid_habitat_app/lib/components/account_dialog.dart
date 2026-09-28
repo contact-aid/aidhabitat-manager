@@ -75,6 +75,17 @@ class _AccountDialogState extends State<AccountDialog> {
   /// afin de ne jamais perdre une saisie ou une génération PDF différée.
   Future<void> _handleForceResync() async {
     if (_isResyncing) return;
+    if (ConnectivityService().isOffline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Hors ligne : les sauvegardes locales seront envoyées au retour '
+            'de la connexion. La relecture du serveur attendra ensuite.',
+          ),
+        ),
+      );
+      return;
+    }
     final confirm = await showAppConfirmationDialog<bool>(
       context: context,
       title: 'Forcer la synchronisation ?',
@@ -545,35 +556,56 @@ class _AccountDialogState extends State<AccountDialog> {
               // Quick actions :
               //   • Forcer la sync — re-pull NocoDB sans effacer le cache.
               //     Refus automatique si des opérations locales attendent.
-              //   • Se déconnecter — purge la session ET le cache
-              //     local (cf. `AuthService.signOut`).
+              //   • Se déconnecter — retire la session sans effacer le
+              //     cache local ni les sauvegardes en attente.
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: _isUploadingPhoto || _isResyncing
-                        ? null
-                        : _handleForceResync,
-                    icon: _isResyncing
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                kBrandPurple,
-                              ),
+                  StreamBuilder<bool>(
+                    stream: ConnectivityService().offlineStream,
+                    initialData: ConnectivityService().isOffline,
+                    builder: (context, snapshot) {
+                      final offline = snapshot.data ?? true;
+                      return Tooltip(
+                        message: offline
+                            ? 'Connexion Internet requise'
+                            : 'Relire les données du serveur',
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              offline || _isUploadingPhoto || _isResyncing
+                              ? null
+                              : _handleForceResync,
+                          icon: _isResyncing
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      kBrandPurple,
+                                    ),
+                                  ),
+                                )
+                              : const Icon(LucideIcons.refreshCcw, size: 16),
+                          label: Text(
+                            _isResyncing
+                                ? 'Synchronisation…'
+                                : 'Forcer la sync',
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: kBrandPurple,
+                            disabledForegroundColor: const Color(0xFF6B7280),
+                            disabledBackgroundColor: const Color(0xFFF3F4F6),
+                            side: BorderSide(
+                              color: offline
+                                  ? const Color(0xFFD1D5DB)
+                                  : const Color(0xFFD8CFE0),
                             ),
-                          )
-                        : const Icon(LucideIcons.refreshCcw, size: 16),
-                    label: Text(
-                      _isResyncing ? 'Synchronisation…' : 'Forcer la sync',
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: kBrandPurple,
-                      side: const BorderSide(color: Color(0xFFD8CFE0)),
-                    ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                   OutlinedButton.icon(
                     onPressed: _isUploadingPhoto || _isResyncing
