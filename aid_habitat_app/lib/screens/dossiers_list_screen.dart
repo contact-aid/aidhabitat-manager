@@ -401,6 +401,8 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF866B9A),
           foregroundColor: Colors.white,
+          disabledBackgroundColor: const Color(0xFFE5E7EB),
+          disabledForegroundColor: const Color(0xFF6B7280),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 17),
           elevation: 0,
           shape: RoundedRectangleBorder(
@@ -416,7 +418,11 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
             : const Icon(Icons.refresh, size: 20),
         label: Text(
           widget.isRefreshingDossiers ? 'Actualisation…' : 'Actualiser',
-          style: kCtaTextStyle.copyWith(color: Colors.white),
+          style: kCtaTextStyle.copyWith(
+            color: widget.isOnline && !widget.isRefreshingDossiers
+                ? Colors.white
+                : const Color(0xFF6B7280),
+          ),
         ),
       ),
     );

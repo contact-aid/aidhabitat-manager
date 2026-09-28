@@ -27,20 +27,21 @@ sur l'iPad, son stockage réel et son réseau.
    Contrôler les dix onglets, les deux pages de dessin et l'ouverture locale
    de la photo et du document. Aucune valeur initiale ni nouvelle saisie ne
    doit disparaître.
-4. Cliquer « Générer » : une génération différée doit rejoindre la file. Le
-   PDF n'est pas disponible tant que le serveur ne l'a pas produit.
-5. « Actualiser » doit rester indisponible. « Forcer la sync » doit expliquer
-   immédiatement qu'il faut attendre le réseau, sans vider le cache.
+4. Vérifier que « Actualiser », « Générer » et « Forcer la sync » sont gris et
+   non cliquables. Aucun de ces boutons ne doit ajouter une opération à la
+   file locale. Les sauvegardes des saisies restent disponibles.
 
 ## Reconnexion
 
 1. Rétablir la connexion sans forcer la synchronisation. Observer l'envoi des
    sauvegardes locales ; ne pas les abandonner en cas de conflit.
+   Les trois boutons doivent redevenir actifs lorsque la connexion revient.
 2. Vérifier que les opérations en attente arrivent à zéro, puis relire le
    dossier dans la webapp et, pour la recette technique, via l'API/NocoDB.
    Le compteur zéro sur l'iPad ne certifie pas à lui seul la relecture web.
-3. Vérifier toutes les valeurs, notes, dessins, photos, préconisations,
-   documents et le rapport PDF. Comparer aussi les valeurs initiales pour
+3. Vérifier toutes les valeurs, notes, dessins, photos, préconisations et
+   documents. Tester « Générer » en ligne, puis vérifier le rapport PDF.
+   Comparer aussi les valeurs initiales pour
    détecter tout effacement ou retour à une ancienne version.
 4. Refaire un cycle court avec Wi-Fi connecté mais API indisponible : la file
    doit rester intacte, puis repartir lorsque l'API redevient accessible.

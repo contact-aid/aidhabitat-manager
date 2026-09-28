@@ -1406,47 +1406,66 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// 2026-05-13). Pill mauve-500 avec label texte + icône download,
   /// hauteur 36 px alignée sur les autres badges du header.
   Widget _buildGenerateReportButton() {
-    final disabled = _isGeneratingReport;
-    return Tooltip(
-      message: disabled ? 'Génération en cours…' : 'Générer le rapport',
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: disabled ? null : _generateReport,
-          borderRadius: BorderRadius.circular(999),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            height: 36,
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            decoration: BoxDecoration(
-              color: disabled
-                  ? const Color(0xFFA98DBE) // mauve-400 (désactivé)
-                  : kBrandPurple, // mauve-500
+    return StreamBuilder<bool>(
+      stream: ConnectivityService().offlineStream,
+      initialData: ConnectivityService().isOffline,
+      builder: (context, snapshot) {
+        final offline = snapshot.data ?? true;
+        final disabled = offline || _isGeneratingReport;
+        return Tooltip(
+          message: offline
+              ? 'Connexion Internet requise'
+              : _isGeneratingReport
+              ? 'Génération en cours…'
+              : 'Générer le rapport',
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: disabled ? null : _generateReport,
               borderRadius: BorderRadius.circular(999),
-            ),
-            alignment: Alignment.center,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (disabled)
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                    ),
-                  )
-                else
-                  Text(
-                    'Générer',
-                    style: kCtaTextStyle.copyWith(color: Colors.white),
-                  ),
-              ],
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                decoration: BoxDecoration(
+                  color: offline
+                      ? const Color(0xFFE5E7EB)
+                      : disabled
+                      ? const Color(0xFFA98DBE) // mauve-400 (désactivé)
+                      : kBrandPurple, // mauve-500
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                alignment: Alignment.center,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isGeneratingReport && !offline)
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
+                        ),
+                      )
+                    else
+                      Text(
+                        'Générer',
+                        style: kCtaTextStyle.copyWith(
+                          color: offline
+                              ? const Color(0xFF6B7280)
+                              : Colors.white,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1458,7 +1477,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// dossier, accessible depuis l'écran Documents pour preview /
   /// téléchargement / suppression.
   Future<void> _generateReport() async {
-    if (_isGeneratingReport) return;
+    if (_isGeneratingReport || ConnectivityService().isOffline) return;
     // Bloque aussi si une autre génération tourne (même autre dossier)
     // pour éviter de saturer Vercel avec 2-3 PDFs en parallèle (~30 s
     // CPU chacun). Le bouton reste cliquable mais le user verra le
