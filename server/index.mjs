@@ -23,6 +23,7 @@ import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
 import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
+import { syncCurrentCoralieDossiers } from './airtableDossierSync.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
 } from './resyncLegacyNames.mjs';
@@ -5697,8 +5698,7 @@ app.get('/api/dossiers', requireAuth, async (req, res, next) => {
   }
 });
 
-// Explicit read-only Airtable source for the "Actualiser" action. Exact
-// airtable:rec... NocoDB UUIDs identify imported dossiers; no write occurs.
+// Airtable itself is read only. Exact airtable:rec... UUIDs identify dossiers.
 app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next) => {
   try {
     const fullName = stringValue(req.appUser?.ergoLabel).trim();
@@ -5712,7 +5712,9 @@ app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next)
     }
     const firstName = fullName.split(/\s+/)[0];
     const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
-    const records = (await read(firstName, { fullName }))
+    const records = (await read(firstName, {
+      fullName: fullName === 'Coralie' ? '' : fullName,
+    }))
       .map(projectAirtableDossier);
     const dossierRows = await queryAll(TABLES.dossiers, {
       fields: ['uuid_source', 'patient_id', 'ergo_id'],
@@ -5727,6 +5729,52 @@ app.get('/api/airtable/adaptation-dossiers', requireAuth, async (req, res, next)
       scopedIds.has(stringValue(field(row, 'uuid_source'))));
     const linked = resolveAirtableLinks(records, scopedRows);
     res.json({ success: true, error: null, data: { records: linked } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const serializeCoralieAirtableSync = createKeyedSerialExecutor();
+app.post('/api/airtable/sync-current-dossiers', requireAuth, async (req, res, next) => {
+  try {
+    if (req.appUser?.role !== 'ERGO' || stringValue(req.appUser.ergoLabel).trim() !== 'Coralie') {
+      res.status(403).json({ success: false, error: 'Profil Coralie requis' });
+      return;
+    }
+    if (!process.env.AIRTABLE_TOKEN) {
+      res.status(503).json({ success: false, error: 'Lecture Airtable indisponible' });
+      return;
+    }
+    const result = await serializeCoralieAirtableSync('Coralie', async () => {
+      const read = createAirtableAdaptationReader({ token: process.env.AIRTABLE_TOKEN });
+      const [sourceRows, dossierRows, beneficiaryRows] = await Promise.all([
+        read('Coralie'),
+        queryAll(TABLES.dossiers, { fields: FIELD_SETS.dossiers }),
+        queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),
+      ]);
+      const updateFromAirtable = async (tableId, row, fields) => {
+        if (!conditionalWriter) {
+          await updateRecord(tableId, row.id, fields);
+          return;
+        }
+        const result = await conditionalWriter({
+          tableId, recordId: Number(row.id),
+          expectedRevision: stringValue(field(row, SYNC_REVISION_FIELD)),
+          writeId: crypto.randomUUID(), fields,
+        });
+        if (result.status !== 'applied') {
+          throw httpError(409, 'Le dossier a changé pendant l’actualisation. Réessayez.');
+        }
+      };
+      return syncCurrentCoralieDossiers({
+        sourceRows, dossierRows, beneficiaryRows,
+        createBeneficiary: (fields) => createRecord(TABLES.beneficiaires, fields),
+        createDossier: (fields) => createRecord(TABLES.dossiers, fields),
+        updateBeneficiary: (row, fields) => updateFromAirtable(TABLES.beneficiaires, row, fields),
+        updateDossier: (row, fields) => updateFromAirtable(TABLES.dossiers, row, fields),
+      });
+    });
+    res.json({ success: true, error: null, data: result });
   } catch (error) {
     next(error);
   }

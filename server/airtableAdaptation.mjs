@@ -1,5 +1,5 @@
-// Read-only Airtable source for the explicit "Actualiser" action. The token
-// stays on the API server; neither Flutter nor NocoDB receives it.
+// Airtable is read only. The authenticated API may copy a small, explicit
+// set of fields into NocoDB when the user refreshes their dossiers.
 export const AIRTABLE_ADAPTATION = Object.freeze({
   baseId: 'appiLdUPtCWODdJ1a',
   dossiersTableId: 'tbl7qYd2ZKgwQVNU1',
@@ -10,6 +10,7 @@ const dossierFields = [
   'Dossier ID', 'Adaptation ou énergie', 'Intervenant couleur', 'Nom intervenant',
   'No Client', 'Commentaires', 'Date du RDV avec heure',
   'Nature des travaux conca', 'Commune', 'Communauté de communes',
+  'Annulé ?',
 ];
 const clientFields = [
   'Prénom', 'Nom', 'Téléphone', 'Adresse mail', 'N° et rue',
@@ -141,6 +142,16 @@ export const assignedAdaptationFormula = (intervenant) => {
   return `AND(FIND("adaptation",LOWER(ARRAYJOIN({Adaptation ou énergie}))),FIND(${quoted},LOWER(ARRAYJOIN({Intervenant couleur}))))`;
 };
 
+// The first import is deliberately limited to Coralie's current cohort.
+// A later migration can widen this date once older dossiers have been reviewed.
+export function isCurrentCoralieDossier({ dossier }) {
+  const fields = dossier?.fields || {};
+  const visitDate = first(fields['Date du RDV avec heure']);
+  return /^\d{4}-\d{2}-\d{2}/.test(visitDate)
+    && visitDate.slice(0, 10) >= '2026-08-01'
+    && normalized(first(fields['Annulé ?'])) === 'non';
+}
+
 const isAssignedAdaptation = (fields, intervenant, fullName) =>
   labels(fields['Adaptation ou énergie']).some((label) => normalized(label) === 'adaptation')
   && labels(fields['Intervenant couleur']).some((label) =>
@@ -167,12 +178,20 @@ export function createAirtableAdaptationReader({
       url.searchParams.set('filterByFormula', formula);
       for (const fieldName of fields) url.searchParams.append('fields[]', fieldName);
       if (offset) url.searchParams.set('offset', offset);
-      const response = await fetchImpl(url, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-        redirect: 'error',
-        signal: AbortSignal.timeout(15000),
-      });
+      let response;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        response = await fetchImpl(url, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+          redirect: 'error',
+          signal: AbortSignal.timeout(15000),
+        });
+        if (response.status !== 429 || attempt === 3) break;
+        const retrySeconds = Number(response.headers.get('retry-after'));
+        const delayMs = Number.isFinite(retrySeconds) && retrySeconds > 0
+          ? Math.min(5000, retrySeconds * 1000) : 1000;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
       if (!response.ok) throw new Error(`Airtable HTTP ${response.status}`);
       const body = await response.json();
       if (!Array.isArray(body.records)) throw new Error('Réponse Airtable invalide');

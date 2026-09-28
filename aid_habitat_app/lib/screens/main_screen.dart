@@ -354,11 +354,28 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       final sessionReady = await _authService.resumePendingRemoteSession();
       if (!sessionReady) throw StateError('Session distante indisponible');
       if (!mounted || _isOffline || ConnectivityService().isOffline) return;
+      if (widget.currentUser.ergoLabel?.trim().toLowerCase() == 'coralie') {
+        var remaining = 1;
+        for (var batch = 0; batch < 10 && remaining > 0; batch++) {
+          final result = await _dataService.syncCurrentCoralieDossiers();
+          if ((result['skipped'] as List?)?.isNotEmpty ?? false) {
+            throw StateError(
+              'Certains dossiers Airtable n’ont pas pu être importés',
+            );
+          }
+          remaining = (result['remaining'] as num?)?.toInt() ?? 0;
+        }
+        if (remaining > 0) {
+          throw StateError('Actualisation Airtable incomplète');
+        }
+      }
       // GET /api/dossiers is scoped by the authenticated server session:
       // only ADMIN receives every dossier; other profiles receive their own.
       final refreshed = await _dataService.refreshDossierRecordsFromRemote();
       if (!refreshed) throw StateError('Actualisation distante impossible');
-      await _refreshDossiers();
+      if (!await _refreshDossiers()) {
+        throw StateError('Lecture locale des dossiers impossible');
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,

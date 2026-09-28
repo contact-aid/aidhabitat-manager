@@ -53,11 +53,20 @@ globalThis.fetch = (input, init = {}) => {
           'Intervenant couleur': ['Test'], 'Nom intervenant': ['Test Other'],
           'No Client': [],
         } },
+        { id: 'recDDDDDDDDDDDDDD', fields: {
+          'Dossier ID': 'FICTIF-CORALIE', 'Adaptation ou énergie': ['Adaptation'],
+          'Intervenant couleur': ['Coralie'], 'Nom intervenant': ['Coralie DEMENAIS'],
+          'Date du RDV avec heure': '2026-09-29T08:00:00.000Z', 'Annulé ?': 'NON',
+          'No Client': ['recEEEEEEEEEEEEEE'],
+        } },
       ] }));
     }
     return Promise.resolve(Response.json({ records: [
       { id: 'recCCCCCCCCCCCCCC', fields: {
         'Prénom': 'Camille', Nom: 'Fictif', 'Nb du foyer': 2,
+      } },
+      { id: 'recEEEEEEEEEEEEEE', fields: {
+        'Prénom': 'Coralie', Nom: 'Fictive', 'Nb du foyer': 1,
       } },
     ] }));
   }
@@ -127,6 +136,7 @@ try {
   const clientA = await login(ownerEmail);
   const clientB = await login(ownerEmail);
   const otherErgo = await login(otherEmail);
+  const coralie = await login('c.demenais@aidhabitat.fr');
   assert.deepEqual(mock.violations, [], 'Startup and real logins must use only known REST calls');
 
   await check('wrong password rejected by real login', async () => {
@@ -150,6 +160,34 @@ try {
       assert(airtableCalls.length === 2);
       assert(airtableCalls.every((call) => call.init.method === 'GET'));
       assert.equal(mock.patches().length, 0);
+    });
+    await check('Coralie refresh imports only her recent Airtable dossier and is idempotent', async () => {
+      expectStatus(await request('/api/airtable/sync-current-dossiers', {
+        token: otherErgo, method: 'POST',
+      }), 403);
+      const first = expectStatus(await request('/api/airtable/sync-current-dossiers', {
+        token: coralie, method: 'POST',
+      }), 200);
+      assert.equal(first.data.created, 1);
+      const second = expectStatus(await request('/api/airtable/sync-current-dossiers', {
+        token: coralie, method: 'POST',
+      }), 200);
+      assert.equal(second.data.created, 0);
+      const dossiers = expectStatus(await request('/api/dossiers', { token: coralie }), 200);
+      assert(dossiers.some((item) => item.id === 'airtable:recDDDDDDDDDDDDDD'));
+    });
+    await check('Coralie refresh updates an existing dossier without replacing visit data', async () => {
+      mock.row('dossier').uuid_source = 'airtable:recDDDDDDDDDDDDDD';
+      mock.row('dossier').ergo_id = 'Coralie';
+      mock.row('dossier').compte_anah = 'saisie conservée';
+      const result = expectStatus(await request('/api/airtable/sync-current-dossiers', {
+        token: coralie, method: 'POST',
+      }), 200);
+      assert.equal(result.data.created, 0);
+      assert.equal(result.data.updated, 1);
+      assert.equal(mock.row('dossier').visit_date, '2026-09-29T08:00:00.000Z');
+      assert.equal(mock.row('dossier').compte_anah, 'saisie conservée');
+      assert.equal(mock.row('beneficiaire').prenom, 'Coralie');
     });
   }
 

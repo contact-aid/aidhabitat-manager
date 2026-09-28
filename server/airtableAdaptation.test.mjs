@@ -63,6 +63,22 @@ test('pagination is exhausted before returning a scoped result', async () => {
   assert.equal(result.length, 1);
 });
 
+test('Airtable rate limiting retries the same page', async () => {
+  let calls = 0;
+  const read = createAirtableAdaptationReader({
+    token: 'synthetic-token',
+    fetchImpl: async () => {
+      calls++;
+      if (calls === 1) return new Response('', {
+        status: 429, headers: { 'retry-after': '0.001' },
+      });
+      return Response.json({ records: [] });
+    },
+  });
+  assert.deepEqual(await read('Coralie'), []);
+  assert.equal(calls, 2);
+});
+
 test('projection only contains authorized dossier identity and scheduling fields', () => {
   const result = projectAirtableDossier({
     dossier: row(id('a'), { 'Dossier ID': 'FICTIF-2026', Commentaires: 'Note fictive',

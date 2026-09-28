@@ -70,6 +70,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
     [tables.dossier]: columns({ compte_anah: 'SingleLineText', nature_accompagnement: 'SingleLineText',
       beneficiaire_prepare: 'Checkbox', visit_date: 'Date', status: 'SingleLineText' }),
     [tables.beneficiaire]: columns({ prenom: 'SingleLineText', nom: 'SingleLineText',
+      nombre_personnes: 'Number',
       prenom_occupant_2: 'SingleLineText', nom_occupant_2: 'SingleLineText',
       telephone: 'PhoneNumber', mail: 'Email', occupants_json: 'LongText',
       date_naissance_monsieur: 'Date', date_naissance_madame: 'Date',
