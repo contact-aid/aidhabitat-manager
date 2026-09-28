@@ -32,6 +32,7 @@ class RecommendationsTab extends StatefulWidget {
   final DossierRepository repository;
   final RecommendationsTabController? controller;
   final int externalRefreshToken;
+  final bool immediateReorder;
 
   const RecommendationsTab({
     super.key,
@@ -39,6 +40,7 @@ class RecommendationsTab extends StatefulWidget {
     required this.repository,
     this.controller,
     this.externalRefreshToken = 0,
+    this.immediateReorder = kIsWeb,
   });
 
   @override
@@ -335,11 +337,7 @@ class _RecommendationsTabState extends State<RecommendationsTab>
     _removeItem(nextIndex);
   }
 
-  void _previewReorderItem(
-    String draggedId,
-    String targetId,
-    bool insertAfter,
-  ) {
+  void _previewReorderItem(String draggedId, String targetId) {
     if (draggedId == targetId) return;
     if (_activeRecommendationDragId != draggedId) {
       _activeRecommendationDragId = draggedId;
@@ -349,8 +347,7 @@ class _RecommendationsTabState extends State<RecommendationsTab>
     final fromIndex = _items.indexWhere((item) => item.id == draggedId);
     final targetIndex = _items.indexWhere((item) => item.id == targetId);
     if (fromIndex < 0 || targetIndex < 0) return;
-    final naturalInsertAfter = fromIndex < targetIndex;
-    final insertionIndex = targetIndex + (naturalInsertAfter ? 1 : 0);
+    final insertionIndex = targetIndex + (fromIndex < targetIndex ? 1 : 0);
     final nextIndex = insertionIndex > fromIndex
         ? insertionIndex - 1
         : insertionIndex;
@@ -485,7 +482,7 @@ class _RecommendationsTabState extends State<RecommendationsTab>
     );
   }
 
-  /// Reorder by holding the image; text fields keep their editing gestures.
+  /// Reorder from the image; text fields keep their editing gestures.
   Widget _buildRecommendationsGrid() {
     const double gap = 12.0;
     return LayoutBuilder(
@@ -517,6 +514,7 @@ class _RecommendationsTabState extends State<RecommendationsTab>
                     key: ValueKey('slot-${_items[i].id}'),
                     itemId: _items[i].id,
                     cardWidth: cardWidth,
+                    immediateDrag: widget.immediateReorder,
                     onDragStarted: _startReorderPreview,
                     onPreviewReorder: _previewReorderItem,
                     onCommitReorder: _commitReorderPreview,
@@ -1147,12 +1145,13 @@ class _InlineTitleFieldState extends State<_InlineTitleField> {
 // Draggable wrapper around a recommendation card.
 // =============================================================================
 
-/// The whole card accepts drops; only the image starts a long-press drag.
+/// The whole card accepts drops; the image starts the drag.
 class _DraggableRecoSlot extends StatefulWidget {
   const _DraggableRecoSlot({
     super.key,
     required this.itemId,
     required this.cardWidth,
+    required this.immediateDrag,
     required this.onDragStarted,
     required this.onPreviewReorder,
     required this.onCommitReorder,
@@ -1162,9 +1161,9 @@ class _DraggableRecoSlot extends StatefulWidget {
 
   final String itemId;
   final double cardWidth;
+  final bool immediateDrag;
   final void Function(String draggedId) onDragStarted;
-  final void Function(String draggedId, String targetId, bool insertAfter)
-  onPreviewReorder;
+  final void Function(String draggedId, String targetId) onPreviewReorder;
   final VoidCallback onCommitReorder;
   final Widget feedback;
   final Widget Function(Widget Function(Widget)) builder;
@@ -1174,37 +1173,6 @@ class _DraggableRecoSlot extends StatefulWidget {
 }
 
 class _DraggableRecoSlotState extends State<_DraggableRecoSlot> {
-  bool? _insertAfter;
-
-  bool _isAfterTarget(Offset globalOffset) {
-    final renderObject = context.findRenderObject();
-    if (renderObject is! RenderBox || !renderObject.hasSize) return false;
-    final local = renderObject.globalToLocal(globalOffset);
-    return local.dx > renderObject.size.width / 2;
-  }
-
-  bool _isCloseEnoughToTarget(Offset globalOffset) {
-    final renderObject = context.findRenderObject();
-    if (renderObject is! RenderBox || !renderObject.hasSize) return false;
-    // DragTargetDetails.offset correspond au coin du feedback dans
-    // plusieurs plateformes Flutter. On teste donc le centre du clone,
-    // pas seulement ce coin, sinon le reorder devient quasi impossible.
-    final centerOffset = globalOffset + renderObject.size.center(Offset.zero);
-    final local = renderObject.globalToLocal(centerOffset);
-    final normalizedX = local.dx / renderObject.size.width;
-    final normalizedY = local.dy / renderObject.size.height;
-    return normalizedX >= 0.24 &&
-        normalizedX <= 0.76 &&
-        normalizedY >= 0.24 &&
-        normalizedY <= 0.76;
-  }
-
-  void _updateInsertionSide(Offset globalOffset) {
-    final next = _isAfterTarget(globalOffset);
-    if (_insertAfter == next) return;
-    setState(() => _insertAfter = next);
-  }
-
   @override
   Widget build(BuildContext context) {
     return DragTarget<String>(
@@ -1213,68 +1181,72 @@ class _DraggableRecoSlotState extends State<_DraggableRecoSlot> {
         return details.data != widget.itemId;
       },
       onMove: (details) {
-        if (!_isCloseEnoughToTarget(details.offset)) return;
-        _updateInsertionSide(details.offset);
-        widget.onPreviewReorder(
-          details.data,
-          widget.itemId,
-          _isAfterTarget(details.offset),
-        );
-      },
-      onLeave: (_) {
-        if (_insertAfter != null) {
-          setState(() => _insertAfter = null);
-        }
+        widget.onPreviewReorder(details.data, widget.itemId);
       },
       onAcceptWithDetails: (details) {
-        if (_insertAfter != null) {
-          setState(() => _insertAfter = null);
-        }
+        widget.onPreviewReorder(details.data, widget.itemId);
       },
       builder: (context, candidates, rejected) {
         return widget.builder(
           (image) => MouseRegion(
             cursor: SystemMouseCursors.grab,
-            child: LongPressDraggable<String>(
-              data: widget.itemId,
-              feedbackOffset: Offset.zero,
-              hitTestBehavior: HitTestBehavior.opaque,
-              maxSimultaneousDrags: 1,
-              onDragStarted: () => widget.onDragStarted(widget.itemId),
-              onDragEnd: (_) => widget.onCommitReorder(),
-              // Le fantôme garde exactement le même fond violet clair que
-              // la carte réelle. Pas d'opacité ni de voile sombre pendant
-              // le déplacement.
-              feedback: Material(
-                color: Colors.transparent,
-                elevation: 0,
-                shadowColor: Colors.transparent,
-                borderRadius: BorderRadius.circular(16),
-                clipBehavior: Clip.antiAlias,
-                child: Container(
-                  width: widget.cardWidth,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.22),
-                        blurRadius: 28,
-                        offset: const Offset(0, 14),
-                      ),
-                    ],
-                  ),
-                  child: widget.feedback,
-                ),
-              ),
-              // La carte d'origine reste pleine couleur : l'utilisateur
-              // voit uniquement les autres éléments coulisser, sans trou
-              // sombre ni placeholder transparent.
-              childWhenDragging: image,
-              child: image,
+            child: Tooltip(
+              message: widget.immediateDrag
+                  ? 'Glisser pour réordonner'
+                  : 'Maintenir et glisser pour réordonner',
+              child: _buildDragHandle(image),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildDragHandle(Widget image) {
+    final feedback = Material(
+      color: Colors.transparent,
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        width: widget.cardWidth,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.22),
+              blurRadius: 28,
+              offset: const Offset(0, 14),
+            ),
+          ],
+        ),
+        child: widget.feedback,
+      ),
+    );
+    // Sur ordinateur, un simple déplacement de souris suffit. Sur iPad,
+    // l'appui long évite de déclencher un drag pendant le défilement tactile.
+    if (widget.immediateDrag) {
+      return Draggable<String>(
+        data: widget.itemId,
+        hitTestBehavior: HitTestBehavior.opaque,
+        maxSimultaneousDrags: 1,
+        onDragStarted: () => widget.onDragStarted(widget.itemId),
+        onDragEnd: (_) => widget.onCommitReorder(),
+        feedback: feedback,
+        childWhenDragging: image,
+        child: image,
+      );
+    }
+    return LongPressDraggable<String>(
+      data: widget.itemId,
+      hitTestBehavior: HitTestBehavior.opaque,
+      maxSimultaneousDrags: 1,
+      onDragStarted: () => widget.onDragStarted(widget.itemId),
+      onDragEnd: (_) => widget.onCommitReorder(),
+      feedback: feedback,
+      childWhenDragging: image,
+      child: image,
     );
   }
 }
