@@ -27,6 +27,7 @@ import '../services/data_service.dart';
 import '../services/report_generation_service.dart';
 import '../services/sync_engine.dart';
 import '../components/beneficiary_header.dart';
+import '../components/dossier_space_shortcut.dart';
 import '../components/brand_colors.dart';
 import '../components/cta_text_style.dart';
 import '../components/notes_widget.dart';
@@ -83,6 +84,7 @@ class VisitReportScreen extends StatefulWidget {
   final int contextConflictRefreshToken;
   final int patientConflictRefreshToken;
   final VoidCallback onBack;
+  final ValueChanged<Dossier>? onOpenDocuments;
   final ValueChanged<String>? onContextChanged;
 
   const VisitReportScreen({
@@ -93,6 +95,7 @@ class VisitReportScreen extends StatefulWidget {
     this.contextConflictRefreshToken = 0,
     this.patientConflictRefreshToken = 0,
     required this.onBack,
+    this.onOpenDocuments,
     this.onContextChanged,
   });
 
@@ -153,16 +156,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     _medicalFlagNumbersByOccupant[_medicalOccupantIndex] ?? const <int>{},
   );
 
-  // Page courante de la note "Contexte de vie > Médical" (1-indexed).
-  // Demande utilisateur 2026-05-04 : « il doit y avoir simplement les 3
-  // pages déjà présentes avec une avec le numéro 1, une avec le 2 et
-  // une avec le 3, cela ne change pas en fonction des éléments cochés à
-  // gauche et cela ne doit pas être remis à chaque changement de page ».
-  // → On affiche désormais UN SEUL badge égal au numéro de page (fixe
-  // par page), au lieu d'un badge composite dérivé des flags cochés à
-  // gauche. Cf. `_MedicalPageNumberBadge` plus bas.
-  int _medicalCurrentPage = 1;
-
   /// True quand le bouton « Générer le rapport » est en cours d'appel.
   /// Affiche un spinner et bloque les double-taps.
   ///
@@ -174,6 +167,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// 2026-05-11 : « Quand je quitte le relevé de visite et que je retourne
   /// dessus, je n'ai plus le load qui indique la generation en cours ».
   bool _isGeneratingReport = false;
+  bool _openingDocuments = false;
 
   /// Subscription au stream du `ReportGenerationService` pour synchroniser
   /// `_isGeneratingReport` quand l'utilisateur re-mount ce dossier alors
@@ -1259,21 +1253,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                             // page crée seulement un nouveau dessin, jamais une
                             // nouvelle note écrite.
                             sharedText: hasSharedContextText,
-                            backgroundContent: isMedical
-                                ? _MedicalPageNumberBadge(
-                                    currentPage: _medicalCurrentPage,
-                                  )
-                                : null,
-                            onPageChange: isMedical
-                                ? (page) {
-                                    // `page` est 0-indexé côté NotesWidget, on le
-                                    // convertit en 1-indexé pour l'affichage.
-                                    if (!mounted) return;
-                                    setState(
-                                      () => _medicalCurrentPage = page + 1,
-                                    );
-                                  }
-                                : null,
                             medicalFlags: isMedical
                                 ? _currentMedicalFlagNumbers
                                 : null,
@@ -1386,6 +1365,28 @@ class _VisitReportScreenState extends State<VisitReportScreen>
         ],
       ),
     );
+  }
+
+  Future<void> _openDocuments() async {
+    if (_openingDocuments || widget.onOpenDocuments == null) return;
+    setState(() => _openingDocuments = true);
+    try {
+      await _beneficiaryController.flushPendingSave();
+      await _accessibilityController.flushPendingSave();
+      await _bathroomController.flushPendingSave();
+      await _wcController.flushPendingSave();
+      await _recommendationsController.flushPendingSave();
+      await _refreshDossier();
+      if (mounted) widget.onOpenDocuments?.call(_dossier);
+    } catch (_) {
+      if (mounted) {
+        _showReportError(
+          'Impossible d’enregistrer les saisies avant d’ouvrir les documents. Réessayez.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _openingDocuments = false);
+    }
   }
 
   /// Bouton violet « Générer le rapport » — dernière entrée de la
@@ -3054,7 +3055,19 @@ class _VisitReportScreenState extends State<VisitReportScreen>
             BeneficiaryHeader(
               dossier: _dossier,
               onBack: widget.onBack,
-              trailing: _buildGenerateReportButton(),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (widget.onOpenDocuments != null) ...[
+                    DossierSpaceShortcut(
+                      toDocuments: true,
+                      onPressed: _openingDocuments ? null : _openDocuments,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  _buildGenerateReportButton(),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
             _buildTabBar(),
@@ -3121,69 +3134,6 @@ class _NotesPanelLayer extends StatelessWidget {
 // cf. `lib/components/notes_panel_title_banner.dart`. Utilisé aussi
 // par summary_tab.dart pour les cadres compacts « Projet de l'usager »
 // et « Résumé des préconisations ».
-
-// `_MedicalFlagBadges` retiré le 2026-05-04 — remplacé par
-// `_MedicalPageNumberBadge` (badge unique = numéro de page courant).
-// L'ancienne logique « slots haut/milieu/bas selon les flags cochés à
-// gauche » créait une re-disposition à chaque changement de page que
-// l'utilisateur ressentait comme une « remise à zéro ».
-
-class _FlagMarker extends StatelessWidget {
-  const _FlagMarker({required this.number});
-  final int number;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      '$number -',
-      style: GoogleFonts.nunito(
-        fontSize: 28,
-        fontWeight: FontWeight.w600,
-        color: Colors.black,
-        height: 1.0,
-      ),
-    );
-  }
-}
-
-/// Badge unique « N - » affiché en arrière-plan du canvas de la note
-/// "Contexte de vie > Médical". `N` est égal au numéro de page courant
-/// (1, 2 ou 3) — fixe par page, indépendant des cases cochées à gauche
-/// (Pathologie / Suivi / Sensoriel).
-///
-/// Demande utilisateur 2026-05-04 : « il doit y avoir simplement les 3
-/// pages déjà présentes avec une avec le numéro 1, une avec le 2 et
-/// une avec le 3, cela ne change pas en fonction des éléments cochés à
-/// gauche et cela ne doit pas être remis à chaque changement de page ».
-///
-/// Avant : `_MedicalFlagBadges` empilait jusqu'à 3 badges (haut/milieu/bas)
-/// dérivés du Set de flags cochés. À chaque changement de page, le Set
-/// était relu depuis `drawing_json` → l'overlay se reconfigurait — d'où
-/// la sensation de « remise à zéro » signalée. Désormais : un seul badge
-/// posé en haut-gauche, qui suit purement le `currentPage`.
-class _MedicalPageNumberBadge extends StatelessWidget {
-  const _MedicalPageNumberBadge({required this.currentPage});
-
-  /// Numéro de page 1-indexé (1, 2 ou 3).
-  final int currentPage;
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Positioned(
-          left: 16,
-          // top descendu de 12 → 56 (demande utilisateur 2026-05-04 :
-          // « redescend légèrement le numéro pour ne pas être en face
-          // de l'outil navigation entre page »). 56 pt = sous la zone
-          // top-right occupée par le contrôle pagination.
-          top: 56,
-          child: _FlagMarker(number: currentPage),
-        ),
-      ],
-    );
-  }
-}
 
 /// Décrit un champ critique non rempli. Utilisé par
 /// `_collectMissingFields` + `_showMissingFieldsDialog` (popup
