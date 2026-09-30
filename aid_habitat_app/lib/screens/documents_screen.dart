@@ -20,6 +20,7 @@ import 'package:pdfx/pdfx.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../components/beneficiary_header.dart';
+import '../components/dossier_space_shortcut.dart';
 import '../components/brand_colors.dart';
 import '../components/confirmation_dialog.dart';
 import '../components/dashed_border_painter.dart';
@@ -88,11 +89,13 @@ const int _kWarmCacheConcurrency = 4;
 class DocumentsScreen extends StatefulWidget {
   final Dossier dossier;
   final VoidCallback onBack;
+  final VoidCallback? onOpenVisitReport;
 
   const DocumentsScreen({
     super.key,
     required this.dossier,
     required this.onBack,
+    this.onOpenVisitReport,
   });
 
   @override
@@ -1648,12 +1651,27 @@ class _DocumentsScreenState extends State<DocumentsScreen>
             _buildBackButton(),
             const SizedBox(width: 16),
             Expanded(child: _buildSelectionToolbar()),
+            if (widget.onOpenVisitReport != null) ...[
+              const SizedBox(width: 12),
+              _buildVisitShortcut(),
+            ],
           ],
         ),
       );
     }
-    return BeneficiaryHeader(dossier: widget.dossier, onBack: widget.onBack);
+    return BeneficiaryHeader(
+      dossier: widget.dossier,
+      onBack: widget.onBack,
+      trailing: widget.onOpenVisitReport == null ? null : _buildVisitShortcut(),
+    );
   }
+
+  Widget _buildVisitShortcut() => DossierSpaceShortcut(
+    toDocuments: false,
+    onPressed: _isPicking || _isImporting || _isBulkDownloading
+        ? null
+        : widget.onOpenVisitReport,
+  );
 
   Widget _buildSelectionToolbar() {
     final allSelected =

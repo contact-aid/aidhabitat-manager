@@ -10,13 +10,12 @@ import '../components/sidebar.dart';
 import '../components/soft_transitions.dart';
 import 'anah_screen.dart';
 import 'dashboard_screen.dart';
-import 'documents_screen.dart';
+import 'dossier_workspace_screen.dart';
 import 'dossiers_list_screen.dart';
 import 'dossier_refresh_preview_dialog.dart';
 import 'dossier_screen.dart';
 import 'retirement_funds_combined_screen.dart';
 import 'settings_screen.dart';
-import 'visit_report_screen.dart';
 import 'wiki_screen.dart';
 import '../models/types.dart';
 import '../services/auth_service.dart';
@@ -878,7 +877,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   /// passer d'un dossier à un autre dans la même « vue » relance aussi
   /// l'animation (sinon AnimatedSwitcher réutiliserait le même widget).
   String _contentKey() {
-    final base = _activeView;
+    final base = (_activeView == 'documents' || _activeView == 'visit_report')
+        ? 'dossier_workspace'
+        : _activeView;
     if ((_activeView == 'dossier_detail' ||
             _activeView == 'visit_report' ||
             _activeView == 'documents') &&
@@ -1011,33 +1012,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         },
       );
     }
-    if (_activeView == 'documents' && _selectedDossier != null) {
-      return DocumentsScreen(
-        dossier: _selectedDossier!,
-        onBack: () async {
-          // Re-fetch le dossier au retour pour que dossier_detail
-          // voie les éventuelles modifs (rares — Documents écrit peu
-          // de champs patient, mais ça reste cohérent avec VAD).
-          // Guard 2026-05-13 : capturer la valeur AVANT l'await pour
-          // éviter le crash si `_selectedDossier` est devenu null
-          // pendant le round-trip async (widget tree transitoire).
-          final selected = _selectedDossier;
-          if (selected == null) {
-            _goBack();
-            return;
-          }
-          final fresh = await _dataService.fetchDossierById(selected.id);
+    if ((_activeView == 'documents' || _activeView == 'visit_report') &&
+        _selectedDossier != null) {
+      return DossierWorkspaceScreen(
+        initialDocuments: _activeView == 'documents',
+        onSpaceChanged: (documents, dossier) {
           if (!mounted) return;
-          if (fresh != null) {
-            setState(() => _selectedDossier = fresh);
-          }
-          _goBack();
-          _refreshDossiers();
+          setState(() {
+            _selectedDossier = dossier;
+            _activeView = documents ? 'documents' : 'visit_report';
+          });
         },
-      );
-    }
-    if (_activeView == 'visit_report' && _selectedDossier != null) {
-      return VisitReportScreen(
         dossier: _selectedDossier!,
         conflictRefreshToken: _conflictRefreshToken,
         housingConflictRefreshToken: _housingConflictRefreshToken,
@@ -1053,7 +1038,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         onBack: () async {
           // Re-fetch the dossier pour que l'écran précédent voit les
           // éventuelles modifs (nom, ville…) faites dans le rapport.
-          // Même guard que onBack Documents (cf. ci-dessus).
+          // Capturer la sélection avant le round-trip asynchrone.
           final selected = _selectedDossier;
           if (selected == null) {
             _goBack();
