@@ -321,6 +321,12 @@ export const parseOccupantsJson = (rawValue) => {
       .map((entry) => ({
         firstName: stringValue(entry.firstName).trim(),
         lastName: stringValue(entry.lastName).trim(),
+        ...(Object.hasOwn(entry, 'gender') && entry.gender != null
+          ? { gender: ['Homme', 'Femme'].includes(entry.gender) ? entry.gender : '' } : {}),
+        ...(Object.hasOwn(entry, 'maidenName')
+          ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
+        ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
+          ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),
@@ -2727,6 +2733,12 @@ export const mapBeneficiaryUpdatesToFields = (updates, references) => {
       .map((entry) => ({
         firstName: stringValue(entry.firstName).trim(),
         lastName: stringValue(entry.lastName).trim(),
+        ...(Object.hasOwn(entry, 'gender') && entry.gender != null
+          ? { gender: ['Homme', 'Femme'].includes(entry.gender) ? entry.gender : '' } : {}),
+        ...(Object.hasOwn(entry, 'maidenName')
+          ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
+        ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
+          ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),

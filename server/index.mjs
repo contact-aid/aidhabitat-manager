@@ -24,6 +24,7 @@ import { contextServerReference, contextRecordToSections } from './contextGuarde
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
 import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 import { syncCurrentProfileDossiers } from './airtableDossierSync.mjs';
+import { preserveLegacyOccupantGender } from './occupantGender.mjs';
 import { importCurrentProfileNotes } from './airtableNoteImport.mjs';
 import {
   resyncBeneficiaireDenormalizedNames,
@@ -818,6 +819,12 @@ const parseOccupantsJson = (rawValue) => {
       .map((entry) => ({
         firstName: stringValue(entry.firstName).trim(),
         lastName: stringValue(entry.lastName).trim(),
+        ...(Object.hasOwn(entry, 'gender') && entry.gender != null
+          ? { gender: ['Homme', 'Femme'].includes(entry.gender) ? entry.gender : '' } : {}),
+        ...(Object.hasOwn(entry, 'maidenName')
+          ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
+        ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
+          ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         // GIR (Groupe Iso-Ressources) — sélectionné dans l'onglet
@@ -4244,6 +4251,12 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
       .map((entry) => ({
         firstName: stringValue(entry.firstName).trim(),
         lastName: stringValue(entry.lastName).trim(),
+        ...(Object.hasOwn(entry, 'gender') && entry.gender != null
+          ? { gender: ['Homme', 'Femme'].includes(entry.gender) ? entry.gender : '' } : {}),
+        ...(Object.hasOwn(entry, 'maidenName')
+          ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
+        ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
+          ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         // GIR (Groupe Iso-Ressources) — préservé pour le rapport PDF.
@@ -7674,13 +7687,27 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       return;
     }
 
-    const fields = mapBeneficiaryUpdatesToFields(updates, references);
+    const storedOccupantsJson = field(beneficiaryRecord, 'occupants_json');
+    const protectedUpdates = preserveLegacyOccupantGender(updates, storedOccupantsJson);
+    const fields = mapBeneficiaryUpdatesToFields(protectedUpdates, references);
     const comparisonFields = (record) => {
       const source = unwrapRecordFields(record);
       const rawOccupants = source?.occupants_json;
       const usesScalarOccupants = rawOccupants == null || rawOccupants === ''
         || (typeof rawOccupants === 'string' && /^\[\s*\]$/.test(rawOccupants.trim()));
-      if (!usesScalarOccupants) return source;
+      if (!usesScalarOccupants) {
+        // Compare against the normalized shape sent to clients while retaining
+        // fields an older client does not know how to serialize.
+        let entries;
+        try { entries = JSON.parse(rawOccupants); } catch { return source; }
+        if (!Array.isArray(entries) || entries.some(entry => !entry || typeof entry !== 'object')) return source;
+        const normalized = JSON.parse(mapBeneficiaryUpdatesToFields({ occupants: entries }, references).occupants_json);
+        return { ...source, occupants_json: JSON.stringify(entries.map((entry, index) => {
+          const combined = { ...entry, ...normalized[index] };
+          if (combined.fiscalRevenue == null) delete combined.fiscalRevenue;
+          return combined;
+        })) };
+      }
       const mappedRecord = { fields: source };
       return {
         ...source,
@@ -7695,14 +7722,16 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       if (recoverLegacySync(req, res, {
         ...beneficiaryRecord, fields: comparisonFields(beneficiaryRecord),
       }, fields,
-        mapBeneficiaryUpdatesToFields(updates.concurrency?.baseValues || {}, references))) return;
+        mapBeneficiaryUpdatesToFields(preserveLegacyOccupantGender(
+          updates.concurrency?.baseValues || {}, storedOccupantsJson, { strict: false }), references))) return;
       if (sendConflictIfStale(req, res, beneficiaryRecord)) return;
     }
 
     if (conditionalSyncEnabled) {
       if (await applyConditionalSync(req, res, {
         tableId: TABLES.beneficiaires, record: beneficiaryRecord, fields,
-        mapBaseline: (base) => mapBeneficiaryUpdatesToFields(base, references),
+        mapBaseline: (base) => mapBeneficiaryUpdatesToFields(
+          preserveLegacyOccupantGender(base, storedOccupantsJson, { strict: false }), references),
         normalizeObserved: comparisonFields,
       })) return;
     } else {

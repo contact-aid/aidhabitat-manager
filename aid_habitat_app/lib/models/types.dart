@@ -333,6 +333,8 @@ class TrustedPerson {
 class Occupant {
   final String firstName;
   final String lastName;
+  /// Null means absent on legacy records; an empty string clears the choice.
+  final String? gender;
   final String birthDate;
   final bool apa;
   final bool invalidity;
@@ -357,6 +359,7 @@ class Occupant {
   const Occupant({
     this.firstName = '',
     this.lastName = '',
+    this.gender,
     this.birthDate = '',
     this.apa = false,
     this.invalidity = false,
@@ -374,6 +377,11 @@ class Occupant {
   factory Occupant.fromJson(Map<String, dynamic> json) => Occupant(
     firstName: json['firstName'] as String? ?? '',
     lastName: json['lastName'] as String? ?? '',
+    gender: json['gender'] == null
+        ? null
+        : (const ['Homme', 'Femme'].contains(json['gender'])
+              ? json['gender'] as String
+              : ''),
     birthDate: json['birthDate'] as String? ?? '',
     apa: json['apa'] as bool? ?? false,
     invalidity: json['invalidity'] as bool? ?? false,
@@ -392,6 +400,7 @@ class Occupant {
   Map<String, dynamic> toJson() => {
     'firstName': firstName,
     'lastName': lastName,
+    if (gender != null) 'gender': gender,
     'birthDate': birthDate,
     'apa': apa,
     'invalidity': invalidity,
@@ -409,6 +418,7 @@ class Occupant {
   Occupant copyWith({
     String? firstName,
     String? lastName,
+    String? gender,
     String? birthDate,
     bool? apa,
     bool? invalidity,
@@ -426,6 +436,7 @@ class Occupant {
     return Occupant(
       firstName: firstName ?? this.firstName,
       lastName: lastName ?? this.lastName,
+      gender: gender ?? this.gender,
       birthDate: birthDate ?? this.birthDate,
       apa: apa ?? this.apa,
       invalidity: invalidity ?? this.invalidity,
