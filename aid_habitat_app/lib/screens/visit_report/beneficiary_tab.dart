@@ -967,6 +967,27 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
       perOccupantContent: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          FormToggleGroup(
+            label: 'Civilité',
+            options: const ['Monsieur', 'Madame'],
+            columns: 2,
+            selected: switch (_occupants[idx].gender) {
+              'Homme' => 'Monsieur',
+              'Femme' => 'Madame',
+              _ => '',
+            },
+            onChanged: (value) => _updateOccupant(
+              idx,
+              _occupants[idx].copyWith(
+                gender: switch (value) {
+                  'Monsieur' => 'Homme',
+                  'Madame' => 'Femme',
+                  _ => '',
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           _buildBirthDateRow(idx),
           if (idx == 0 && requiresAggir(_occupants.first.birthDate))
             const Padding(

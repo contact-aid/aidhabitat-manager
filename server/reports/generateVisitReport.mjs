@@ -16,6 +16,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { uniformPhotoHeight } from './photoLayout.mjs';
+import { needsMorbihanEligibleWorks, insertMorbihanEligibleWorks } from './morbihanEligibleWorks.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   PDFDocument,
@@ -836,6 +837,27 @@ function normalizeDependenceForReport(raw) {
   return 'Aucune';
 }
 
+// Resolve the two printed birth-date slots by occupant order. The legacy
+// database columns are named Monsieur/Madame but actually store positions 1/2.
+export function reportBirthSlots(patient = {}) {
+  const occupants = Array.isArray(patient.occupants) ? patient.occupants : [];
+  const hasOccupants = occupants.length > 0;
+  const civility = (gender) => gender === 'Femme' ? 'Mme'
+    : gender === 'Homme' ? 'M.' : '';
+  return {
+    firstDate: formatFrenchDate(hasOccupants
+      ? (occupants[0]?.birthDate || patient.birthDateMr || patient.occupant1BirthDate || patient.birthDate)
+      : (patient.birthDateMr || patient.occupant1BirthDate || patient.birthDate)),
+    secondDate: formatFrenchDate(hasOccupants
+      ? (occupants[1] ? occupants[1].birthDate || patient.birthDateMme || patient.occupant2BirthDate : '')
+      : (patient.birthDateMme || patient.occupant2BirthDate)),
+    civilities: hasOccupants
+      ? [civility(occupants[0]?.gender), occupants[1] ? civility(occupants[1].gender) : '']
+      : ['M.', 'Mme'],
+    hasOccupants,
+  };
+}
+
 function buildViewModel({
   dossier,
   sanitaires,
@@ -898,16 +920,9 @@ function buildViewModel({
       ? (invalidityTxt || 'Oui')
       : 'Non';
 
-  // Dates de naissance : on utilise les variantes Mr/Mme dédiées
-  // (mapPatient les expose déjà). `patient.birthDate` fallback sur
-  // madame dans certains dossiers — on l'évite pour bien remplir
-  // chaque slot du PDF.
-  const birthDateMrFr = formatFrenchDate(
-    patient.birthDateMr || patient.occupant1BirthDate || patient.birthDate,
-  );
-  const birthDateMmeFr = formatFrenchDate(
-    patient.birthDateMme || patient.occupant2BirthDate,
-  );
+  const birthSlots = reportBirthSlots(patient);
+  const birthDateMrFr = birthSlots.firstDate;
+  const birthDateMmeFr = birthSlots.secondDate;
 
   // --- Page 5 : Logement ---
   const heat = housing.heatingDetails || {};
@@ -1180,6 +1195,8 @@ function buildViewModel({
       birthDateFr: birthDateMrFr,
       birthDateMrFr,
       birthDateMmeFr,
+      birthCivilities: birthSlots.civilities,
+      hasOccupants: birthSlots.hasOccupants,
       phone: String(patient.phone || '').trim(),
       email: String(patient.email || '').trim(),
       trustedName: String(patient?.trustedPerson?.name || '').trim(),
@@ -1496,6 +1513,53 @@ function nudgeFieldRect({ fieldsByName, fieldName, dy }) {
       width: rect.width,
       height: rect.height,
     });
+  }
+}
+
+function makeRoomForFirstBirthCivility({ fieldsByName, view }) {
+  if (!view.patient?.hasOccupants || view.patient.birthCivilities?.[0] !== 'Mme') return;
+  const field = fieldsByName.get('date de naissance');
+  for (const widget of field?.acroField.getWidgets?.() || []) {
+    const rect = widget.getRectangle();
+    widget.setRectangle({
+      x: rect.x + 18,
+      y: rect.y,
+      width: rect.width - 18,
+      height: rect.height,
+    });
+  }
+}
+
+// The M./Mme labels are baked into page 3 of both report templates. Cover
+// only those two words, then write the civilities of occupants 1 and 2.
+function drawBirthCivilitiesOverlay({ pdfDoc, view, font }) {
+  if (!view.patient?.hasOccupants) return;
+  const page = pdfDoc.getPages()[2];
+  if (!page) return;
+  const slots = [
+    { original: 'M.', x: 149, width: 38, textX: 151 },
+    { original: 'Mme', x: 339, width: 35, textX: 341 },
+  ];
+  for (let index = 0; index < slots.length; index += 1) {
+    const slot = slots[index];
+    const label = view.patient.birthCivilities?.[index] || '';
+    if (label === slot.original) continue;
+    page.drawRectangle({
+      x: slot.x,
+      y: 707,
+      width: slot.width,
+      height: 20,
+      color: rgb(1, 1, 1),
+    });
+    if (label) {
+      page.drawText(label, {
+        x: slot.textX,
+        y: 710,
+        size: 12,
+        font,
+        color: rgb(0, 0, 0),
+      });
+    }
   }
 }
 
@@ -3485,6 +3549,7 @@ export async function generateVisitReport({
     recoOverflow: 0,
     recoPagesRemoved: 0,
     descriptifMerged: false,
+    morbihanWorksPageAdded: false,
   };
 
   for (const [fieldName, entry] of Object.entries(mapping)) {
@@ -3560,6 +3625,7 @@ export async function generateVisitReport({
   ]) {
     nudgeFieldRect({ fieldsByName, fieldName, dy: 1 });
   }
+  makeRoomForFirstBirthCivility({ fieldsByName, view });
   for (const fieldName of [
     // Reconnaissance d'invalidité (MDPH)
     'MDPH',
@@ -3959,6 +4025,14 @@ export async function generateVisitReport({
     descriptifPageIdx = findPageIndexForField(pdfDoc, descriptifAnchor);
   }
 
+  // The norms immediately follow the aid summary in both report templates.
+  // Keep their page reference before recommendation/aid-summary removals so
+  // the appendix remains correctly placed even when the aid table is merged.
+  const needsMorbihanWorks = needsMorbihanEligibleWorks(dossier);
+  const accessibilityNormsPageRef = needsMorbihanWorks && descriptifPageIdx >= 0
+    ? pdfDoc.getPage(descriptifPageIdx + 1)?.ref
+    : null;
+
   // (Plus d'overlay page 1 — l'adresse est désormais correcte dans
   // le PDF source Affinity directement, plus besoin de patcher.)
   // Alignement de la couleur du champ adresse page 3 sur les champs
@@ -4006,6 +4080,8 @@ export async function generateVisitReport({
       }
     }
   }
+
+  drawBirthCivilitiesOverlay({ pdfDoc, view, font: reportTextFont });
 
   if (isFlat2026Template) {
     await drawFlat2026AidSummary({
@@ -4191,10 +4267,12 @@ export async function generateVisitReport({
   if (stats.descriptifMerged && descriptifPageIdx !== -1) {
     allRemovals.push(descriptifPageIdx);
   }
+  let accessibilityNormsPageIndex = findCurrentPageIndexByRef(pdfDoc, accessibilityNormsPageRef);
   const uniqueRemovals = [...new Set(allRemovals)].sort((a, b) => b - a);
   for (const idx of uniqueRemovals) {
     try {
       pdfDoc.removePage(idx);
+      if (idx < accessibilityNormsPageIndex) accessibilityNormsPageIndex -= 1;
     } catch (error) {
       console.warn(
         `[generateVisitReport] removePage(${idx}) :`,
@@ -4211,6 +4289,12 @@ export async function generateVisitReport({
     useObjectStreams: true,
   });
   const numberedDoc = await PDFDocument.load(unnumberedBytes);
+  // Insert only after the page tree has been canonicalized. The new page then
+  // participates in the same continuous numbering as the rest of the report.
+  if (needsMorbihanWorks) {
+    await insertMorbihanEligibleWorks(numberedDoc, accessibilityNormsPageIndex);
+    stats.morbihanWorksPageAdded = true;
+  }
   await drawGeneratedPageNumbers(numberedDoc);
 
   const bytes = await numberedDoc.save({

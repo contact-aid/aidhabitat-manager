@@ -59,7 +59,11 @@ class _Repository extends Fake implements DossierRepository {
   }
 }
 
-Dossier _dossier({String phone = '0102030405', String email = 'old@test.fr'}) =>
+Dossier _dossier({
+  String phone = '0102030405',
+  String email = 'old@test.fr',
+  List<Occupant> occupants = const [],
+}) =>
     Dossier(
       id: 'dossier-1',
       patient: Patient(
@@ -69,6 +73,7 @@ Dossier _dossier({String phone = '0102030405', String email = 'old@test.fr'}) =>
         birthDate: '',
         phone: phone,
         email: email,
+        occupants: occupants,
         address: 'Old address',
         city: 'Old city',
         zipCode: '75001',
@@ -159,6 +164,36 @@ Future<void> _exhaustRetries(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('civilité saves the occupant without changing other patient columns', (
+    tester,
+  ) async {
+    final repository = _Repository();
+    await _mount(
+      tester,
+      repository,
+      dossier: _dossier(
+        occupants: const [
+          Occupant(firstName: 'Alice', lastName: 'Test', birthDate: '1961-04-05'),
+        ],
+      ),
+    );
+    final civility = find.byWidgetPredicate(
+      (widget) => widget is FormToggleGroup && widget.label == 'Civilité',
+    );
+    expect(tester.widget<FormToggleGroup>(civility).selected, '');
+    tester.widget<FormToggleGroup>(civility).onChanged!('Madame');
+    await tester.pump();
+    await _flush(tester);
+
+    expect(repository.patientWrites, hasLength(1));
+    expect(repository.patientWrites.single.keys, ['occupants_json']);
+    final occupants = jsonDecode(repository.patientWrites.single['occupants_json']) as List;
+    expect(occupants.single['firstName'], 'Alice');
+    expect(occupants.single['lastName'], 'Test');
+    expect(occupants.single['birthDate'], '1961-04-05');
+    expect(occupants.single['gender'], 'Femme');
+  });
+
   testWidgets('generation flushes the latest beneficiary edit before debounce', (
     tester,
   ) async {
