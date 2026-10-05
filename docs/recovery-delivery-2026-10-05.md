@@ -67,7 +67,7 @@ Références Apple : [sauvegarde Mac](https://support.apple.com/en-us/108796), [
 4. Relever diagnostic et empreintes locales avant envoi. Si dessin en file et dessin local diffèrent, arrêter et conserver les deux versions ; ne pas choisir automatiquement une copie.
 5. Pour le plan seulement : choix local explicite une fois, synchronisation, conserver writeId/requestId de l’essai, relecture du dessin complet. Ne pas demander au build64 de répéter une résolution déjà démontrée inopérante.
 6. Identifier et traiter séparément l’opération500, avec la cause corrélée. Un simple413 reste un blocage de transfert.
-7. Comparer texte et dessin complets locaux/NocoDB/web (décompression éventuelle, empreintes et revue visuelle), vérifier les pages voisines et un effacement volontaire. Confirmer que les deux opérations exactes sont traitées et qu’aucun contenu en attente n’a été simplement abandonné.
+7. Comparer texte et dessin complets locaux/NocoDB/web (décompression éventuelle, empreintes SHA256 UTF-8 distinctes pour drawing_json et text_content, même vide, et revue visuelle). Les empreintes du texte séparé sont à relever lors de cette comparaison protégée ; le diagnostic client actuel ne les exporte pas, vérifier les pages voisines et un effacement volontaire. Confirmer que les deux opérations exactes sont traitées et qu’aucun contenu en attente n’a été simplement abandonné.
 
 ## Clôture et retour arrière
 

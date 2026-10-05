@@ -15,6 +15,9 @@ export function verifyRecoveryEvidence(evidence) {
     // Captured before resolution, after any unsent edit has been accounted for.
     if (!hash.test(op.localDrawingSha256 || '') || op.queuedMatchesLocal !== true) failures.push('LOCAL_CONTENT_NOT_VERIFIED');
     if (op.remoteDrawingSha256 !== op.localDrawingSha256 || op.webDrawingSha256 !== op.localDrawingSha256) failures.push('CONTENT_MISMATCH');
+    // The separate text_content column must also be compared, including empty text.
+    if (!hash.test(op.localTextSha256 || '') || op.queuedTextMatchesLocal !== true) failures.push('LOCAL_TEXT_NOT_VERIFIED');
+    if (op.remoteTextSha256 !== op.localTextSha256 || op.webTextSha256 !== op.localTextSha256) failures.push('TEXT_CONTENT_MISMATCH');
     if (op.status !== 'completed' || op.stillPending !== false || !op.acknowledgedWriteId) failures.push('OPERATION_NOT_CONFIRMED');
     if (!op.remoteReadAt || op.visualComparisonPassed !== true) failures.push('READBACK_NOT_VERIFIED');
     if (op.originalHttpStatus === 500 && (!op.diagnosis || op.diagnosis === 'unknown')) failures.push('ERROR_500_UNDIAGNOSED');
