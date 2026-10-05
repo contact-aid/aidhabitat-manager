@@ -74,6 +74,99 @@ void main() {
     },
   );
 
+  for (final count in [1, 2]) {
+    test(
+      'explicit room addition binds only unambiguous PRE-edit snapshot count=$count',
+      () async {
+        final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+        addTearDown(db.close);
+        final local = LocalDatabase.forTesting(db);
+        await local.createSchemaForTesting();
+        final repo = DossierRepository(database: local);
+        await repo.mergeRemoteDossierPayloads([
+          {
+            'id': 'd',
+            'patient': {'id': 'p'},
+            'housing': {
+              'id': 'h',
+              'updatedAt': '2026-10-01T10:00:00Z',
+              'roomsBreakdown': {
+                'rdc': ['Salle de bain'],
+              },
+            },
+          },
+        ]);
+        final original = [
+          for (var i = 0; i < count; i++)
+            {
+              'id': 'diag-$i',
+              'levelField': 'rdc',
+              'customUnknown': 'keep',
+              'porteSdbDimension': 70 + i,
+            },
+        ];
+        await db.insert('diagnostic_sanitaires', {
+          'local_id': 'diag',
+          'dossier_local_id': 'd',
+          'sdb_instances_json': jsonEncode(original),
+          'wc_instances_json': '[]',
+          'sync_state': 'synced',
+          'remote_updated_at': '2026-10-01T10:00:00Z',
+          'updated_at': '2026-10-01T10:00:00Z',
+        });
+        final rooms = parseHousingRooms('["Salle de bain"]', 'rdc');
+        await repo.updateHousing('d', {
+          'rdc_rooms_json': jsonEncode([
+            ...rooms.map((r) => r.toJson()),
+            createHousingRoom('Salle de bain').toJson(),
+          ]),
+        });
+        final raw =
+            jsonDecode(
+                  (await db.query(
+                        'diagnostic_sanitaires',
+                      )).single['sdb_instances_json']
+                      as String,
+                )
+                as List;
+        if (count == 1) {
+          expect(raw.single, {
+            ...original.single,
+            'housingRoomId': rooms.single.id,
+          });
+          final op = (await db.query(
+            'sync_operations',
+            where: 'entity_type = ?',
+            whereArgs: ['diagnostic_sanitaires'],
+          )).single;
+          final payload = jsonDecode(
+            await OfflineVault.instance.openString(
+              op['payload_json'] as String,
+            ),
+          );
+          expect(
+            payload['concurrency']['baseValues']['sdbInstances'],
+            original,
+          );
+          expect(
+            payload['concurrency']['collectionContract'],
+            'collections-v2',
+          );
+        } else {
+          expect(raw, original);
+          expect(
+            await db.query(
+              'sync_operations',
+              where: 'entity_type = ?',
+              whereArgs: ['diagnostic_sanitaires'],
+            ),
+            isEmpty,
+          );
+        }
+      },
+    );
+  }
+
   test(
     'room identities survive API SQLite edit and exact diagnostic deletion',
     () async {
@@ -144,6 +237,18 @@ void main() {
           ],
         ),
       );
+      final storedBeforeRemoval = (await db.query(
+        'diagnostic_sanitaires',
+      )).single;
+      final rawToilets =
+          jsonDecode(storedBeforeRemoval['wc_instances_json'] as String)
+              as List;
+      (rawToilets.single as Map)['futureField'] = 'preserve unknown';
+      (rawToilets.single as Map)['observationEquipementsUtilisation'] =
+          'Observation fictive complète';
+      await db.update('diagnostic_sanitaires', {
+        'wc_instances_json': jsonEncode(rawToilets),
+      });
       await repo.removeDiagnosticRooms(
         'd1',
         bathroomIds: {'diag-a'},
@@ -154,6 +259,13 @@ void main() {
       expect(diag.sdbInstances.single.housingRoomId, 'room-b');
       expect(diag.sdbInstances.single.porteSdbDimension, 89);
       expect(diag.wcInstances.single.id, 'wc-a');
+      expect(
+        jsonDecode(
+          (await db.query('diagnostic_sanitaires')).single['wc_instances_json']
+              as String,
+        ),
+        rawToilets,
+      );
     },
   );
 }

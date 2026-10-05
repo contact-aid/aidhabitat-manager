@@ -2928,6 +2928,104 @@ class DossierRepository {
     }
   }
 
+  Future<void> _bindLegacyDiagnosticRoomsBeforeHousingEdit(
+    DatabaseExecutor txn,
+    String dossierId,
+    Map<String, dynamic> housing,
+    String now,
+  ) async {
+    final rows = await txn.query(
+      'diagnostic_sanitaires',
+      where: 'dossier_local_id = ?',
+      whereArgs: [dossierId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final row = rows.single;
+    final before = <String, dynamic>{};
+    final updates = <String, dynamic>{};
+    var changed = false;
+    const levels = {
+      'basement': 'basement_rooms_json',
+      'rdc': 'rdc_rooms_json',
+      'floor': 'floor_rooms_json',
+      'second_floor': 'second_floor_rooms_json',
+      'third_floor': 'third_floor_rooms_json',
+    };
+    for (final family in const {
+      'sdbInstances': 'sdb_instances_json',
+      'wcInstances': 'wc_instances_json',
+    }.entries) {
+      final raw = row[family.value] as String?;
+      final original = raw == null ? <dynamic>[] : jsonDecode(raw) as List;
+      before[family.key] = original;
+      final instances = original
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      final label = family.key == 'sdbInstances' ? 'Salle de bain' : 'WC';
+      for (final level in levels.entries) {
+        final rooms = parseHousingRooms(
+          housing[level.value] as String?,
+          level.key,
+        ).where((r) => r.label == label).toList();
+        final diagnostics = instances
+            .where(
+              (r) =>
+                  r['levelField'] == level.key ||
+                  (level.key == 'second_floor' &&
+                      r['levelField'] == 'secondFloor') ||
+                  (level.key == 'third_floor' &&
+                      r['levelField'] == 'thirdFloor'),
+            )
+            .toList();
+        final linked = diagnostics
+            .where((r) => (r['housingRoomId']?.toString() ?? '').isNotEmpty)
+            .toList();
+        final linkedIds = linked.map((r) => r['housingRoomId']).toSet();
+        if (linkedIds.length != linked.length ||
+            linkedIds.any((id) => !rooms.any((r) => r.id == id))) {
+          continue;
+        }
+        final unlinked = diagnostics
+            .where((r) => (r['housingRoomId']?.toString() ?? '').isEmpty)
+            .toList();
+        final available = rooms
+            .where((r) => !linkedIds.contains(r.id))
+            .toList();
+        // Unequal counts are ambiguous; never infer which data was deleted.
+        if (unlinked.length != available.length) continue;
+        for (var i = 0; i < unlinked.length; i++) {
+          unlinked[i]['housingRoomId'] = available[i].id;
+          changed = true;
+        }
+      }
+      updates[family.key] = instances;
+    }
+    if (!changed) return;
+    await txn.update(
+      'diagnostic_sanitaires',
+      {
+        'sdb_instances_json': jsonEncode(updates['sdbInstances']),
+        'wc_instances_json': jsonEncode(updates['wcInstances']),
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      },
+      where: 'local_id = ?',
+      whereArgs: [row['local_id']],
+    );
+    await _enqueueChildUpdate(
+      txn,
+      operationId: 'diag_update_$dossierId',
+      entityType: 'diagnostic_sanitaires',
+      dossierId: dossierId,
+      updates: updates,
+      baseValues: before,
+      existingRow: row,
+      rootFields: const ['sdbInstances', 'wcInstances'],
+      now: now,
+    );
+  }
+
   Future<void> updateHousing(
     String dossierId,
     Map<String, dynamic> fields,
@@ -2998,6 +3096,14 @@ class DossierRepository {
       // dans une seule transaction atomique. Si l'app crash entre les
       // deux writes, SQLite rollback complet → pas d'état orphelin.
       final apiUpdates = _mapHousingFieldsToApi(changedFields);
+      if (existingRow != null && hasCollectionUpdates('housing', apiUpdates)) {
+        await _bindLegacyDiagnosticRoomsBeforeHousingEdit(
+          txn,
+          dossierId,
+          existingRow,
+          now,
+        );
+      }
       await txn.update(
         'housings',
         localFields,
@@ -3415,26 +3521,59 @@ class DossierRepository {
     required Set<String> bathroomIds,
     required Set<String> wcIds,
   }) async {
-    final current = await fetchDiagnosticSanitaire(dossierId);
-    if (current == null) return;
-    final bathrooms = current.sdbInstances
-        .where((room) => !bathroomIds.contains(room.id))
-        .toList();
-    final toilets = current.wcInstances
-        .where((room) => !wcIds.contains(room.id))
-        .toList();
-    if (bathrooms.length == current.sdbInstances.length &&
-        toilets.length == current.wcInstances.length) {
-      return;
-    }
-    await upsertDiagnosticSanitaire(
-      dossierId,
-      DiagnosticSanitaire(
+    final db = await _database.database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'diagnostic_sanitaires',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+      final row = rows.single;
+      final before = <String, dynamic>{};
+      final updates = <String, dynamic>{};
+      var changed = false;
+      for (final entry in const {
+        'sdbInstances': 'sdb_instances_json',
+        'wcInstances': 'wc_instances_json',
+      }.entries) {
+        final raw = row[entry.value] as String?;
+        final items = raw == null ? <dynamic>[] : jsonDecode(raw) as List;
+        final removed = entry.key == 'sdbInstances' ? bathroomIds : wcIds;
+        final retained = items
+            .where((item) => !removed.contains((item as Map)['id']))
+            .toList();
+        before[entry.key] = items;
+        updates[entry.key] = retained;
+        changed = changed || retained.length != items.length;
+      }
+      if (!changed) return;
+      final now = DateTime.now().toIso8601String();
+      await txn.update(
+        'diagnostic_sanitaires',
+        {
+          'sdb_instances_json': jsonEncode(updates['sdbInstances']),
+          'wc_instances_json': jsonEncode(updates['wcInstances']),
+          'updated_at': now,
+          'sync_state': SyncState.pendingSync.name,
+        },
+        where: 'local_id = ?',
+        whereArgs: [row['local_id']],
+      );
+      await _enqueueChildUpdate(
+        txn,
+        operationId: 'diag_update_$dossierId',
+        entityType: 'diagnostic_sanitaires',
         dossierId: dossierId,
-        sdbInstances: bathrooms,
-        wcInstances: toilets,
-      ),
-    );
+        updates: updates,
+        baseValues: before,
+        existingRow: row,
+        rootFields: const ['sdbInstances', 'wcInstances'],
+        now: now,
+      );
+    });
+    SyncEngine().notify();
   }
 
   /// Removes sanitary details whose room no longer exists in Accessibility.
