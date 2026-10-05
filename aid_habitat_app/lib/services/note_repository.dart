@@ -414,6 +414,10 @@ class NoteRepository {
       dossierId ??= existing.isNotEmpty
           ? existing.first['dossier_local_id'] as String?
           : null;
+      if (previousPayload['dossierId'] == dossierId) {
+        scopeType ??= previousPayload['scopeType'] as String?;
+        scopeId ??= previousPayload['scopeId'] as String?;
+      }
       final textContent = existing.isNotEmpty
           ? await OfflineVault.instance.openNullableString(
                   existing.first['text_content'] as String?,
@@ -467,11 +471,9 @@ class NoteRepository {
         'payload_json': await OfflineVault.instance.sealString(
           jsonEncode({
             'patientLocalId': patientId,
-            if (dossierId?.isNotEmpty == true)
-              'dossierId': dossierId,
-            if (scopeType != null && scopeType.isNotEmpty)
-              'scopeType': scopeType,
-            if (scopeId != null && scopeId.isNotEmpty) 'scopeId': scopeId,
+            if (dossierId?.isNotEmpty == true) 'dossierId': dossierId,
+            if (scopeType?.isNotEmpty == true) 'scopeType': scopeType,
+            if (scopeId?.isNotEmpty == true) 'scopeId': scopeId,
             'tabKey': tabKey,
             'pageNumber': pageNumber,
             'drawingJson': drawingJson,

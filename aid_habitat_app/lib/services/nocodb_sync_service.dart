@@ -2116,28 +2116,53 @@ class NocodbSyncService {
       );
     }
     final expectedRevision = payload['expectedRevision']?.toString();
-    final notePage = await _apiClient.upsertNotePage(
-      // Local note ids (`note_<patient>_<tab>_<page>`) are not the remote
-      // `uuid_source`. Once a server revision is known, address the note by
-      // its canonical composite key so an existing remote row is updated
-      // instead of being reported missing on the first genuine edit.
-      notePageId: expectedRevision == null ? operation.entityLocalId : '',
-      patientId: patientId,
-      tabKey: tabKey,
-      pageNumber: pageNumber,
-      drawingJson: drawingJson,
-      textContent: payload['textContent']?.toString(),
-      scopeType: scopeType,
-      scopeId: scopeId,
-      planPhase: (planPhase == 'avant' || planPhase == 'apres')
-          ? planPhase
-          : null,
-      previewDataUrl: previewDataUrl,
-      expectedRevision: expectedRevision,
-      writeId: writeId,
-    );
+    Future<Map<String, dynamic>> send(String? targetScopeId) =>
+        _apiClient.upsertNotePage(
+          // Local note ids (`note_<patient>_<tab>_<page>`) are not the remote
+          // `uuid_source`. Once a server revision is known, address the note by
+          // its canonical composite key so an existing remote row is updated
+          // instead of being reported missing on the first genuine edit.
+          notePageId: expectedRevision == null ? operation.entityLocalId : '',
+          patientId: patientId,
+          tabKey: tabKey,
+          pageNumber: pageNumber,
+          drawingJson: drawingJson,
+          textContent: payload['textContent']?.toString(),
+          scopeType: scopeType,
+          scopeId: targetScopeId,
+          planPhase: (planPhase == 'avant' || planPhase == 'apres')
+              ? planPhase
+              : null,
+          previewDataUrl: previewDataUrl,
+          expectedRevision: expectedRevision,
+          writeId: writeId,
+        );
 
-    return notePage;
+    try {
+      return await send(scopeId);
+    } on ConflictException catch (error) {
+      // Older reads discarded the remote scope. Repair only the
+      // observed legacy alias, with the SAME revision and write id. A real
+      // revision conflict, ambiguous page or changed dossier stays blocked.
+      if (error.remoteData?['error'] != 'NOTE_PAGE_RECORD_MISSING' ||
+          expectedRevision == null ||
+          scopeId != payload['dossierId'] ||
+          scopeId == patientId ||
+          (payload['subTabKey']?.toString().isNotEmpty ?? false)) {
+        rethrow;
+      }
+      final legacy = await _apiClient.findLegacyNoteForRevision(
+        patientId: patientId,
+        dossierId: scopeId!,
+        scopeType: scopeType,
+        tabKey: tabKey,
+        pageNumber: pageNumber,
+        expectedRevision: expectedRevision,
+        writeId: writeId,
+      );
+      if (legacy == null) rethrow;
+      return send(patientId);
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+import '../services/note_backup_service.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -527,33 +528,48 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final note = await _dataService.noteConflictDetails(operationId);
     if (note != null) {
       if (!mounted) return;
+      final missing = note['errorCode'] == 'NOTE_PAGE_RECORD_MISSING';
       final choice = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Conflit sur une note'),
+          title: Text(
+            missing
+                ? 'Emplacement de la note à vérifier'
+                : 'Conflit sur une note',
+          ),
           content: Text(
-            'La note « ${note['tabKey'] ?? 'sans titre'} », page '
-            '${note['pageNumber'] ?? 0}, existe en deux versions. '
-            'Choisissez celle à conserver.',
+            missing
+                ? 'La note est conservée sur cet appareil, mais le serveur ne la '
+                      'retrouve pas à l’emplacement demandé. Vérifiez son emplacement '
+                      'pour réessayer sans remplacer une autre version.'
+                : 'La note « ${note['tabKey'] ?? 'sans titre'} », page '
+                      '${note['pageNumber'] ?? 0}, existe en deux versions. '
+                      'Choisissez celle à conserver.',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('Annuler'),
             ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop('server'),
-              child: const Text('Prendre la note du serveur'),
-            ),
+            if (!missing)
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop('server'),
+                child: const Text('Prendre la note du serveur'),
+              ),
             FilledButton(
-              onPressed: () => Navigator.of(ctx).pop('local'),
-              child: const Text('Conserver ma note locale'),
+              onPressed: () =>
+                  Navigator.of(ctx).pop(missing ? 'repair' : 'local'),
+              child: Text(
+                missing ? 'Vérifier et réessayer' : 'Conserver ma note locale',
+              ),
             ),
           ],
         ),
       );
       if (choice == null || !mounted) return;
-      final resolved = choice == 'local'
+      final resolved = choice == 'repair'
+          ? await _dataService.repairMissingNoteIdentity(operationId)
+          : choice == 'local'
           ? await _dataService.resolveNoteConflictKeepingLocal(operationId)
           : await _dataService.resolveNoteConflictUsingServer(operationId);
       if (!mounted) return;
@@ -562,7 +578,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              choice == 'local'
+              choice == 'repair'
+                  ? 'Emplacement retrouvé. Note locale remise en synchronisation.'
+                  : choice == 'local'
                   ? 'Note locale conservée et remise en synchronisation.'
                   : 'Note du serveur restaurée sur cet appareil.',
             ),
@@ -1204,6 +1222,43 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
     setState(() => _failures = fresh);
   }
 
+  Future<void> _backup(String opId) async {
+    setState(() => _busyIds.add(opId));
+    try {
+      final receipt = await NoteBackupService().backupOperation(opId);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Copie de secours vérifiée'),
+          content: SelectableText(
+            'La copie de cette note a été sauvegardée et relue intégralement. '
+            'Cette copie ne résout pas la synchronisation.\n\n'
+            'Reçu : ${receipt['backupId']}\nEmpreinte : ${receipt['sha256']}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Sauvegarde non confirmée. Les données locales restent conservées.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(opId));
+    }
+  }
+
   Future<void> _retry(String opId) async {
     setState(() => _busyIds.add(opId));
     final reset = await widget.syncEngine.retrySingleOperation(opId);
@@ -1324,53 +1379,72 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                     final op = _failures[i];
                     final id = op['id'] ?? '';
                     final busy = _busyIds.contains(id);
+                    Widget withBackup(Widget content) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        content,
+                        if (op['entityType'] == 'note_page')
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: busy ? null : () => _backup(id),
+                              icon: const Icon(Icons.cloud_upload_outlined),
+                              label: const Text('Sauvegarder par API'),
+                            ),
+                          ),
+                      ],
+                    );
                     if (op['status'] == 'conflict') {
-                      return ListTile(
-                        leading: const Icon(Icons.compare_arrows),
-                        title: const Text('Conflit de synchronisation'),
-                        subtitle: Text(
-                          '${op['entityType']} · ${op['entityLocalId']}\n${op['lastError'] ?? 'Comparaison des versions nécessaire.'}',
-                        ),
-                        trailing: IconButton(
-                          tooltip: 'Comparer les versions',
-                          icon: const Icon(Icons.chevron_right),
-                          onPressed: busy
-                              ? null
-                              : () async {
-                                  setState(() => _busyIds.add(id));
-                                  try {
-                                    await widget.onReviewConflict(id);
-                                    await _refreshList();
-                                  } catch (_) {
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Comparaison indisponible. Les modifications locales sont conservées.',
+                      return withBackup(
+                        ListTile(
+                          leading: const Icon(Icons.compare_arrows),
+                          title: const Text('Conflit de synchronisation'),
+                          subtitle: Text(
+                            '${op['entityType']} · ${op['entityLocalId']}\n${op['lastError'] ?? 'Comparaison des versions nécessaire.'}',
+                          ),
+                          trailing: IconButton(
+                            tooltip: 'Comparer les versions',
+                            icon: const Icon(Icons.chevron_right),
+                            onPressed: busy
+                                ? null
+                                : () async {
+                                    setState(() => _busyIds.add(id));
+                                    try {
+                                      await widget.onReviewConflict(id);
+                                      await _refreshList();
+                                    } catch (_) {
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Comparaison indisponible. Les modifications locales sont conservées.',
+                                            ),
                                           ),
-                                        ),
-                                      );
+                                        );
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() => _busyIds.remove(id));
+                                      }
                                     }
-                                  } finally {
-                                    if (mounted) {
-                                      setState(() => _busyIds.remove(id));
-                                    }
-                                  }
-                                },
+                                  },
+                          ),
                         ),
                       );
                     }
-                    return _FailingOpCard(
-                      entityType: op['entityType'] ?? '?',
-                      operationType: op['operationType'] ?? '?',
-                      entityLocalId: op['entityLocalId'] ?? '',
-                      lastError: op['lastError'] ?? '(aucune)',
-                      attemptCount: op['attemptCount'] ?? '0',
-                      busy: busy,
-                      onRetry: () => _retry(id),
-                      onDiscard: () => _discard(id),
+                    return withBackup(
+                      _FailingOpCard(
+                        entityType: op['entityType'] ?? '?',
+                        operationType: op['operationType'] ?? '?',
+                        entityLocalId: op['entityLocalId'] ?? '',
+                        lastError: op['lastError'] ?? '(aucune)',
+                        attemptCount: op['attemptCount'] ?? '0',
+                        busy: busy,
+                        onRetry: () => _retry(id),
+                        onDiscard: () => _discard(id),
+                      ),
                     );
                   },
                 ),

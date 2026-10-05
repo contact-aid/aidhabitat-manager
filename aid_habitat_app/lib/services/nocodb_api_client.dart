@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'note_legacy_identity.dart';
 import 'dart:convert';
 import 'context_sync_protocol.dart';
 import 'dart:io';
@@ -1569,6 +1570,106 @@ class NocodbApiClient {
     return document;
   }
 
+  Future<Map<String, dynamic>> backupNoteSnapshot({
+    required String patientId,
+    required String snapshotJson,
+  }) async {
+    if (!AppConfig.hasRemoteConfig) {
+      throw StateError('API de sauvegarde indisponible.');
+    }
+    final body = jsonEncode({
+      'patientId': patientId,
+      'snapshotJson': snapshotJson,
+    });
+    if (utf8.encode(body).length > 30 * 1024 * 1024) {
+      throw StateError('La requête dépasse la capacité de sauvegarde.');
+    }
+    final response = await _client
+        .post(
+          Uri.parse('$_baseUrl/api/note-backups'),
+          headers: _headers,
+          body: body,
+        )
+        .timeout(_uploadTimeout);
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      throw StateError(
+        'Sauvegarde API indisponible (${response.statusCode}). La note locale est conservée.',
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    final data = decoded is Map && decoded['success'] == true
+        ? decoded['data']
+        : null;
+    if (data is! Map || data['receipt'] is! Map) {
+      throw const FormatException('Reçu de sauvegarde invalide.');
+    }
+    return (data['receipt'] as Map).cast<String, dynamic>();
+  }
+
+  Future<Map<String, dynamic>> readNoteBackupContent(String backupId) async {
+    if (!AppConfig.hasRemoteConfig) {
+      throw StateError('API de sauvegarde indisponible.');
+    }
+    final response = await _client
+        .get(
+          Uri.parse(
+            '$_baseUrl/api/note-backups/${Uri.encodeComponent(backupId)}/content',
+          ),
+          headers: _headers,
+        )
+        .timeout(_uploadTimeout);
+    if (response.statusCode != 200) {
+      throw StateError(
+        'Relecture de sauvegarde indisponible (${response.statusCode}).',
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map ||
+        decoded['success'] != true ||
+        decoded['data'] is! Map) {
+      throw const FormatException('Relecture de sauvegarde invalide.');
+    }
+    return (decoded['data'] as Map).cast<String, dynamic>();
+  }
+
+  /// Read-only proof for a narrowly scoped legacy identity repair.
+  Future<Map<String, dynamic>?> findLegacyNoteForRevision({
+    required String patientId,
+    required String dossierId,
+    required String scopeType,
+    required String tabKey,
+    required int pageNumber,
+    required String? expectedRevision,
+    String? writeId,
+  }) async {
+    if (expectedRevision == null ||
+        dossierId.isEmpty ||
+        dossierId == patientId) {
+      return null;
+    }
+    final remote = await fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: scopeType,
+      scopeId: patientId,
+    );
+    if (remote == null ||
+        !matchesLegacyNoteIdentity(
+          remote: remote,
+          patientId: patientId,
+          dossierId: dossierId,
+          scopeType: scopeType,
+          tabKey: tabKey,
+          pageNumber: pageNumber,
+          expectedRevision: expectedRevision,
+          writeId: writeId,
+        )) {
+      return null;
+    }
+    return remote;
+  }
+
   Future<Map<String, dynamic>> upsertNotePage({
     required String notePageId,
     required String patientId,
@@ -1630,7 +1731,8 @@ class NocodbApiClient {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
       } catch (_) {}
       throw ConflictException(
-        'Conflit de note pour $tabKey, page $pageNumber',
+        'Conflit de note pour $tabKey, page $pageNumber '
+        '(${response.statusCode})${_noteDiagnosticSuffix(response)}',
         remoteData: remoteData,
       );
     }

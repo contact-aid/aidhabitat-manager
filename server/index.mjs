@@ -24,6 +24,7 @@ import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
 import { noteSyncDiagnostics, safeNoteErrorCode } from './noteSyncDiagnostic.mjs';
+import { registerNoteBackupRoutes, captureSubmittedNoteBackup } from './noteBackupRoutes.mjs';
 import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 import { syncCurrentProfileDossiers } from './airtableDossierSync.mjs';
 import { preserveLegacyOccupantGender } from './occupantGender.mjs';
@@ -8661,15 +8662,17 @@ app.get('/api/mobile-documents/:documentId/content', requireAuth, async (req, re
 
 app.get('/public/note-pages/:notePageId/preview', requireAuth, async (req, res, next) => {
   try {
-    const notePage = await mobileSyncStore.getNotePageById(req.params.notePageId);
-    if (!notePage) {
+    const noteMetadata = await mobileSyncStore.getNotePageById(req.params.notePageId, { metadataOnly: true });
+    if (!noteMetadata) {
       throw httpError(404, 'Note introuvable');
     }
-    const notePatientId = stringValue(notePage.patientId).trim();
+    const notePatientId = stringValue(noteMetadata.patientId).trim();
     if (!notePatientId) {
       throw httpError(409, 'Note sans bénéficiaire');
     }
     await resolveBeneficiaryAccess(req.appUser, notePatientId);
+    const notePage = await mobileSyncStore.getNotePageById(req.params.notePageId);
+    if (!notePage || notePage.patientId !== notePatientId) throw httpError(409, 'Note modifiée pendant la lecture');
 
     const previewDataUrl = stringValue(notePage.previewDataUrl).trim();
     const noteTitle = [
@@ -8756,6 +8759,8 @@ app.get('/api/note-pages/:patientId', requireAuth, async (req, res, next) => {
   }
 });
 
+registerNoteBackupRoutes(app, { requireAuth, resolveBeneficiaryAccess });
+
 app.put('/api/note-pages', requireAuth, noteSyncDiagnostics, async (req, res, next) => {
   try {
     const notePageId = stringValue(req.body?.notePageId).trim();
@@ -8799,7 +8804,7 @@ app.put('/api/note-pages', requireAuth, noteSyncDiagnostics, async (req, res, ne
 
     let targetPatientId = patientId;
     if (notePageId) {
-      const existingNotePage = await mobileSyncStore.getNotePageById(notePageId);
+      const existingNotePage = await mobileSyncStore.getNotePageById(notePageId, { metadataOnly: true });
       if (existingNotePage) {
         const storedPatientId = stringValue(existingNotePage.patientId).trim();
         if (!storedPatientId || storedPatientId !== patientId) {
@@ -8822,6 +8827,7 @@ app.put('/api/note-pages', requireAuth, noteSyncDiagnostics, async (req, res, ne
       dossierRecord: access.dossierRecord,
       patientId: targetPatientId,
     });
+    await captureSubmittedNoteBackup(req, res);
     const notePage = await mobileSyncStore.upsertNotePage({
       notePageId: notePageId || null,
       patientId: targetPatientId,
@@ -8844,7 +8850,8 @@ app.put('/api/note-pages', requireAuth, noteSyncDiagnostics, async (req, res, ne
     res.json({
       success: true,
       error: null,
-      data: { notePage: mapStoredNotePage(notePage) },
+      data: { notePage: mapStoredNotePage(notePage),
+        ...(res.locals.noteBackupReceipt ? { backupReceipt: res.locals.noteBackupReceipt } : {}) },
     });
   } catch (error) {
     res.locals.noteErrorCode = safeNoteErrorCode(error?.code);
@@ -8853,6 +8860,8 @@ app.put('/api/note-pages', requireAuth, noteSyncDiagnostics, async (req, res, ne
         success: false,
         error: error.code,
         requestId: res.locals.noteRequestId,
+        ...(res.locals.noteBackupReceipt ? { backupReceipt: res.locals.noteBackupReceipt } : {}),
+        ...(res.locals.noteBackupStatus ? { backupStatus: res.locals.noteBackupStatus } : {}),
         ...(error.observed ? { conflict: error.status === 409, remoteData: error.observed } : {}),
       });
       return;
@@ -8920,7 +8929,7 @@ app.post('/api/note-pages', requireAuth, async (req, res, next) => {
 app.delete('/api/note-pages/:notePageId', requireAuth, async (req, res, next) => {
   try {
     const patientId = stringValue(req.query?.patientId).trim();
-    const existingNotePage = await mobileSyncStore.getNotePageById(req.params.notePageId);
+    const existingNotePage = await mobileSyncStore.getNotePageById(req.params.notePageId, { metadataOnly: true });
     if (!existingNotePage) {
       throw httpError(404, 'Note introuvable');
     }
@@ -9758,6 +9767,8 @@ app.use((error, _req, res, _next) => {
     success: false,
     error: message,
     ...(res.locals?.noteRequestId ? { requestId: res.locals.noteRequestId } : {}),
+    ...(res.locals?.noteBackupReceipt ? { backupReceipt: res.locals.noteBackupReceipt } : {}),
+    ...(res.locals?.noteBackupStatus ? { backupStatus: res.locals.noteBackupStatus } : {}),
   });
 });
 

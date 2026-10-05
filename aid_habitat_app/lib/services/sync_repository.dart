@@ -9,6 +9,7 @@ import 'local_database.dart';
 import 'offline_vault.dart';
 import 'sync_operation_ownership.dart';
 import 'sync_mutation.dart';
+import 'note_legacy_identity.dart';
 
 const Set<String> _kReportPrerequisiteEntityTypes = {
   'dossier',
@@ -1935,6 +1936,12 @@ class SyncRepository {
           : patientId;
       return {
         'operationId': operationId,
+        'writeId': payload['writeId'],
+        'expectedRevision': payload['expectedRevision'],
+        'errorCode':
+            (payload['conflict'] is Map && payload['conflict']['remote'] is Map)
+            ? payload['conflict']['remote']['error']
+            : null,
         'noteLocalId': rows.single['entity_local_id'],
         'patientId': patientId,
         'dossierId': payload['dossierId'],
@@ -1946,6 +1953,118 @@ class SyncRepository {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Repair an address, never a revision or note content. The caller obtained
+  /// [remote] from a fresh authorized GET. Recheck the queue in a transaction
+  /// so edits made during that GET cannot be silently replaced.
+  Future<bool> repairMissingNoteIdentity(
+    String operationId, {
+    required String writeId,
+    required Map<String, dynamic> remote,
+  }) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership) {
+        // mayClaim is deliberately pending-only; this action reads a conflict.
+        final owner = await txn.rawQuery(
+          '''SELECT 1
+          FROM sync_operation_ownership AS ownership
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE ownership.operation_id = ?
+            AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owner.isEmpty) return false;
+      }
+      final rows = await txn.query(
+        'sync_operations',
+        where: 'id = ? AND entity_type = ? AND status = ?',
+        whereArgs: [operationId, 'note_page', 'conflict'],
+      );
+      if (rows.length != 1) return false;
+      final row = rows.single;
+      final payload =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  row['payload_json'] as String,
+                ),
+              )
+              as Map<String, dynamic>;
+      final conflict = payload['conflict'];
+      if (payload['writeId'] != writeId ||
+          conflict is! Map ||
+          conflict['remote'] is! Map ||
+          conflict['remote']['error'] != 'NOTE_PAGE_RECORD_MISSING') {
+        return false;
+      }
+      final patientId = payload['patientLocalId']?.toString() ?? '';
+      final dossierId = payload['dossierId']?.toString() ?? '';
+      final queuedScope = payload['scopeId']?.toString();
+      if (queuedScope != null &&
+          queuedScope.isNotEmpty &&
+          queuedScope != dossierId) {
+        return false;
+      }
+      if ((payload['subTabKey']?.toString().isNotEmpty ?? false) ||
+          !matchesLegacyNoteIdentity(
+            remote: remote,
+            patientId: patientId,
+            dossierId: dossierId,
+            scopeType: payload['scopeType']?.toString().isNotEmpty == true
+                ? payload['scopeType'].toString()
+                : defaultNoteScopeType(payload['tabKey']?.toString() ?? ''),
+            tabKey: payload['tabKey']?.toString() ?? '',
+            pageNumber: int.tryParse('${payload['pageNumber']}') ?? -1,
+            expectedRevision: payload['expectedRevision']?.toString(),
+            writeId: writeId,
+          )) {
+        return false;
+      }
+      final local = await txn.query(
+        'note_pages',
+        columns: ['drawing_json'],
+        where: 'local_id = ?',
+        whereArgs: [row['entity_local_id']],
+      );
+      if (local.length != 1 ||
+          await OfflineVault.instance.openString(
+                local.single['drawing_json'] as String? ?? '',
+              ) !=
+              payload['drawingJson']) {
+        return false;
+      }
+      payload
+        ..remove('conflict')
+        ..['scopeType'] = remote['scopeType']
+        ..['scopeId'] = remote['scopeId'];
+      await txn.update(
+        'sync_operations',
+        {
+          'payload_json': await OfflineVault.instance.sealString(
+            jsonEncode(payload),
+          ),
+          'status': 'pending',
+          'attempt_count': 0,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [operationId],
+      );
+      await txn.update(
+        'note_pages',
+        {'sync_state': SyncState.pendingSync.name},
+        where: 'local_id = ?',
+        whereArgs: [row['entity_local_id']],
+      );
+      return true;
+    });
   }
 
   /// Keep the complete local note and retry it against the revision observed
