@@ -73,8 +73,14 @@ void main() {
       addTearDown(db.close);
       final local = LocalDatabase.forTesting(db);
       await local.createSchemaForTesting();
+      await db.insert('app_session', {
+        'id': 1,
+        'user_local_id': 'owner',
+        'created_at': '2026-10-05',
+        'updated_at': '2026-10-05',
+      });
       final notes = NoteRepository(database: local);
-      final sync = SyncRepository.forTesting(databaseProvider: () async => db);
+      final sync = SyncRepository(databaseProvider: () async => db);
       for (var page = 0; page < 4; page++) {
         final id = 'note_${patient}_${tab}_$page';
         final op = 'sync_$id';
@@ -143,6 +149,16 @@ void main() {
           await db.query('sync_operations', where: 'id = ?', whereArgs: [op]),
           before,
         );
+        await db.update('app_session', {'user_local_id': 'other'});
+        expect(
+          await sync.repairMissingNoteIdentity(
+            op,
+            writeId: writeId,
+            remote: remote(page),
+          ),
+          isFalse,
+        );
+        await db.update('app_session', {'user_local_id': 'owner'});
         expect(
           await sync.repairMissingNoteIdentity(
             op,

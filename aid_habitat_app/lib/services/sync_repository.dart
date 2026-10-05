@@ -1965,9 +1965,22 @@ class SyncRepository {
   }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
-      if (_enforceOwnership &&
-          !await SyncOperationOwnership.mayClaim(txn, operationId)) {
-        return false;
+      if (_enforceOwnership) {
+        // mayClaim is deliberately pending-only; this action reads a conflict.
+        final owner = await txn.rawQuery(
+          '''SELECT 1
+          FROM sync_operation_ownership AS ownership
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE ownership.operation_id = ?
+            AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owner.isEmpty) return false;
       }
       final rows = await txn.query(
         'sync_operations',
