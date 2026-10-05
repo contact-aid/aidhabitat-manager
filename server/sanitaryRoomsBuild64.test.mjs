@@ -3,7 +3,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
@@ -131,6 +131,36 @@ async function run() {
       assert.equal((await pull()).length, 0);
       assert.equal((await save([room('one', 46)], beforeDeletion)).status, 409);
       assert.equal((await pull()).length, 0);
+
+    }
+    const sparseFixture = JSON.parse(await readFile(new URL('../test/fixtures/sanitary-sparse-payload.synthetic.json', import.meta.url), 'utf8'));
+    for (const [name, scenario] of Object.entries(sparseFixture.scenarios)) {
+      const baseline = scenario.baseValues;
+      rows.set(table, { Id: 401, dossier_id: dossierId, uuid_source: 'synthetic-sanitary',
+        app_sync_revision: randomUUID(), UpdatedAt: sparseFixture.source.updatedAt,
+        sdb_instances_json: JSON.stringify(baseline.sdbInstances),
+        wc_instances_json: JSON.stringify(baseline.wcInstances) });
+      const result = await request(path, scenario.wireBody, token);
+      assert.equal(result.status, 200, `${name}: ${JSON.stringify(result.body)}`);
+      const reopened = await request(path, undefined, token, 'GET');
+      assert.equal(reopened.status, 200);
+      assert.deepEqual(reopened.body.sdbInstances, scenario.updates.sdbInstances, name);
+      assert.deepEqual(reopened.body.wcInstances, scenario.updates.wcInstances, name);
+      const noMoreWrites = writes;
+      assert.equal((await request(path, scenario.wireBody, token)).status, 200, `${name} replay`);
+      assert.equal(writes, noMoreWrites, `${name}: idempotent replay`);
+      // A sparse baseline must not gain permission to clear a later remote edit.
+      const concurrent = rows.get(table);
+      concurrent.app_sync_revision = randomUUID();
+      concurrent.sdb_instances_json = JSON.stringify([
+        ...scenario.updates.sdbInstances, { id: 'concurrent-bath', levelField: 'floor', sdbBaignoireHauteur: 91 },
+      ]);
+      const beforeConflict = structuredClone(concurrent);
+      const stale = structuredClone(scenario.wireBody);
+      stale.concurrency.writeId = randomUUID();
+      assert.equal((await request(path, stale, token)).status, 409, `${name}: concurrent edit`);
+      assert.equal(writes, noMoreWrites);
+      assert.deepEqual(rows.get(table), beforeConflict);
 
     }
     assert.deepEqual(base.violations, []);
