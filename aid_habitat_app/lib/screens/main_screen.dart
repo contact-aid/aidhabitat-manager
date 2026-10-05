@@ -1233,7 +1233,7 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
           title: const Text('Copie de secours vérifiée'),
           content: SelectableText(
             'La copie de cette note a été sauvegardée et relue intégralement. '
-            'L’opération de synchronisation reste en attente.\n\n'
+            'Cette copie ne résout pas la synchronisation.\n\n'
             'Reçu : ${receipt['backupId']}\nEmpreinte : ${receipt['sha256']}',
           ),
           actions: [
