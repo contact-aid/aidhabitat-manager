@@ -117,11 +117,20 @@ test('projection only contains authorized dossier identity and scheduling fields
   });
   assert.equal(result.airtableRecordId, id('a'));
   assert.equal(result.airtableClientRecordId, id('x'));
+  assert.equal(result.beneficiaryGender, 'Femme');
   assert.equal(result.airtableDossierLabel, 'FICTIF-2026');
   assert.equal(result.epciLabel, 'EPCI fictif');
   assert.equal(result.incomeCategoryLabel, 'Très modeste');
   assert.equal(result.hasAirtableReport, true);
   assert(!JSON.stringify(result).includes('must be ignored'));
+});
+
+test('a shared Airtable client name does not assign one title to two people', () => {
+  const result = projectAirtableDossier({
+    dossier: row(id('a'), {}),
+    client: row(id('x'), { Prénom: 'René et Madeleine', Nom: 'Exemple', 'M./Mme': 'Madame' }),
+  });
+  assert.equal(result.beneficiaryGender, '');
 });
 
 test('an absent Airtable record identity cannot be guessed from a patient name', () => {

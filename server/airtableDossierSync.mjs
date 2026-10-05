@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { mapPatient } from './helpers.mjs';
 import { isCurrentAdaptationDossier, projectAirtableDossier } from './airtableAdaptation.mjs';
 
 const value = (record, key) => record?.fields?.[key] ?? record?.[key];
@@ -68,6 +69,11 @@ export async function syncCurrentProfileDossiers({
         skipped.push({ id: source.airtableRecordId, reason: 'fiche client incomplète' });
         continue;
       }
+      if (enhancedWeb && source.beneficiaryGender) {
+        const occupants = mapPatient({ fields: source.beneficiary }, '').occupants;
+        occupants[0].gender = source.beneficiaryGender;
+        source.beneficiary.occupants_json = JSON.stringify(occupants);
+      }
       operations.push({ kind: 'create', source, uuid });
       continue;
     }
@@ -78,6 +84,27 @@ export async function syncCurrentProfileDossiers({
     }
     const beneficiaryPatch = Object.fromEntries(Object.entries(source.beneficiary)
       .filter(([key]) => isEmpty(value(beneficiary, key))));
+    if (enhancedWeb && source.beneficiaryGender) {
+      const raw = value(beneficiary, 'occupants_json');
+      let occupants;
+      try { occupants = JSON.parse(raw || '[]'); } catch { /* preserve malformed data */ }
+      if (Array.isArray(occupants) && occupants.length === 0) {
+        // Hydrate the complete legacy household before creating JSON: birthdays,
+        // medical data, pensions and the second identity must survive the import.
+        occupants = mapPatient({ ...beneficiary, fields: {
+          ...(beneficiary.fields ?? beneficiary), ...beneficiaryPatch,
+        } }, beneficiary.id).occupants;
+      }
+      if (Array.isArray(occupants) && occupants[0]
+        && typeof occupants[0] === 'object'
+        && !Object.hasOwn(occupants[0], 'gender')
+        && same(occupants[0].firstName, source.beneficiary.prenom)
+        && same(occupants[0].lastName, source.beneficiary.nom)) {
+        beneficiaryPatch.occupants_json = JSON.stringify([
+          { ...occupants[0], gender: source.beneficiaryGender }, ...occupants.slice(1),
+        ]);
+      }
+    }
     if (enhancedWeb && same(source.housing.ownerType, 'Propriétaire occupant')) {
       const ownerId = labelId(occupationTypes, 'Propriétaire');
       if (ownerId && isEmpty(value(beneficiary, 'statut_occupation_id1'))) {

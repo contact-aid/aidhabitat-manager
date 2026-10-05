@@ -70,12 +70,15 @@ export function projectAirtableDossier({ dossier, client }, { enhancedWeb = true
   const revenue = asNumber(person.Ressources);
   if (revenue != null && revenue >= 0) beneficiary.revenu_fiscal_reference = revenue;
   const birthDate = first(person['Date de naissance']);
+  const civility = normalized(first(person['M./Mme']));
+  const hasJointGivenNames = /\s+(?:et|&)\s+/iu.test(first(person['Prénom']));
+  const beneficiaryGender = hasJointGivenNames ? '' : civility === 'monsieur' ? 'Homme'
+    : civility === 'madame' ? 'Femme' : '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
     if (enhancedWeb) {
       // This NocoDB column is the primary occupant's date, irrespective of title.
       beneficiary.date_naissance_monsieur = birthDate;
     } else {
-      const civility = normalized(first(person['M./Mme']));
       if (civility === 'monsieur') beneficiary.date_naissance_monsieur = birthDate;
       if (civility === 'madame') beneficiary.date_naissance_madame = birthDate;
     }
@@ -92,6 +95,7 @@ export function projectAirtableDossier({ dossier, client }, { enhancedWeb = true
     airtableClientRecordId: client?.id || null,
     airtableDossierLabel: first(source['Dossier ID']),
     beneficiary,
+    beneficiaryGender,
     dossier: dossierPatch,
     quickNote: first(source.Commentaires),
     intakeNote: first(person['Inscription commentaires']),
