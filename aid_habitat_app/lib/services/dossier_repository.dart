@@ -1848,7 +1848,7 @@ class DossierRepository {
     }
     if (map == null) return const {};
     String encodeList(dynamic value, String level) {
-      if (value is! List) return '[]';
+      if (value is! List) return jsonEncode(value ?? <dynamic>[]);
       final identities = map!['_roomIds'];
       final ids = identities is Map ? identities[level] : null;
       if (ids is List && ids.length == value.length) {
@@ -2467,21 +2467,25 @@ class DossierRepository {
       beneficiaryPrepared:
           (row['dossier_beneficiary_prepared'] as int? ?? 0) == 1,
       housing: Housing(
+        roomIdentityErrors: _housingRoomErrors(row),
         roomsByLevel: {
-          'basement': parseHousingRooms(
+          'basement': _displayHousingRooms(
             row['housing_basement_rooms'] as String?,
             'basement',
           ),
-          'rdc': parseHousingRooms(row['housing_rdc_rooms'] as String?, 'rdc'),
-          'floor': parseHousingRooms(
+          'rdc': _displayHousingRooms(
+            row['housing_rdc_rooms'] as String?,
+            'rdc',
+          ),
+          'floor': _displayHousingRooms(
             row['housing_floor_rooms'] as String?,
             'floor',
           ),
-          'secondFloor': parseHousingRooms(
+          'secondFloor': _displayHousingRooms(
             row['housing_second_floor_rooms'] as String?,
             'secondFloor',
           ),
-          'thirdFloor': parseHousingRooms(
+          'thirdFloor': _displayHousingRooms(
             row['housing_third_floor_rooms'] as String?,
             'thirdFloor',
           ),
@@ -2592,6 +2596,33 @@ class DossierRepository {
     if (states.contains(SyncState.syncing)) return SyncState.syncing;
     if (states.contains(SyncState.localOnly)) return SyncState.localOnly;
     return SyncState.synced;
+  }
+
+  List<HousingRoom> _displayHousingRooms(String? raw, String level) {
+    try {
+      return parseHousingRooms(raw, level);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Map<String, String> _housingRoomErrors(Map<String, Object?> row) {
+    final errors = <String, String>{};
+    for (final entry in const {
+      'basement': 'housing_basement_rooms',
+      'rdc': 'housing_rdc_rooms',
+      'floor': 'housing_floor_rooms',
+      'secondFloor': 'housing_second_floor_rooms',
+      'thirdFloor': 'housing_third_floor_rooms',
+    }.entries) {
+      try {
+        parseHousingRooms(row[entry.value] as String?, entry.key);
+      } catch (_) {
+        errors[entry.key] =
+            'Liste de pièces illisible : données conservées, revue nécessaire.';
+      }
+    }
+    return errors;
   }
 
   List<String> _decodeRoomsJson(String? raw) {
@@ -2931,6 +2962,24 @@ class DossierRepository {
 
       final changedFields = _diffAgainstRow(existingRow, fields);
       _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
+      if (changedFields.keys.any(
+        (key) =>
+            _kHousingRoomBreakdownColumns.contains(key) ||
+            const {
+              'basement',
+              'rdc',
+              'floor',
+              'second_floor',
+              'third_floor',
+            }.contains(key),
+      )) {
+        for (final column in _kHousingRoomBreakdownColumns) {
+          parseHousingRooms(
+            (fields[column] ?? existingRow?[column]) as String?,
+            column,
+          );
+        }
+      }
 
       if (changedFields.isEmpty) {
         return; // rien n'a vraiment changé → no-op
@@ -3078,9 +3127,13 @@ class DossierRepository {
               if (decoded.any((room) => room is Map)) {
                 roomIds[breakdownKey] = rooms.map((room) => room.id).toList();
               }
+            } else {
+              throw const FormatException('Liste de pièces invalide');
             }
           } catch (_) {
-            // JSON malformé → on n'ajoute pas cette clé.
+            throw const FormatException(
+              'Liste de pièces illisible : sauvegarde suspendue, données conservées.',
+            );
           }
         } else {
           // Valeur vide / null → niveau désactivé, on transmet une

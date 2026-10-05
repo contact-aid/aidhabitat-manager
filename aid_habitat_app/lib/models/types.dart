@@ -562,6 +562,7 @@ class Patient {
 }
 
 class Housing {
+  final Map<String, String> roomIdentityErrors;
   final Map<String, List<HousingRoom>> _roomsByLevel;
   Map<String, List<HousingRoom>> get roomsByLevel => {
     for (final entry in <String, List<String>>{
@@ -630,6 +631,7 @@ class Housing {
   final String accessObservation;
 
   Housing({
+    this.roomIdentityErrors = const {},
     Map<String, List<HousingRoom>> roomsByLevel = const {},
     required this.type,
     this.year,

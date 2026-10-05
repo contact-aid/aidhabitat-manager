@@ -25,8 +25,11 @@ void main() {
         parseHousingRooms(raw, 'rdc').map((r) => r.id),
       );
       expect(rooms.last.label, 'Pièce inconnue');
-    expect(parseHousingRooms(raw, 'second_floor').first.id, parseHousingRooms(raw, 'secondFloor').first.id);
-    expect(createHousingRoom('WC').id, isNot(createHousingRoom('WC').id));
+      expect(
+        parseHousingRooms(raw, 'second_floor').first.id,
+        parseHousingRooms(raw, 'secondFloor').first.id,
+      );
+      expect(createHousingRoom('WC').id, isNot(createHousingRoom('WC').id));
       expect(
         () => parseHousingRooms(
           '[{"id":"x","label":"a"},{"id":"x","label":"b"}]',
@@ -36,6 +39,41 @@ void main() {
       );
     },
   );
+  test(
+    'malformed room data remains readable and cannot be silently overwritten',
+    () async {
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      final local = LocalDatabase.forTesting(db);
+      await local.createSchemaForTesting();
+      final repo = DossierRepository(database: local);
+      await repo.mergeRemoteDossierPayloads([
+        {
+          'id': 'broken',
+          'patient': {'id': 'p'},
+          'housing': {
+            'id': 'h',
+            'roomsBreakdown': {
+              'rdc': {'bad': 'legacy'},
+            },
+          },
+        },
+      ]);
+      final raw = (await db.query('housings')).single['rdc_rooms_json'];
+      final dossiers = await repo.fetchAllDossiers();
+      expect(
+        dossiers.single.housing.roomIdentityErrors.containsKey('rdc'),
+        isTrue,
+      );
+      await expectLater(
+        repo.updateHousing('broken', {'rdc': true}),
+        throwsFormatException,
+      );
+      expect((await db.query('housings')).single['rdc_rooms_json'], raw);
+      expect(await db.query('sync_operations'), isEmpty);
+    },
+  );
+
   test(
     'room identities survive API SQLite edit and exact diagnostic deletion',
     () async {
