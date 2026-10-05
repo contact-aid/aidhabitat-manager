@@ -25,7 +25,7 @@ The existing HTTP JSON limit remains 30 MiB for the entire serialized request, i
 
 ## Delivery prerequisites and rollback
 
-Independent review, exact candidate tests, backup of notes AND document fragments, verified encrypted iPad backup, and deployment authorization are still required. This code does not resolve the two incident operations or any version choice.
+Delivery requires independent review, exact candidate tests, a server backup of notes AND document fragments, and deployment authorization. The chosen recovery path is API-only. Build 70 cannot export an already-conflicted Plan: installing the new client without uninstalling is required before an explicit encrypted API backup can be verified. No pre-installation backup of that Plan is claimed. Preserve local storage and both versions; verify the API copy before any conflict resolution. This code does not resolve the two incident operations or choose a version.
 
 After the first manifest is written, rolling the server back to a version without this reader is unsafe: that server cannot reconstruct the content. Keep a compatible reader in any rollback build. Old clients remain compatible through the upgraded API; direct NocoDB readers and external automation have not been inventoried beyond this repository.
 
