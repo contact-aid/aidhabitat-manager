@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:crypto/crypto.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
@@ -38,7 +39,7 @@ class MandateDocumentService {
   }
 
   static String documentId(Dossier dossier, LocalAppUser user) =>
-      'doc_mandat_${dossier.id}_${user.id}';
+      'doc_mandat_${dossier.id}_${sha256.convert(utf8.encode(user.email.trim().toLowerCase()))}';
 
   Future<List<DocItem>> documentsFor(
     Dossier dossier,
@@ -70,19 +71,37 @@ class MandateDocumentService {
     final id = documentId(dossier, user);
     final dossierTag = 'Dossier:${dossier.id}';
     final accountTag = 'Compte:${user.id}';
+    final emailTag = 'CompteEmail:${user.email.trim().toLowerCase()}';
     bool isExistingMandate(DocItem doc) {
       if (doc.id == id) return true;
       final dossierTags = doc.tags.where((tag) => tag.startsWith('Dossier:'));
-      if (dossierTags.isNotEmpty && !dossierTags.contains(dossierTag)) return false;
+      if (dossierTags.isNotEmpty && !dossierTags.contains(dossierTag))
+        return false;
       final accountTags = doc.tags.where((tag) => tag.startsWith('Compte:'));
-      if (accountTags.isNotEmpty && !accountTags.contains(accountTag)) return false;
+      final emailTags = doc.tags.where((tag) => tag.startsWith('CompteEmail:'));
+      if (emailTags.isNotEmpty && !emailTags.contains(emailTag)) return false;
+      if (emailTags.isEmpty &&
+          accountTags.isNotEmpty &&
+          !accountTags.contains(accountTag) &&
+          doc.title != 'Mandat administratif - ${user.shortDisplayName}')
+        return false;
       // Historical imports lack automatic-generation tags and deterministic IDs.
       // Keep them as-is, including documents with no known account attribution.
-      return doc.tags.any((tag) => tag.trim().toLowerCase() == 'mandat' ||
-          tag.trim().toLowerCase() == 'mandat automatique') ||
-          RegExp(r'^mandat(?:\b|_)', caseSensitive: false).hasMatch(doc.title.trim()) ||
-          RegExp(r'^mandat(?:\b|_)', caseSensitive: false).hasMatch(doc.name.trim());
+      return doc.tags.any(
+            (tag) =>
+                tag.trim().toLowerCase() == 'mandat' ||
+                tag.trim().toLowerCase() == 'mandat automatique',
+          ) ||
+          RegExp(
+            r'^mandat(?:\b|_)',
+            caseSensitive: false,
+          ).hasMatch(doc.title.trim()) ||
+          RegExp(
+            r'^mandat(?:\b|_)',
+            caseSensitive: false,
+          ).hasMatch(doc.name.trim());
     }
+
     if (docs.any(isExistingMandate) || !createIfMissing) {
       return docs;
     }
@@ -95,7 +114,7 @@ class MandateDocumentService {
       bytes: bytes,
       fileName: 'mandat_administratif.pdf',
       title: 'Mandat administratif - ${user.shortDisplayName}',
-      tags: ['Mandat', 'Mandat automatique', dossierTag, accountTag],
+      tags: ['Mandat', 'Mandat automatique', dossierTag, accountTag, emailTag],
     );
     return [document, ...docs];
   }
