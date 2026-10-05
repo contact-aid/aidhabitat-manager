@@ -11,6 +11,9 @@ import 'package:flutter_test/flutter_test.dart';
 class _PlansDataService implements DataService {
   final drawings = <int, String>{};
   final phases = <int, PlanPhase?>{};
+  String? lastDuplicatePreview;
+  int? lastDuplicateSource;
+  int writes = 0;
 
   @override
   Future<List<LocalNotePageSnapshot>> fetchLocalNotePages({
@@ -35,6 +38,8 @@ class _PlansDataService implements DataService {
     required int sourcePageNumber,
     String? previewDataUrl,
   }) async {
+    lastDuplicatePreview = previewDataUrl;
+    lastDuplicateSource = sourcePageNumber;
     final next = drawings.keys.fold<int>(0, (a, b) => a > b ? a : b) + 1;
     drawings[next] =
         drawings[sourcePageNumber] ??
@@ -63,6 +68,7 @@ class _PlansDataService implements DataService {
     String? scopeId,
     required SyncMutationOrigin mutationOrigin,
   }) async {
+    writes++;
     drawings[pageNumber] = drawingJson;
   }
 
@@ -117,6 +123,149 @@ Dossier _fictionalDossier() => Dossier(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  final validStroke = {
+    'tool': 'pen',
+    'color': 4279900698,
+    'size': 2,
+    'points': [
+      [10, 10],
+      [30, 30],
+    ],
+  };
+  final unsafeStrokes = <String, Object?>{
+    'unknown tool': {...validStroke, 'tool': 'old-dimension'},
+    'non-object stroke': 42,
+    'malformed coordinate': {
+      ...validStroke,
+      'points': [
+        [10, 'bad'],
+      ],
+    },
+    'filtered point': {
+      ...validStroke,
+      'points': [
+        [10, 10],
+        null,
+      ],
+    },
+    'extra coordinate': {
+      ...validStroke,
+      'points': [
+        [10, 10, 99],
+      ],
+    },
+    'unrecognized stroke metadata': {
+      ...validStroke,
+      'pressure': [0.4, 0.8],
+    },
+    'malformed erasure': {
+      ...validStroke,
+      'erasures': [
+        {
+          'points': [
+            [10],
+          ],
+          'size': 3,
+        },
+      ],
+    },
+    'unrecognized erasure metadata': {
+      ...validStroke,
+      'erasures': [
+        {
+          'points': [
+            [10, 10],
+          ],
+          'pressure': 0.5,
+        },
+      ],
+    },
+    'missing tool': {
+      'points': [
+        [10, 10],
+      ],
+    },
+  };
+  for (final entry in unsafeStrokes.entries) {
+    testWidgets('protects the entire v1 page with ${entry.key}', (
+      tester,
+    ) async {
+      final service = _PlansDataService();
+      final raw = jsonEncode({
+        'format': 'plan_canvas_v1',
+        'strokes': [validStroke, entry.value],
+      });
+      service.drawings[0] = raw;
+      await tester.binding.setSurfaceSize(const Size(1200, 850));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PlansTab(
+              dossier: _fictionalDossier(),
+              dataService: service,
+              previewDataUrlBuilder: () async => 'previous-preview',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Plan ancien conservé en lecture seule'),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Crayon'), findsNothing);
+      await tester.dragFrom(const Offset(600, 400), const Offset(30, 30));
+      await tester.pump(const Duration(seconds: 1));
+      expect(service.writes, 0);
+      expect(service.drawings[0], raw);
+      await tester.tap(find.text('Dupliquer cette page'));
+      await tester.pumpAndSettle();
+      expect(service.drawings[1], raw);
+      expect(service.lastDuplicatePreview, isNull);
+    });
+  }
+
+  testWidgets(
+    'protected-image duplication never reuses the previous editable canvas preview',
+    (tester) async {
+      final service = _PlansDataService();
+      service.drawings[0] = jsonEncode({
+        'format': 'plan_canvas_v1',
+        'strokes': [validStroke],
+      });
+      service.drawings[1] =
+          '{"format":"historical-raster","reference":"fictional-image"}';
+      var previewCalls = 0;
+      await tester.binding.setSurfaceSize(const Size(1200, 850));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PlansTab(
+              dossier: _fictionalDossier(),
+              dataService: service,
+              previewDataUrlBuilder: () async {
+                previewCalls++;
+                return 'old-page-preview';
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Crayon'), findsOneWidget);
+      await tester.tap(find.text('Scénario 1'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Dupliquer cette page'));
+      await tester.pumpAndSettle();
+      expect(service.lastDuplicateSource, 1);
+      expect(service.lastDuplicatePreview, isNull);
+      expect(previewCalls, 0);
+      expect(service.drawings[2], service.drawings[1]);
+    },
+  );
 
   testWidgets(
     'an unknown historical drawing is never exposed as an empty editable canvas',

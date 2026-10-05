@@ -57,6 +57,93 @@ enum PlanTool {
   eraser,
 }
 
+/// Reject a whole page if the reader would discard or reinterpret any part of
+/// a stroke. Top-level metadata is preserved separately during ordinary edits.
+bool isEditablePlanDrawing(String? raw) {
+  bool finiteNumber(Object? value) => value is num && value.isFinite;
+  bool optionalNumber(Map value, String key) =>
+      !value.containsKey(key) || finiteNumber(value[key]);
+  bool points(Object? value) =>
+      value is List &&
+      value.isNotEmpty &&
+      value.every(
+        (point) =>
+            point is List && point.length == 2 && point.every(finiteNumber),
+      );
+  bool erasure(Object? value) =>
+      value is Map &&
+      value.keys.every(
+        const {
+          'size',
+          'points',
+          'localToSymbol',
+          'symbolWidth',
+          'symbolHeight',
+        }.contains,
+      ) &&
+      points(value['points']) &&
+      optionalNumber(value, 'size') &&
+      optionalNumber(value, 'symbolWidth') &&
+      optionalNumber(value, 'symbolHeight') &&
+      (!value.containsKey('localToSymbol') || value['localToSymbol'] is bool);
+  try {
+    final decoded = jsonDecode(raw ?? '');
+    if (decoded is! Map ||
+        decoded['format'] != 'plan_canvas_v1' ||
+        decoded['strokes'] is! List) {
+      return false;
+    }
+    for (final stroke in decoded['strokes'] as List) {
+      if (stroke is! Map ||
+          !stroke.keys.every(
+            const {
+              'tool',
+              'color',
+              'size',
+              'points',
+              'rotation',
+              'flipX',
+              'flipY',
+              'erasures',
+            }.contains,
+          )) {
+        return false;
+      }
+      final tool = stroke['tool'];
+      if (tool is! String ||
+          tool == 'hand' ||
+          !PlanTool.values.any((value) => value.name == tool)) {
+        return false;
+      }
+      if (!points(stroke['points'])) return false;
+      if (!const {'pen', 'highlighter', 'eraser'}.contains(tool) &&
+          (stroke['points'] as List).length != 2) {
+        return false;
+      }
+      if (!optionalNumber(stroke, 'size') ||
+          !optionalNumber(stroke, 'rotation')) {
+        return false;
+      }
+      if (stroke.containsKey('color') &&
+          (stroke['color'] is! int ||
+              (stroke['color'] as int) < 0 ||
+              (stroke['color'] as int) > 0xffffffff)) {
+        return false;
+      }
+      if (stroke.containsKey('flipX') && stroke['flipX'] is! bool) return false;
+      if (stroke.containsKey('flipY') && stroke['flipY'] is! bool) return false;
+      if (stroke.containsKey('erasures') &&
+          (stroke['erasures'] is! List ||
+              !(stroke['erasures'] as List).every(erasure))) {
+        return false;
+      }
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// Ensemble des outils qui produisent un SYMBOLE placé (pas un stroke de
 /// tracé libre). Ces symboles sont sélectionnables et manipulables avec
 /// des poignées (4 coins pour la taille + 1 flèche pour la rotation).
@@ -245,9 +332,24 @@ class _PendingPlanErasure {
 class PlanCanvasController {
   _PlanCanvasState? _state;
 
-  Future<String?> previewDataUrl() async =>
-      _state?.widget.previewDataUrlBuilder?.call() ??
-      _state?._rasterizeCanvasDataUrl();
+  Future<String?> previewDataUrl({
+    String? patientId,
+    String? tabKey,
+    int? pageNumber,
+  }) async {
+    final state = _state;
+    if (state == null ||
+        !state.mounted ||
+        !state._loaded ||
+        !state._editableDrawing ||
+        (patientId != null && state.widget.patientId != patientId) ||
+        (tabKey != null && state.widget.tabKey != tabKey) ||
+        (pageNumber != null && state.widget.pageNumber != pageNumber)) {
+      return null;
+    }
+    return state.widget.previewDataUrlBuilder?.call() ??
+        state._rasterizeCanvasDataUrl();
+  }
 
   Future<void> flush() async {
     await _state?._flushPendingSave();
@@ -376,6 +478,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
 
   Timer? _saveTimer;
   bool _loaded = false;
+  bool _editableDrawing = true;
   int _loadGeneration = 0;
   Map<String, dynamic> _drawingMetadata = {};
 
@@ -748,6 +851,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
       pageNumber: widget.pageNumber,
     );
     if (!mounted || generation != _loadGeneration) return;
+    _editableDrawing =
+        json == null || json.isEmpty || isEditablePlanDrawing(json);
     _drawingMetadata = {};
     try {
       final decoded = jsonDecode(json ?? '{}');
@@ -775,6 +880,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
     int pageNumber, {
     required bool independentPage,
   }) async {
+    if (!_editableDrawing) return;
     final payload = jsonEncode({
       ..._drawingMetadata,
       'format': 'plan_canvas_v1',
@@ -1986,6 +2092,9 @@ class _PlanCanvasState extends State<PlanCanvas> {
   }
 
   Widget _buildCanvas() {
+    if (_loaded && !_editableDrawing) {
+      return const Center(child: Text('Plan ancien conservé en lecture seule'));
+    }
     if (!_loaded) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -2265,7 +2374,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
   }
 
   void _onCanvasPointerDown(PointerDownEvent event) {
-    if (!_isSupportedCanvasPointer(event)) return;
+    if (!_editableDrawing || !_isSupportedCanvasPointer(event)) return;
     if (event.kind == PointerDeviceKind.touch) {
       if (_activeCanvasPointerKind != null &&
           _isStylusPointer(_activeCanvasPointerKind!)) {

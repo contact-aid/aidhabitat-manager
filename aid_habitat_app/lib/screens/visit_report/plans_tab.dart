@@ -88,12 +88,7 @@ class _PlansTabState extends State<PlansTab> {
         continue;
       }
       numbers.add(page.pageNumber);
-      try {
-        final drawing = jsonDecode(page.drawingJson);
-        if (drawing is! Map || drawing['format'] != 'plan_canvas_v1') {
-          _protectedPages[page.pageNumber] = page;
-        }
-      } catch (_) {
+      if (!isEditablePlanDrawing(page.drawingJson)) {
         _protectedPages[page.pageNumber] = page;
       }
       _blankPages[page.pageNumber] = _isBlankPage(page.drawingJson);
@@ -155,7 +150,13 @@ class _PlansTabState extends State<PlansTab> {
           dossierId: widget.dossier.id,
           tabKey: _kTabKey,
           sourcePageNumber: sourcePage,
-          previewDataUrl: await _planCanvasController.previewDataUrl(),
+          previewDataUrl: _protectedPages.containsKey(sourcePage)
+              ? null
+              : await _planCanvasController.previewDataUrl(
+                  patientId: widget.dossier.patient.id,
+                  tabKey: _kTabKey,
+                  pageNumber: sourcePage,
+                ),
         );
       } else {
         newIndex = _nextPageNumber;

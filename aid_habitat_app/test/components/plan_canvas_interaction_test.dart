@@ -49,6 +49,81 @@ class _MemoryPlanDataService implements DataService {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets(
+    'controller preview is bound to the loaded page and detaches on disposal',
+    (tester) async {
+      final controller = PlanCanvasController();
+      final service = _MemoryPlanDataService();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PlanCanvas(
+              patientId: 'fictional-patient',
+              pageNumber: 7,
+              controller: controller,
+              dataService: service,
+              previewDataUrlBuilder: () async => 'page-seven',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        await controller.previewDataUrl(
+          patientId: 'fictional-patient',
+          tabKey: 'Plans',
+          pageNumber: 7,
+        ),
+        'page-seven',
+      );
+      expect(
+        await controller.previewDataUrl(
+          patientId: 'fictional-patient',
+          pageNumber: 8,
+        ),
+        isNull,
+      );
+      expect(
+        await controller.previewDataUrl(
+          patientId: 'another-patient',
+          pageNumber: 7,
+        ),
+        isNull,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(await controller.previewDataUrl(), isNull);
+    },
+  );
+
+  testWidgets('direct canvas load cannot persist a partially decoded v1 page', (
+    tester,
+  ) async {
+    final raw =
+        '{"format":"plan_canvas_v1","strokes":[{"tool":"unknown","points":[[10,10],[20,20]]}]}';
+    final service = _MemoryPlanDataService()..drawing = raw;
+    final controller = PlanCanvasController();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PlanCanvas(
+            patientId: 'fictional-patient',
+            controller: controller,
+            dataService: service,
+            refreshPreviewOnLoad: true,
+            previewDataUrlBuilder: () async => 'partial-preview',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(400, 300), const Offset(40, 40));
+    await tester.pump(const Duration(seconds: 1));
+    await controller.flush();
+    expect(service.writes, 0);
+    expect(service.drawing, raw);
+    expect(await controller.previewDataUrl(), isNull);
+  });
+
   testWidgets('palm contacts do not discard an active Pencil stroke', (
     tester,
   ) async {
