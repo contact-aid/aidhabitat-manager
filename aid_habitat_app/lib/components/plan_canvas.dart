@@ -38,6 +38,7 @@ const double _kSymbolHitPadding = 8.0;
 // ---------------------------------------------------------------------------
 
 enum PlanTool {
+  hand,
   pen,
   highlighter,
   line,
@@ -244,6 +245,10 @@ class _PendingPlanErasure {
 class PlanCanvasController {
   _PlanCanvasState? _state;
 
+  Future<String?> previewDataUrl() async =>
+      _state?.widget.previewDataUrlBuilder?.call() ??
+      _state?._rasterizeCanvasDataUrl();
+
   Future<void> flush() async {
     await _state?._flushPendingSave();
   }
@@ -256,6 +261,7 @@ class PlanCanvas extends StatefulWidget {
 
   /// Page number (0-based). Each page stores its own set of strokes.
   final int pageNumber;
+  final bool independentPage;
 
   /// Regenerates the PNG preview once after loading existing strokes.
   /// Useful when a page has just been seeded from another drawing.
@@ -278,6 +284,7 @@ class PlanCanvas extends StatefulWidget {
   /// pas dans le menu trois points.
   final VoidCallback? onDuplicatePage;
   final VoidCallback? onDeletePage;
+  final String? deletionUnavailableReason;
 
   const PlanCanvas({
     super.key,
@@ -285,6 +292,7 @@ class PlanCanvas extends StatefulWidget {
     this.controller,
     this.tabKey = 'Plans',
     this.pageNumber = 0,
+    this.independentPage = false,
     this.refreshPreviewOnLoad = false,
     this.dataService,
     this.previewDataUrlBuilder,
@@ -295,6 +303,7 @@ class PlanCanvas extends StatefulWidget {
     this.onAddPage,
     this.onDuplicatePage,
     this.onDeletePage,
+    this.deletionUnavailableReason,
   });
 
   @override
@@ -304,6 +313,11 @@ class PlanCanvas extends StatefulWidget {
 class _PlanCanvasState extends State<PlanCanvas> {
   late final DataService _dataService = widget.dataService ?? DataService();
   final GlobalKey _drawAreaKey = GlobalKey();
+  final TransformationController _viewportController =
+      TransformationController();
+  bool _viewportCentered = false;
+  final Set<int> _touchPointers = <int>{};
+  bool _pinching = false;
   StreamSubscription<PencilDoubleTapEvent>? _pencilDoubleTapSubscription;
 
   PlanTool _tool = PlanTool.pen;
@@ -362,6 +376,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
 
   Timer? _saveTimer;
   bool _loaded = false;
+  int _loadGeneration = 0;
+  Map<String, dynamic> _drawingMetadata = {};
 
   static const List<int> _colorPresets = [
     0xFF111827,
@@ -376,6 +392,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
 
   static double _defaultStrokeSizeFor(PlanTool tool) {
     switch (tool) {
+      case PlanTool.hand:
+        return 2.0;
       case PlanTool.highlighter:
         return _kDefaultHighlighterSize;
       case PlanTool.eraser:
@@ -430,6 +448,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
           oldWidget.patientId,
           oldWidget.tabKey,
           oldWidget.pageNumber,
+          independentPage: oldWidget.independentPage,
         );
       }
       setState(() {
@@ -457,6 +476,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
     }
     _pencilDoubleTapSubscription?.cancel();
     _pencilDoubleTapSubscription = null;
+    _viewportController.dispose();
     super.dispose();
   }
 
@@ -721,12 +741,22 @@ class _PlanCanvasState extends State<PlanCanvas> {
   }
 
   Future<void> _loadStrokes() async {
+    final generation = ++_loadGeneration;
     final json = await _dataService.fetchNoteDrawingJson(
       patientId: widget.patientId,
       tabKey: widget.tabKey,
       pageNumber: widget.pageNumber,
     );
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
+    _drawingMetadata = {};
+    try {
+      final decoded = jsonDecode(json ?? '{}');
+      if (decoded is Map<String, dynamic>) {
+        _drawingMetadata = Map.of(decoded)..remove('strokes');
+      }
+    } catch (_) {
+      /* Invalid historical pages are protected by PlansTab. */
+    }
     _strokes
       ..clear()
       ..addAll(_decodeStrokesJson(json));
@@ -742,10 +772,13 @@ class _PlanCanvasState extends State<PlanCanvas> {
   Future<void> _persistForKey(
     String patientId,
     String tabKey,
-    int pageNumber,
-  ) async {
+    int pageNumber, {
+    required bool independentPage,
+  }) async {
     final payload = jsonEncode({
+      ..._drawingMetadata,
       'format': 'plan_canvas_v1',
+      if (independentPage) 'pageKind': 'blank',
       'strokes': _strokes.map((s) => s.toJson()).toList(),
     });
     // Rasterisation du dessin → data URL PNG. Indispensable pour
@@ -821,7 +854,12 @@ class _PlanCanvasState extends State<PlanCanvas> {
   }
 
   Future<void> _persist() async {
-    await _persistForKey(widget.patientId, widget.tabKey, widget.pageNumber);
+    await _persistForKey(
+      widget.patientId,
+      widget.tabKey,
+      widget.pageNumber,
+      independentPage: widget.independentPage,
+    );
   }
 
   // ----- Gesture handlers -----
@@ -901,14 +939,20 @@ class _PlanCanvasState extends State<PlanCanvas> {
   void _finishCurrentStroke() {
     final cur = _current;
     if (cur == null) return;
+    if (!_freehandTools.contains(cur.tool) &&
+        (cur.points.length < 2 ||
+            (cur.points[1] - cur.points[0]).distance < 8)) {
+      setState(() => _current = null);
+      return;
+    }
     if (_freehandTools.contains(cur.tool) && cur.points.length < 2) {
       // Ensure a dot renders by duplicating the point
       cur.points.add(cur.points.first.translate(0.1, 0));
     }
-    // Symbole architectural posé en tap (sans drag) → on se donne une
-    // taille par défaut pour que l'objet apparaisse quand même.
-    if (!_freehandTools.contains(cur.tool) && cur.points.length < 2) {
-      cur.points.add(cur.points.first.translate(60, 40));
+    if (_symbolTools.contains(cur.tool)) {
+      final bounds = Rect.fromPoints(cur.points[0], cur.points[1]);
+      cur.points[0] = bounds.center;
+      cur.points[1] = bounds.bottomRight;
     }
 
     if (cur.tool == PlanTool.eraser) {
@@ -934,6 +978,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
     setState(() {
       _strokes.add(cur);
       _current = null;
+      _selectedIndex = -1;
+      _editingMode = false;
     });
     _scheduleSave();
   }
@@ -1008,59 +1054,6 @@ class _PlanCanvasState extends State<PlanCanvas> {
     } catch (err) {
       _showSnack('Export impossible: $err');
     }
-  }
-
-  // ---------------------------------------------------------------------
-  // Insertion d'un symbole architectural depuis le menu déroulant.
-  // ---------------------------------------------------------------------
-
-  static const Map<PlanTool, Size> _defaultSymbolSize = {
-    // Fenêtre simple : cadre carré autour de l'arc d'ouverture.
-    PlanTool.window: Size(72, 72),
-    // Fenêtre double : deux ouvertures côte à côte.
-    PlanTool.windowDouble: Size(112, 72),
-    PlanTool.freeElement: Size(110, 70),
-    PlanTool.door: Size(80, 80),
-    // WC : plus petit + plus large (proportions cuvette réelle ~2:1,
-    // l'axe long étant horizontal). Orientable ensuite via la rotation.
-    PlanTool.toilet: Size(68, 40),
-    PlanTool.shower: Size(90, 90),
-    PlanTool.bath: Size(170, 75),
-    // Lavabo : plus large que profond (typ. 60 × 45 cm en vue du dessus).
-    PlanTool.sink: Size(70, 50),
-  };
-
-  void _insertSymbolAtCenter(PlanTool tool) {
-    final box = _drawAreaKey.currentContext?.findRenderObject() as RenderBox?;
-    final canvasSize = box?.size ?? const Size(800, 600);
-    final center = Offset(canvasSize.width / 2, canvasSize.height / 2);
-    final defaultSize = _defaultSymbolSize[tool] ?? const Size(100, 100);
-    final corner = Offset(defaultSize.width / 2, defaultSize.height / 2);
-    // Couleur du symbole = couleur active du crayon (demande utilisateur
-    // 2026-05-04 : « le changement de couleur doit également changer la
-    // couleur de l'élément ajouté »). Avant : `0xFF0F172A` hardcodé →
-    // les fenêtres/portes/WC restaient toujours en gris foncé même
-    // après changement de couleur.
-    final stroke = _PlanStroke(
-      tool: tool,
-      color: _penColor,
-      size: 2,
-      points: [center, center + corner],
-      rotation: 0,
-    );
-    _pushUndo();
-    setState(() {
-      _strokes.add(stroke);
-      _selectedIndex = _strokes.length - 1;
-      _showWindowTypeBundle = false;
-      _showHighlighterSizeGauge = false;
-      _showEraserSizeGauge = false;
-      _showColorPalette = false;
-      // On repasse sur le crayon pour que le prochain drag sur le canvas
-      // ne réouvre pas le menu / ne dessine pas un outil figé inattendu.
-      _tool = PlanTool.pen;
-    });
-    _scheduleSave();
   }
 
   // ---------------------------------------------------------------------
@@ -1243,6 +1236,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
   /// pill blanc, boutons 36×36, actif violet clair, icônes ink-700.
   Widget _buildPlanToolbar() {
     final buttons = <Widget>[
+      _toolBtn(PlanTool.hand, LucideIcons.hand, 'Déplacer le plan'),
       _toolBtn(PlanTool.pen, LucideIcons.pencil, 'Crayon'),
       _eraserToolBtn(),
       _highlighterToolBtn(),
@@ -1338,9 +1332,9 @@ class _PlanCanvasState extends State<PlanCanvas> {
     return [
       _windowBundleButton(),
       _symbolInsertBtn(
-        PlanTool.freeElement,
+        PlanTool.rect,
         const Icon(Icons.crop_square, size: 20, color: _kToolbarIcon),
-        'Élément libre',
+        'Rectangle',
       ),
       _symbolInsertBtn(
         PlanTool.door,
@@ -1394,6 +1388,10 @@ class _PlanCanvasState extends State<PlanCanvas> {
       child: _symbolButtonShell(
         iconChild: Icon(LucideIcons.columns, size: 18, color: _kToolbarIcon),
         tooltip: 'Choisir une fenêtre',
+        active:
+            _tool == PlanTool.window ||
+            _tool == PlanTool.windowDouble ||
+            _showWindowTypeBundle,
         onTap: () {
           setState(() {
             _showWindowTypeBundle = !_showWindowTypeBundle;
@@ -1451,11 +1449,11 @@ class _PlanCanvasState extends State<PlanCanvas> {
     required IconData icon,
   }) {
     return Tooltip(
-      message: 'Insérer : fenêtre $label',
+      message: 'Tracer : fenêtre $label',
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () {
-          _insertSymbolAtCenter(tool);
+          _setTool(tool);
           _hideWindowTypeBundle();
         },
         child: Container(
@@ -1496,6 +1494,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
         icon: const Icon(LucideIcons.moreVertical, size: 18),
         color: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        constraints: const BoxConstraints(minWidth: 320, maxWidth: 360),
         onSelected: (v) {
           switch (v) {
             case 'download':
@@ -1534,7 +1533,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
                     color: Color(0xFF2B323A),
                   ),
                   SizedBox(width: 10),
-                  Text('Ajouter un scénario'),
+                  Text('Ajouter une page vide'),
                 ],
               ),
             ),
@@ -1545,9 +1544,15 @@ class _PlanCanvasState extends State<PlanCanvas> {
                 children: [
                   Icon(LucideIcons.copy, size: 16, color: Color(0xFF2B323A)),
                   SizedBox(width: 10),
-                  Text('Dupliquer en scénario'),
+                  Text('Dupliquer cette page'),
                 ],
               ),
+            ),
+          if (widget.onDeletePage == null &&
+              widget.deletionUnavailableReason != null)
+            PopupMenuItem(
+              enabled: false,
+              child: Text(widget.deletionUnavailableReason!),
             ),
           if (widget.onDeletePage != null && (widget.totalPages ?? 1) > 1)
             const PopupMenuItem(
@@ -1557,7 +1562,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
                   Icon(LucideIcons.fileX, size: 16, color: Color(0xFFB91C1C)),
                   SizedBox(width: 10),
                   Text(
-                    'Supprimer le scénario',
+                    'Supprimer cette page',
                     style: TextStyle(color: Color(0xFFB91C1C)),
                   ),
                 ],
@@ -1800,6 +1805,9 @@ class _PlanCanvasState extends State<PlanCanvas> {
     setState(() {
       if (trackPrevious) _previousTool = _tool;
       _tool = tool;
+      _selectedIndex = -1;
+      _editingMode = false;
+      _activeHandle = null;
       _showEraserSizeGauge = tool == PlanTool.eraser;
       _showHighlighterSizeGauge = tool == PlanTool.highlighter;
       _showColorPalette = false;
@@ -1942,15 +1950,13 @@ class _PlanCanvasState extends State<PlanCanvas> {
     );
   }
 
-  /// Bouton d'insertion instantanée d'un symbole architectural au
-  /// centre du canvas. Rond, bordé. Tap = insertion. [iconChild] peut
-  /// être un Icon Lucide ou un Text (emoji) quand aucune icône Lucide
-  /// ne correspond exactement (ex : 🚽 pour les WC).
+  /// Sélectionne un outil ; l'équipement apparaît après un tracé.
   Widget _symbolInsertBtn(PlanTool tool, Widget iconChild, String label) {
     return _symbolButtonShell(
       iconChild: iconChild,
-      tooltip: 'Insérer : $label',
-      onTap: () => _insertSymbolAtCenter(tool),
+      tooltip: 'Tracer : $label',
+      onTap: () => _setTool(tool),
+      active: _tool == tool,
     );
   }
 
@@ -1958,11 +1964,12 @@ class _PlanCanvasState extends State<PlanCanvas> {
     required Widget iconChild,
     required String tooltip,
     required VoidCallback onTap,
+    bool active = false,
   }) {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: Colors.transparent,
+        color: active ? _kToolbarActiveBg : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           onTap: onTap,
@@ -1987,64 +1994,131 @@ class _PlanCanvasState extends State<PlanCanvas> {
       clipBehavior: Clip.antiAlias,
       child: LayoutBuilder(
         builder: (ctx, constraints) {
-          // Full area incl rulers
-          return Stack(
-            children: [
-              // Grid + ruler overlay (non-interactive)
-              Positioned.fill(
-                child: CustomPaint(
-                  painter: _GridPainter(),
-                  child: const SizedBox.expand(),
-                ),
-              ),
-              // Draw area — remplit tout le canvas.
-              Positioned.fill(
-                child: Listener(
-                  behavior: HitTestBehavior.opaque,
-                  onPointerDown: _onCanvasPointerDown,
-                  onPointerMove: _onCanvasPointerMove,
-                  onPointerUp: _onCanvasPointerUp,
-                  onPointerCancel: _onCanvasPointerCancel,
-                  child: MouseRegion(
-                    cursor: _tool == PlanTool.eraser
-                        ? SystemMouseCursors.cell
-                        : SystemMouseCursors.precise,
+          // A plan drawn on a larger screen must remain fully reachable/exportable.
+          var contentRight = 0.0;
+          var contentBottom = 0.0;
+          for (final stroke in _strokes) {
+            for (final point in stroke.points) {
+              contentRight = math.max(contentRight, point.dx + 100);
+              contentBottom = math.max(contentBottom, point.dy + 100);
+            }
+            final bounds = stroke.symbolLocalBounds;
+            if (bounds != null) {
+              final radius =
+                  math.sqrt(
+                    bounds.width * bounds.width + bounds.height * bounds.height,
+                  ) /
+                  2;
+              contentRight = math.max(
+                contentRight,
+                bounds.center.dx + radius + 100,
+              );
+              contentBottom = math.max(
+                contentBottom,
+                bounds.center.dy + radius + 100,
+              );
+            }
+          }
+          final width = math.max(
+            contentRight,
+            math.max(1600.0, constraints.maxWidth + 600),
+          );
+          final height = math.max(
+            contentBottom,
+            math.max(1200.0, constraints.maxHeight + 600),
+          );
+          // Keep the whole viewport on the gridded canvas, including at
+          // maximum zoom-out. A boundary margin exposes blank space around it.
+          final minScale = math.max(
+            constraints.maxWidth / width,
+            constraints.maxHeight / height,
+          );
+          if (!_viewportCentered) {
+            _viewportCentered = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _viewportController.value = Matrix4.identity()
+                ..setTranslationRaw(
+                  -(width - constraints.maxWidth) / 2,
+                  -(height - constraints.maxHeight) / 2,
+                  0,
+                );
+            });
+          }
+          return InteractiveViewer(
+            transformationController: _viewportController,
+            constrained: false,
+            panEnabled: _tool == PlanTool.hand,
+            scaleEnabled:
+                _activeCanvasPointerKind == null ||
+                !_isStylusPointer(_activeCanvasPointerKind!),
+            minScale: minScale,
+            maxScale: 4,
+            boundaryMargin: EdgeInsets.zero,
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: Stack(
+                children: [
+                  // Grid + ruler overlay (non-interactive)
+                  Positioned.fill(
                     child: CustomPaint(
-                      key: _drawAreaKey,
-                      painter: _DrawPainter(
-                        strokes: _strokes,
-                        currentStroke: _current,
-                      ),
+                      painter: _GridPainter(),
                       child: const SizedBox.expand(),
                     ),
                   ),
-                ),
-              ),
-              // Overlay des poignées + boutons flottants : UNIQUEMENT
-              // en mode édition (après un tap explicite sur l'élément).
-              // Un drag direct sur un symbole reste un tracé normal :
-              // on peut écrire/surligner sur les équipements sans les
-              // déplacer par accident.
-              if (_editingMode &&
-                  _selectedIndex >= 0 &&
-                  _selectedIndex < _strokes.length)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: _HandlesPainter(
-                        stroke: _strokes[_selectedIndex],
+                  // Draw area — remplit tout le canvas.
+                  Positioned.fill(
+                    child: Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerDown: _onCanvasPointerDown,
+                      onPointerMove: _onCanvasPointerMove,
+                      onPointerUp: _onCanvasPointerUp,
+                      onPointerCancel: _onCanvasPointerCancel,
+                      child: MouseRegion(
+                        cursor: _tool == PlanTool.hand
+                            ? SystemMouseCursors.grab
+                            : _tool == PlanTool.eraser
+                            ? SystemMouseCursors.cell
+                            : SystemMouseCursors.precise,
+                        child: CustomPaint(
+                          key: _drawAreaKey,
+                          painter: _DrawPainter(
+                            strokes: _strokes,
+                            currentStroke: _current,
+                          ),
+                          child: const SizedBox.expand(),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              if (_editingMode &&
-                  _selectedIndex >= 0 &&
-                  _selectedIndex < _strokes.length &&
-                  _symbolTools.contains(_strokes[_selectedIndex].tool))
-                _buildSelectedSymbolActions(),
-              // (Bouton "Supprimer la page" FAB retiré : l'option vit
-              // maintenant dans le menu "trois points" de la toolbar.)
-            ],
+                  // Overlay des poignées + boutons flottants : UNIQUEMENT
+                  // en mode édition (après un tap explicite sur l'élément).
+                  // Un drag direct sur un symbole reste un tracé normal :
+                  // on peut écrire/surligner sur les équipements sans les
+                  // déplacer par accident.
+                  if (_editingMode &&
+                      _selectedIndex >= 0 &&
+                      _selectedIndex < _strokes.length)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _HandlesPainter(
+                            stroke: _strokes[_selectedIndex],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_editingMode &&
+                      _selectedIndex >= 0 &&
+                      _selectedIndex < _strokes.length &&
+                      _symbolTools.contains(_strokes[_selectedIndex].tool))
+                    _buildSelectedSymbolActions(),
+                  // (Bouton "Supprimer la page" FAB retiré : l'option vit
+                  // maintenant dans le menu "trois points" de la toolbar.)
+                ],
+              ),
+            ),
           );
         },
       ),
@@ -2192,6 +2266,19 @@ class _PlanCanvasState extends State<PlanCanvas> {
 
   void _onCanvasPointerDown(PointerDownEvent event) {
     if (!_isSupportedCanvasPointer(event)) return;
+    if (event.kind == PointerDeviceKind.touch) {
+      if (_activeCanvasPointerKind != null &&
+          _isStylusPointer(_activeCanvasPointerKind!)) {
+        return;
+      }
+      _touchPointers.add(event.pointer);
+      if (_touchPointers.length > 1) {
+        _pinching = true;
+        setState(_discardActiveCanvasGesture);
+        return;
+      }
+    }
+    if (_tool == PlanTool.hand || _pinching) return;
     if (_activeCanvasPointer != null) {
       // Le Pencil prend la priorité sur un contact tactile parasite
       // (paume/doigt) afin de ne jamais donner l'impression d'un stylet mort.
@@ -2231,6 +2318,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
   }
 
   void _onCanvasPointerMove(PointerMoveEvent event) {
+    if (_tool == PlanTool.hand || _pinching) return;
     if (_activeCanvasPointer != event.pointer) return;
     final down = _canvasPointerDown;
     if (down != null) {
@@ -2250,6 +2338,14 @@ class _PlanCanvasState extends State<PlanCanvas> {
   }
 
   void _onCanvasPointerUp(PointerUpEvent event) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _touchPointers.remove(event.pointer);
+    }
+    if (_pinching) {
+      if (_touchPointers.isEmpty) _pinching = false;
+      return;
+    }
+    if (_tool == PlanTool.hand) return;
     if (_activeCanvasPointer != event.pointer) return;
     if (_activeHandle != null) {
       _finishSymbolGesture();
@@ -2302,6 +2398,14 @@ class _PlanCanvasState extends State<PlanCanvas> {
   }
 
   void _onCanvasPointerCancel(PointerCancelEvent event) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _touchPointers.remove(event.pointer);
+    }
+    if (_pinching) {
+      if (_touchPointers.isEmpty) _pinching = false;
+      return;
+    }
+    if (_tool == PlanTool.hand) return;
     if (_activeCanvasPointer != event.pointer) return;
     if (_activeHandle != null) {
       _finishSymbolGesture();
@@ -2641,14 +2745,28 @@ class _DrawPainter extends CustomPainter {
     List<_PlanStroke> strokes,
     _PlanStroke? current,
   ) {
+    final preview =
+        current != null &&
+            _symbolTools.contains(current.tool) &&
+            current.points.length >= 2
+        ? _PlanStroke(
+            tool: current.tool,
+            color: current.color,
+            size: current.size,
+            points: [
+              Rect.fromPoints(current.points[0], current.points[1]).center,
+              Rect.fromPoints(current.points[0], current.points[1]).bottomRight,
+            ],
+          )
+        : current;
     final drawBounds = Rect.fromLTWH(-100000, -100000, 200000, 200000);
     // Couche 1 : équipements protégés.
     for (final s in strokes) {
       if (!_isEraserProtectedSymbol(s.tool)) continue;
       _paintOneWithErasures(canvas, s, drawBounds);
     }
-    if (current != null && _isEraserProtectedSymbol(current.tool)) {
-      _paintOne(canvas, current);
+    if (preview != null && _isEraserProtectedSymbol(preview.tool)) {
+      _paintOne(canvas, preview);
     }
 
     // Couche 2 : traits/annotations effaçables au-dessus, y compris le
@@ -2658,8 +2776,8 @@ class _DrawPainter extends CustomPainter {
       if (_isEraserProtectedSymbol(s.tool)) continue;
       _paintOneWithErasures(canvas, s, drawBounds);
     }
-    if (current != null && !_isEraserProtectedSymbol(current.tool)) {
-      _paintOne(canvas, current);
+    if (preview != null && !_isEraserProtectedSymbol(preview.tool)) {
+      _paintOne(canvas, preview);
     }
     canvas.restore();
   }
@@ -2755,6 +2873,8 @@ class _DrawPainter extends CustomPainter {
     }
 
     switch (s.tool) {
+      case PlanTool.hand:
+        break;
       case PlanTool.pen:
       case PlanTool.eraser:
       case PlanTool.highlighter:
