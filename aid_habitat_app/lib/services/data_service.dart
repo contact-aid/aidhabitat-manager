@@ -23,7 +23,15 @@ import 'sync_repository.dart';
 import 'wiki_repository.dart';
 
 class DataService {
-  DataService._internal();
+  DataService._internal()
+    : _nocodbApiClient = NocodbApiClient(),
+      _syncRepository = SyncRepository();
+
+  DataService.forTesting({
+    required NocodbApiClient apiClient,
+    required SyncRepository syncRepository,
+  }) : _nocodbApiClient = apiClient,
+       _syncRepository = syncRepository;
 
   static final DataService _instance = DataService._internal();
 
@@ -32,8 +40,8 @@ class DataService {
   final DossierRepository _dossierRepository = DossierRepository();
   final DocumentRepository _documentRepository = DocumentRepository();
   final NoteRepository _noteRepository = NoteRepository();
-  final NocodbApiClient _nocodbApiClient = NocodbApiClient();
-  final SyncRepository _syncRepository = SyncRepository();
+  final NocodbApiClient _nocodbApiClient;
+  final SyncRepository _syncRepository;
   final NocodbSyncService _nocodbSyncService = NocodbSyncService();
   final AuthService _authService = AuthService();
   final WikiRepository _wikiRepository = WikiRepository();
@@ -927,34 +935,37 @@ class DataService {
   }
 
   Future<bool> resolveNoteConflictKeepingLocal(String operationId) async {
-    final details = await _syncRepository.noteConflictDetails(operationId);
-    if (details == null) return false;
-    final patientId = details['patientId']?.toString() ?? '';
-    final tabKey = details['tabKey']?.toString() ?? '';
-    if (patientId.isEmpty || tabKey.isEmpty) return false;
-    final pageRaw = details['pageNumber'];
-    final pageNumber = pageRaw is int
-        ? pageRaw
-        : int.tryParse(pageRaw?.toString() ?? '') ?? 0;
-    final remote = await _nocodbApiClient.fetchNotePage(
-      patientId: patientId,
-      tabKey: tabKey,
-      pageNumber: pageNumber,
-      scopeType: details['scopeType']?.toString(),
-      scopeId: details['scopeId']?.toString(),
-    );
-    final revision = remote?['revision']?.toString();
-    if (remote == null) {
-      return _syncRepository.resolveNoteConflictKeepingLocal(
-        operationId,
-        verifiedRemoteMissing: true,
-      );
+    final session = SyncSessionScope();
+    try {
+      return await session.run(() async {
+        final details = await _syncRepository.noteConflictDetails(
+          operationId,
+          forExplicitResolution: true,
+        );
+        session.check();
+        if (details == null) return false;
+        final remote = await _nocodbApiClient.fetchNoteForExplicitLocalChoice(
+          patientId: details['patientId'] as String,
+          dossierId: details['dossierId']?.toString() ?? '',
+          scopeType: details['scopeType'] as String,
+          scopeId: details['scopeId'] as String,
+          tabKey: details['tabKey'] as String,
+          pageNumber: int.tryParse('${details['pageNumber']}') ?? -1,
+          subTabKey: details['subTabKey']?.toString(),
+        );
+        session.check();
+        return _syncRepository.resolveNoteConflictKeepingLocal(
+          operationId,
+          observedRevision: remote?['revision']?.toString(),
+          verifiedRemoteMissing: remote == null,
+          explicitSnapshot: details,
+          observedRemote: remote,
+          checkSession: session.check,
+        );
+      });
+    } catch (_) {
+      return false;
     }
-    if (revision == null || revision.isEmpty) return false;
-    return _syncRepository.resolveNoteConflictKeepingLocal(
-      operationId,
-      observedRevision: revision,
-    );
   }
 
   Future<bool> resolveNoteConflictUsingServer(String operationId) async {

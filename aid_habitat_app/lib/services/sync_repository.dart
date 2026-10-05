@@ -1891,68 +1891,119 @@ class SyncRepository {
     });
   }
 
-  Future<Map<String, dynamic>?> noteConflictDetails(String operationId) async {
+  Future<Map<String, dynamic>?> noteConflictDetails(
+    String operationId, {
+    bool forExplicitResolution = false,
+  }) async {
     final db = await _database.database;
-    final rows = await db.query(
-      'sync_operations',
-      columns: const ['entity_type', 'entity_local_id', 'payload_json'],
-      where: 'id = ? AND status = ?',
-      whereArgs: [operationId, 'conflict'],
-      limit: 1,
-    );
-    if (rows.length != 1 || rows.single['entity_type'] != 'note_page') {
-      return null;
-    }
-    try {
-      final payload =
-          jsonDecode(
-                await OfflineVault.instance.openString(
-                  rows.single['payload_json'] as String,
-                ),
-              )
-              as Map<String, dynamic>;
-      final tabKey = payload['tabKey']?.toString() ?? '';
-      const visitReportTabs = {
-        'Bénéficiaire',
-        'Contexte de vie',
-        'Mesures',
-        'Accessibilité',
-        'Salle de bain',
-        'WC',
-        'Préconisations',
-      };
-      final scopeType = payload['scopeType']?.toString().isNotEmpty == true
-          ? payload['scopeType'].toString()
-          : tabKey == 'Plans'
-          ? 'visit_grid'
-          : visitReportTabs.contains(tabKey)
-          ? 'visit_report'
-          : 'dossier_detail';
-      final patientId = payload['patientLocalId']?.toString() ?? '';
-      final scopeId = payload['scopeId']?.toString().isNotEmpty == true
-          ? payload['scopeId'].toString()
-          : payload['dossierId']?.toString().isNotEmpty == true
-          ? payload['dossierId'].toString()
-          : patientId;
-      return {
-        'operationId': operationId,
-        'writeId': payload['writeId'],
-        'expectedRevision': payload['expectedRevision'],
-        'errorCode':
-            (payload['conflict'] is Map && payload['conflict']['remote'] is Map)
-            ? payload['conflict']['remote']['error']
-            : null,
-        'noteLocalId': rows.single['entity_local_id'],
-        'patientId': patientId,
-        'dossierId': payload['dossierId'],
-        'scopeType': scopeType,
-        'scopeId': scopeId,
-        'tabKey': tabKey,
-        'pageNumber': payload['pageNumber'] ?? 0,
-      };
-    } catch (_) {
-      return null;
-    }
+    return db.transaction((db) async {
+      String? ownerId;
+      if (forExplicitResolution) {
+        final owners = await db.rawQuery(
+          '''SELECT session.user_local_id
+        FROM sync_operation_ownership AS ownership
+        JOIN app_session AS session ON session.id = 1
+          AND session.user_local_id = ownership.owner_user_local_id
+        WHERE ownership.operation_id = ? AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owners.length != 1) return null;
+        ownerId = owners.single['user_local_id'] as String?;
+        if (ownerId == null) return null;
+      }
+      final rows = await db.query(
+        'sync_operations',
+        columns: const ['entity_type', 'entity_local_id', 'payload_json'],
+        where: 'id = ? AND status = ?',
+        whereArgs: [operationId, 'conflict'],
+        limit: 1,
+      );
+      if (rows.length != 1 || rows.single['entity_type'] != 'note_page') {
+        return null;
+      }
+      try {
+        final payload =
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    rows.single['payload_json'] as String,
+                  ),
+                )
+                as Map<String, dynamic>;
+        Map<String, Object?>? local;
+        if (forExplicitResolution) {
+          final notes = await db.query(
+            'note_pages',
+            where: 'local_id = ?',
+            whereArgs: [rows.single['entity_local_id']],
+          );
+          if (notes.length != 1) return null;
+          local = notes.single;
+          if (local['patient_local_id'] != payload['patientLocalId'] ||
+              await OfflineVault.instance.openString(
+                    local['drawing_json'] as String? ?? '',
+                  ) !=
+                  payload['drawingJson']) {
+            return null;
+          }
+        }
+        final tabKey = payload['tabKey']?.toString() ?? '';
+        const visitReportTabs = {
+          'Bénéficiaire',
+          'Contexte de vie',
+          'Mesures',
+          'Accessibilité',
+          'Salle de bain',
+          'WC',
+          'Préconisations',
+        };
+        final scopeType = payload['scopeType']?.toString().isNotEmpty == true
+            ? payload['scopeType'].toString()
+            : tabKey == 'Plans'
+            ? 'visit_grid'
+            : visitReportTabs.contains(tabKey)
+            ? 'visit_report'
+            : 'dossier_detail';
+        final patientId = payload['patientLocalId']?.toString() ?? '';
+        final scopeId = payload['scopeId']?.toString().isNotEmpty == true
+            ? payload['scopeId'].toString()
+            : payload['dossierId']?.toString().isNotEmpty == true
+            ? payload['dossierId'].toString()
+            : patientId;
+        return {
+          if (forExplicitResolution) ...{
+            'guardOwnerId': ownerId,
+            'guardPayloadHash': sha256
+                .convert(utf8.encode(jsonEncode(payload)))
+                .toString(),
+            'guardLocalHash': sha256
+                .convert(utf8.encode(jsonEncode(local)))
+                .toString(),
+          },
+          'subTabKey': payload['subTabKey'],
+          'operationId': operationId,
+          'writeId': payload['writeId'],
+          'expectedRevision': payload['expectedRevision'],
+          'errorCode':
+              (payload['conflict'] is Map &&
+                  payload['conflict']['remote'] is Map)
+              ? payload['conflict']['remote']['error']
+              : null,
+          'noteLocalId': rows.single['entity_local_id'],
+          'patientId': patientId,
+          'dossierId': payload['dossierId'],
+          'scopeType': scopeType,
+          'scopeId': scopeId,
+          'tabKey': tabKey,
+          'pageNumber': payload['pageNumber'] ?? 0,
+        };
+      } catch (_) {
+        return null;
+      }
+    });
   }
 
   /// Repair an address, never a revision or note content. The caller obtained
@@ -2075,6 +2126,9 @@ class SyncRepository {
     String? revision,
     String? observedRevision,
     bool verifiedRemoteMissing = false,
+    Map<String, dynamic>? explicitSnapshot,
+    Map<String, dynamic>? observedRemote,
+    void Function()? checkSession,
   }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
@@ -2095,6 +2149,74 @@ class SyncRepository {
                 ),
               )
               as Map<String, dynamic>;
+      if (explicitSnapshot != null) {
+        checkSession?.call();
+        final owners = await txn.rawQuery(
+          '''SELECT session.user_local_id
+          FROM sync_operation_ownership AS ownership
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE ownership.operation_id = ? AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owners.length != 1 ||
+            owners.single['user_local_id'] !=
+                explicitSnapshot['guardOwnerId'] ||
+            sha256.convert(utf8.encode(jsonEncode(payload))).toString() !=
+                explicitSnapshot['guardPayloadHash']) {
+          return false;
+        }
+        final notes = await txn.query(
+          'note_pages',
+          where: 'local_id = ?',
+          whereArgs: [rows.single['entity_local_id']],
+        );
+        if (notes.length != 1 ||
+            sha256.convert(utf8.encode(jsonEncode(notes.single))).toString() !=
+                explicitSnapshot['guardLocalHash']) {
+          return false;
+        }
+        if (observedRemote != null) {
+          final patientId = explicitSnapshot['patientId'] as String;
+          final dossierId = explicitSnapshot['dossierId']?.toString() ?? '';
+          final canonical =
+              observedRemote['patientId'] == patientId &&
+              observedRemote['dossierId'] == explicitSnapshot['dossierId'] &&
+              observedRemote['scopeType'] == explicitSnapshot['scopeType'] &&
+              observedRemote['scopeId'] == explicitSnapshot['scopeId'] &&
+              observedRemote['tabKey'] == explicitSnapshot['tabKey'] &&
+              '${observedRemote['pageNumber']}' ==
+                  '${explicitSnapshot['pageNumber']}' &&
+              (observedRemote['subTabKey'] == null ||
+                  observedRemote['subTabKey'] == '');
+          final legacy =
+              explicitSnapshot['scopeId'] == dossierId &&
+              matchesLegacyNoteAddress(
+                remote: observedRemote,
+                patientId: patientId,
+                dossierId: dossierId,
+                scopeType: explicitSnapshot['scopeType'] as String,
+                tabKey: explicitSnapshot['tabKey'] as String,
+                pageNumber:
+                    int.tryParse('${explicitSnapshot['pageNumber']}') ?? -1,
+              );
+          if ((!canonical && !legacy) ||
+              observedRemote['revision'] != observedRevision ||
+              observedRevision == null ||
+              verifiedRemoteMissing) {
+            return false;
+          }
+          payload['scopeType'] = observedRemote['scopeType'];
+          payload['scopeId'] = observedRemote['scopeId'];
+        } else if (!verifiedRemoteMissing) {
+          return false;
+        }
+        checkSession?.call();
+      }
       final suppliedRevision = observedRevision ?? revision;
       final verifiedRevision = suppliedRevision == null
           ? _noteConflictRevision(payload['conflict'])
@@ -2119,6 +2241,7 @@ class SyncRepository {
       } else if (verifiedRevision == null) {
         return false;
       }
+      checkSession?.call();
       payload
         ..remove('conflict')
         ..['expectedRevision'] = verifiedRemoteMissing ? null : verifiedRevision
@@ -2151,6 +2274,7 @@ class SyncRepository {
       if (noteUpdated != 1) {
         throw StateError('Local note disappeared while resolving conflict');
       }
+      checkSession?.call();
       return true;
     });
   }

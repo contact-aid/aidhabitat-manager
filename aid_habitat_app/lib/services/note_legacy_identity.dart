@@ -13,9 +13,31 @@ bool matchesLegacyNoteIdentity({
   required String? expectedRevision,
   String? writeId,
 }) =>
-    !const {'Bénéficiaire-Notes', 'notes_rapides'}.contains(tabKey) &&
     expectedRevision != null &&
     expectedRevision.isNotEmpty &&
+    matchesLegacyNoteAddress(
+      remote: remote,
+      patientId: patientId,
+      dossierId: dossierId,
+      scopeType: scopeType,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+    ) &&
+    (remote['revision'] == expectedRevision ||
+        (writeId != null &&
+            writeId.isNotEmpty &&
+            remote['revision'] == writeId));
+
+/// Identity only. A fresh revision may be chosen solely by explicit user review.
+bool matchesLegacyNoteAddress({
+  required Map<String, dynamic> remote,
+  required String patientId,
+  required String dossierId,
+  required String scopeType,
+  required String tabKey,
+  required int pageNumber,
+}) =>
+    !const {'Bénéficiaire-Notes', 'notes_rapides'}.contains(tabKey) &&
     dossierId.isNotEmpty &&
     dossierId != patientId &&
     remote['patientId'] == patientId &&
@@ -24,11 +46,7 @@ bool matchesLegacyNoteIdentity({
     remote['scopeId'] == patientId &&
     remote['tabKey'] == tabKey &&
     (remote['subTabKey'] == null || remote['subTabKey'] == '') &&
-    int.tryParse('${remote['pageNumber']}') == pageNumber &&
-    (remote['revision'] == expectedRevision ||
-        (writeId != null &&
-            writeId.isNotEmpty &&
-            remote['revision'] == writeId));
+    int.tryParse('${remote['pageNumber']}') == pageNumber;
 
 String defaultNoteScopeType(String tabKey) => tabKey == 'Plans'
     ? 'visit_grid'
