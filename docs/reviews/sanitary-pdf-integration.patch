@@ -1,0 +1,15 @@
+--- a/server/reports/generateVisitReport.mjs
++++ b/server/reports/generateVisitReport.mjs
+@@ -16,5 +16,6 @@
+ import fs from 'node:fs/promises';
+ import path from 'node:path';
++import { appendSanitaryRoomsAppendix } from './sanitaryRoomsAppendix.mjs';
+ import { uniformPhotoHeight } from './photoLayout.mjs';
+ import { needsMorbihanEligibleWorks, insertMorbihanEligibleWorks } from './morbihanEligibleWorks.mjs';
+ import { fileURLToPath } from 'node:url';
+@@ -4295,4 +4296,5 @@
+     await insertMorbihanEligibleWorks(numberedDoc, accessibilityNormsPageIndex);
+     stats.morbihanWorksPageAdded = true;
+   }
++  stats.sanitaryAppendixPages = await appendSanitaryRoomsAppendix({ pdfDoc: numberedDoc, sanitaires });
+   await drawGeneratedPageNumbers(numberedDoc);
