@@ -1670,6 +1670,66 @@ class NocodbApiClient {
     return remote;
   }
 
+  /// Explicit "keep local" only. Never used by automatic missing-page repair.
+  /// An invalid/ambiguous response throws; it must not become proof of absence.
+  Future<Map<String, dynamic>?> fetchNoteForExplicitLocalChoice({
+    required String patientId,
+    required String dossierId,
+    required String scopeType,
+    required String scopeId,
+    required String tabKey,
+    required int pageNumber,
+    String? subTabKey,
+  }) async {
+    if (subTabKey != null && subTabKey.isNotEmpty) {
+      throw const FormatException('Subtab review is not supported');
+    }
+    final canonical = await fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: scopeType,
+      scopeId: scopeId,
+    );
+    if (canonical != null) {
+      if (canonical['scopeType'] != scopeType ||
+          canonical['scopeId'] != scopeId ||
+          (dossierId.isNotEmpty && canonical['dossierId'] != dossierId) ||
+          (canonical['subTabKey'] != null && canonical['subTabKey'] != '')) {
+        throw const FormatException('Remote note identity mismatch');
+      }
+      return canonical;
+    }
+    if (dossierId.isEmpty ||
+        dossierId == patientId ||
+        scopeId == patientId ||
+        const {'Bénéficiaire-Notes', 'notes_rapides'}.contains(tabKey)) {
+      return null;
+    }
+    if (scopeId != dossierId) {
+      throw const FormatException('Unrecognized note scope');
+    }
+    final legacy = await fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: scopeType,
+      scopeId: patientId,
+    );
+    if (legacy != null &&
+        !matchesLegacyNoteAddress(
+          remote: legacy,
+          patientId: patientId,
+          dossierId: dossierId,
+          scopeType: scopeType,
+          tabKey: tabKey,
+          pageNumber: pageNumber,
+        )) {
+      throw const FormatException('Legacy note identity mismatch');
+    }
+    return legacy;
+  }
+
   Future<Map<String, dynamic>> upsertNotePage({
     required String notePageId,
     required String patientId,
