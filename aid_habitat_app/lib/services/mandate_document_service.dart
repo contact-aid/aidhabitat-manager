@@ -75,16 +75,18 @@ class MandateDocumentService {
     bool isExistingMandate(DocItem doc) {
       if (doc.id == id) return true;
       final dossierTags = doc.tags.where((tag) => tag.startsWith('Dossier:'));
-      if (dossierTags.isNotEmpty && !dossierTags.contains(dossierTag))
+      if (dossierTags.isNotEmpty && !dossierTags.contains(dossierTag)) {
         return false;
+      }
       final accountTags = doc.tags.where((tag) => tag.startsWith('Compte:'));
       final emailTags = doc.tags.where((tag) => tag.startsWith('CompteEmail:'));
       if (emailTags.isNotEmpty && !emailTags.contains(emailTag)) return false;
       if (emailTags.isEmpty &&
           accountTags.isNotEmpty &&
           !accountTags.contains(accountTag) &&
-          doc.title != 'Mandat administratif - ${user.shortDisplayName}')
+          doc.title != 'Mandat administratif - ${user.shortDisplayName}') {
         return false;
+      }
       // Historical imports lack automatic-generation tags and deterministic IDs.
       // Keep them as-is, including documents with no known account attribution.
       return doc.tags.any(
