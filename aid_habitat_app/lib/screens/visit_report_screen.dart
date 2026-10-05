@@ -2962,15 +2962,16 @@ class _VisitReportScreenState extends State<VisitReportScreen>
             BeneficiaryHeader(
               dossier: _dossier,
               onBack: widget.onBack,
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
+              trailing: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
                 children: [
                   if (widget.onOpenDocuments != null) ...[
                     DossierSpaceShortcut(
                       toDocuments: true,
                       onPressed: _openingDocuments ? null : _openDocuments,
                     ),
-                    const SizedBox(width: 8),
                   ],
                   _buildGenerateReportButton(),
                 ],
