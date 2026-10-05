@@ -533,7 +533,9 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   Future<void> _flushPendingSave() async {
     await _save();
     if (_hasPendingSave) {
-      throw StateError('Les informations du bénéficiaire ne sont pas encore enregistrées.');
+      throw StateError(
+        'Les informations du bénéficiaire ne sont pas encore enregistrées.',
+      );
     }
   }
 
@@ -1360,6 +1362,8 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   // ---------------------------------------------------------------------------
 
   Widget _buildFinanceSection() {
+    final trustedPhoneInvalid = !isValidFrenchPhone(_trustedPhone);
+    final trustedEmailInvalid = !isValidEmail(_trustedEmail);
     // Foyer n'a aucune donnée "par occupant" (situation familiale et
     // occupation sont partagées pour le ménage). On conserve donc un
     // simple SingleChildScrollView sans header / swipe / dots.
@@ -1415,6 +1419,58 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             },
           ),
           const SizedBox(height: 24),
+          FormTextField(
+            label: 'Personnes présentes à la visite',
+            value: _personnesPresentesVisite,
+            onChanged: (v) {
+              _personnesPresentesVisite = v;
+              _markChanged();
+            },
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: FormTextFieldWithWarning(
+                  label: 'Téléphone de la personne de confiance',
+                  value: _trustedPhone,
+                  keyboardType: TextInputType.phone,
+                  showWarning: trustedPhoneInvalid,
+                  warningText: 'Numéro français invalide',
+                  onChanged: (v) {
+                    _trustedPhone = v;
+                    _markChanged();
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FormTextFieldWithWarning(
+                  label: 'Email de la personne de confiance',
+                  value: _trustedEmail,
+                  keyboardType: TextInputType.emailAddress,
+                  showWarning: trustedEmailInvalid,
+                  warningText: 'Adresse mail invalide',
+                  onChanged: (v) {
+                    _trustedEmail = v;
+                    _markChanged();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          FormMultiToggleGroup(
+            label: 'Envoi du rapport',
+            options: const ['Mail', 'Courrier'],
+            selected: _parseEnvoiRapport(_envoiRapport),
+            columns: 2,
+            onChanged: (next) {
+              _envoiRapport = _serializeEnvoiRapport(next);
+              _markChanged();
+            },
+          ),
         ],
       ),
     );
@@ -1428,21 +1484,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     return _buildOccupantSwipeContainer(
       perOccupantContent: _buildAidesDependenceBlock(idx),
-      sharedContent: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // --- Bloc "Visite" — partagé (une seule fois par dossier).
-          FormTextField(
-            label: 'Personnes présentes à la visite',
-            value: _personnesPresentesVisite,
-            onChanged: (v) {
-              _personnesPresentesVisite = v;
-              _markChanged();
-            },
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
+      sharedContent: const SizedBox.shrink(),
     );
   }
 
@@ -2081,8 +2123,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   }
 
   Widget _buildAdminSection() {
-    final trustedPhoneInvalid = !isValidFrenchPhone(_trustedPhone);
-    final trustedEmailInvalid = !isValidEmail(_trustedEmail);
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     return _buildOccupantSwipeContainer(
       perOccupantContent: _buildAdminPersonalBlock(idx),
@@ -2096,55 +2136,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             value: _trustedName,
             onChanged: (v) {
               _trustedName = v;
-              _markChanged();
-            },
-          ),
-          const SizedBox(height: 14),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: FormTextFieldWithWarning(
-                  label: 'Téléphone',
-                  value: _trustedPhone,
-                  keyboardType: TextInputType.phone,
-                  showWarning: trustedPhoneInvalid,
-                  warningText: 'Numéro français invalide',
-                  onChanged: (v) {
-                    _trustedPhone = v;
-                    _markChanged();
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FormTextFieldWithWarning(
-                  label: 'Email',
-                  value: _trustedEmail,
-                  keyboardType: TextInputType.emailAddress,
-                  showWarning: trustedEmailInvalid,
-                  warningText: 'Adresse mail invalide',
-                  onChanged: (v) {
-                    _trustedEmail = v;
-                    _markChanged();
-                  },
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-
-          // --- Bloc "Renseignements sur la visite" — partagé.
-          // Multi-select : l'ergo peut cocher Mail ET Courrier (demande
-          // utilisateur 2026-05-04). Stocké en CSV "Mail, Courrier" dans
-          // la colonne `envoi_rapport` (texte libre côté NocoDB).
-          FormMultiToggleGroup(
-            label: 'Envoi du rapport',
-            options: const ['Mail', 'Courrier'],
-            selected: _parseEnvoiRapport(_envoiRapport),
-            columns: 2,
-            onChanged: (next) {
-              _envoiRapport = _serializeEnvoiRapport(next);
               _markChanged();
             },
           ),
