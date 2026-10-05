@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 import '../models/types.dart';
 import '../models/visit_report_categories.dart';
 import 'local_database.dart';
+import 'independent_notes.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
@@ -193,6 +194,7 @@ class NoteRepository {
     String? scopeId,
     required SyncMutationOrigin mutationOrigin,
   }) async {
+    drawingJson = stampNoteTextInitialization(tabKey, pageNumber, drawingJson);
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
     final noteId = 'note_${patientId}_${tabKey}_$pageNumber';

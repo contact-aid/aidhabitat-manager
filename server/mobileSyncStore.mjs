@@ -6,6 +6,7 @@ import { createKeyedSerialExecutor } from './keyedSerialExecutor.mjs';
 
 import { callNocoTool, requestConditionalNocodbRest } from './nocodbMcpClient.mjs';
 import { notePageReadFields } from './notePageFields.mjs';
+import { isIndependentNote, stampNoteInitialization, readNoteDrawing } from './independentNotes.mjs';
 
 const syncRevisionField = 'app_sync_revision';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -881,6 +882,8 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
       ? store.notePages[existingIndex].id
       : (stringValue(notePageId) || crypto.randomUUID());
 
+    drawingJson = stampNoteInitialization({ tabKey, pageNumber, drawingJson });
+
     const notePage = {
       id: resolvedNotePageId,
       patientId,
@@ -1715,6 +1718,16 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
       pageNumber,
     })) {
       throw new NotePageMutationError(409, 'NOTE_PAGE_IDENTITY_CONFLICT', existing);
+    }
+
+    // Stamp genuine saves, including build64 clears. For an acknowledged write
+    // predating this rollout, compare the original bytes so replay stays idempotent.
+    if (isIndependentNote(tabKey) && Number(pageNumber) === 0) {
+      const isReplay = existing && stringValue(field(existing, syncRevisionField)) === writeId;
+      if (!isReplay || readNoteDrawing(decompressDrawingForRead(
+        stringValue(field(existing, 'drawing_json')))).noteTextInitialized === true) {
+        drawingJson = stampNoteInitialization({ tabKey, pageNumber, drawingJson });
+      }
     }
 
     const now = new Date().toISOString();
