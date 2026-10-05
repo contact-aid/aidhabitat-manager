@@ -55,5 +55,44 @@ préservation d'une vraie entrée existante et absence de mutation du payload re
 5. Vérifier en staging la sélection/sauvegarde/réouverture avec cette vraie clé,
    puis le rafraîchissement du référentiel web et sa compatibilité avec l'iPad 64.
 
-L'adaptateur de production et cette vérification sur base réelle restent hors
-périmètre de cette préparation. Aucun build iPad, image ou déploiement.
+À ce stade initial, l'adaptateur réel et la vérification sur base réelle
+restaient à faire. Aucun build iPad, image ou déploiement.
+
+## Adaptateur réel préparé ensuite
+
+`tools/carsat-nocodb.mjs` est désormais un adaptateur réel, séparé du simulateur.
+Il n'importe aucun fichier d'environnement automatiquement : fournir explicitement
+`NOCODB_API_URL` et `NOCODB_API_TOKEN`. La commande `plan` lit les métadonnées
+et toutes les lignes du référentiel ; la commande `apply` sans `--apply` reste
+une lecture de contrôle. Le plan contient la base, la table, l'empreinte et un
+UUID d'opération. Un changement du référentiel bloque la création.
+
+```sh
+# Exemple staging, sur une base de staging effectivement accessible :
+node tools/carsat-nocodb.mjs plan --environment staging --base ID_STAGING > plan-staging.json
+node tools/carsat-nocodb.mjs apply --environment staging --base ID_STAGING --plan plan-staging.json
+CARSAT_ALLOW_APPLY=1 node tools/carsat-nocodb.mjs apply --environment staging --base ID_STAGING \
+  --plan plan-staging.json --apply --exclusive-window-confirmed
+
+# Production, seulement après preuve staging et sauvegarde du référentiel :
+node tools/carsat-nocodb.mjs plan --environment production --base pskgbjythubfzv9 \
+  --snapshot fonds-prod-avant.json > plan-prod.json
+CARSAT_ALLOW_APPLY=1 node tools/carsat-nocodb.mjs apply --environment production --base pskgbjythubfzv9 \
+  --plan plan-prod.json --snapshot fonds-prod-avant.json --apply \
+  --staging-verified --exclusive-window-confirmed
+```
+
+La création utilise exclusivement `{ nom: "CARSAT", uuid_source: <UUID du plan> }`.
+Elle relit ensuite le référentiel, vérifie l'ID réel et l'intégrité des lignes
+antérieures. La réapplication d'un même plan reconnaît l'UUID sans recréer.
+En cas de réponse HTTP incertaine, la relecture confirme ou refuse le résultat.
+Le drapeau de fenêtre exclusive est une attestation opérateur : il ne fournit
+pas de transaction distribuée ni d'index unique NocoDB.
+
+Lecture seule le 5 octobre 2026 : la production expose `Caisses_de_retraite`
+dans la table `mxmsm320nnljdmm` de la base `pskgbjythubfzv9`, avec 13 lignes.
+La ligne 3 est `CNAV (Assurance retraite / CARSAT)` ; aucune ligne exacte
+`CARSAT` n'existe. Les deux libellés devront rester distincts dans l'interface
+tant qu'aucune décision métier de rapprochement n'a été prise. La base staging
+historique `p7jzofcton1tabh` renvoie actuellement HTTP 404 avec le jeton local ;
+aucune écriture staging ou production n'a été effectuée.
