@@ -2126,6 +2126,7 @@ class NocodbSyncService {
       tabKey: tabKey,
       pageNumber: pageNumber,
       drawingJson: drawingJson,
+      textContent: payload['textContent']?.toString(),
       scopeType: scopeType,
       scopeId: scopeId,
       planPhase: (planPhase == 'avant' || planPhase == 'apres')

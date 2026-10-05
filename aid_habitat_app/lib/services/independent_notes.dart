@@ -11,6 +11,8 @@ String stampNoteTextInitialization(
       (tabKey != 'notes_rapides' && tabKey != 'Bénéficiaire-Notes')) {
     return drawingJson;
   }
-  final drawing = jsonDecode(drawingJson) as Map<String, dynamic>;
+  final drawing = drawingJson.trim().isEmpty
+      ? <String, dynamic>{'version': 1, 'text': '', 'strokes': <dynamic>[]}
+      : jsonDecode(drawingJson) as Map<String, dynamic>;
   return jsonEncode({...drawing, 'noteTextInitialized': true});
 }

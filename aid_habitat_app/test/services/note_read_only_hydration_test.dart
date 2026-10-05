@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/note_repository.dart';
+import 'package:aid_habitat_app/services/independent_notes.dart';
 import 'package:aid_habitat_app/services/offline_vault.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -87,24 +88,39 @@ void main() {
     const localDrawing = '{"version":1,"text":"saisie locale","strokes":[]}';
     const remoteDrawing = '{"version":1,"text":"autre appareil","strokes":[]}';
     await repository.mergeRemoteNotePage(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides', pageNumber: 0, drawingJson: base,
-      revision: 'revision-base', updatedAt: '2026-09-23T08:00:00.000Z',
+      patientId: 'patient-fictif',
+      dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides',
+      pageNumber: 0,
+      drawingJson: base,
+      revision: 'revision-base',
+      updatedAt: '2026-09-23T08:00:00.000Z',
     );
     await repository.saveDrawingJson(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides', drawingJson: localDrawing,
+      patientId: 'patient-fictif',
+      dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides',
+      drawingJson: localDrawing,
       mutationOrigin: SyncMutationOrigin.userEdit,
     );
     final merged = await repository.mergeRemoteNotePage(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides', pageNumber: 0, drawingJson: remoteDrawing,
-      revision: 'revision-newer', updatedAt: '2026-09-24T08:00:00.000Z',
+      patientId: 'patient-fictif',
+      dossierId: 'dossier-fictif',
+      tabKey: 'notes_rapides',
+      pageNumber: 0,
+      drawingJson: remoteDrawing,
+      revision: 'revision-newer',
+      updatedAt: '2026-09-24T08:00:00.000Z',
     );
     expect(merged, isFalse);
-    expect(await repository.fetchDrawingJson(
-      patientId: 'patient-fictif', dossierId: 'dossier-fictif',
-      tabKey: 'notes_rapides'), localDrawing);
+    expect(
+      await repository.fetchDrawingJson(
+        patientId: 'patient-fictif',
+        dossierId: 'dossier-fictif',
+        tabKey: 'notes_rapides',
+      ),
+      stampNoteTextInitialization('notes_rapides', 0, localDrawing),
+    );
     expect((await db.query('sync_operations')).single['status'], 'pending');
   });
 

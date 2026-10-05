@@ -102,6 +102,7 @@ void main() {
       'tabKey': 'notes_rapides',
       'pageNumber': 0,
       'drawingJson': '{"version":1,"text":"edited","strokes":[]}',
+      'textContent': 'Texte séparé préservé',
       'expectedRevision': revision,
       'writeId': writeId,
     });
@@ -125,6 +126,7 @@ void main() {
         expect(body['notePageId'], isEmpty);
         expect(body['expectedRevision'], revision);
         expect(body['writeId'], writeId);
+        expect(body['textContent'], 'Texte séparé préservé');
         return http.Response(
           '{"success":true,"data":{"notePage":'
           '{"id":"remote-note","revision":"$writeId"}}}',
