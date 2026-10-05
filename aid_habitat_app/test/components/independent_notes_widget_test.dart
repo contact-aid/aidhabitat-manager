@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -112,14 +113,33 @@ void main() {
               as Map<String, dynamic>;
       Future<void> waitSaved(String key, String text) async {
         await tester.pump(const Duration(seconds: 2));
-        for (var i = 0; i < 40; i++) {
+        Map<String, dynamic>? snapshot;
+        Object? readError;
+        bool reading = false;
+        for (var i = 0; i < 80; i++) {
           await tester.pump(const Duration(milliseconds: 25));
-          if ((await tester.runAsync(() => stored(key)))!['text'] == text) {
-            return;
-          }
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 15)),
-          );
+          // Never await a competing SQLite read while a debounce transaction
+          // is still resuming in the widget test's fake async zone.
+          await tester.runAsync(() async {
+            if (!reading) {
+              reading = true;
+              unawaited(
+                stored(key).then(
+                  (value) {
+                    snapshot = value;
+                    reading = false;
+                  },
+                  onError: (Object error) {
+                    readError = error;
+                    reading = false;
+                  },
+                ),
+              );
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 15));
+          });
+          if (readError != null) throw readError!;
+          if (snapshot?['text'] == text) return;
         }
         fail('Text not saved: $key');
       }
