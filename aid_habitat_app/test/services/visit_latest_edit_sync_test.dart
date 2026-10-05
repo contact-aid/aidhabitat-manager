@@ -156,6 +156,7 @@ void main() {
             if (request.method == 'GET') {
               return http.Response(
                 jsonEncode({
+                  'success': true,
                   'data': {
                     'notePages': [
                       {
