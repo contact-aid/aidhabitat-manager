@@ -108,7 +108,13 @@ void main() {
         find.byKey(const ValueKey('occupant-identity-review')),
         findsOneWidget,
       );
-      expect(find.textContaining('FICTIF Camille'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('occupant-row-0')),
+          matching: find.text('FICTIF Camille'),
+        ),
+        findsOneWidget,
+      );
       repository.nextRead = dossier();
       await tester.tap(find.text('VAD'));
       await tester.pumpAndSettle();
@@ -141,11 +147,11 @@ void main() {
       expect(find.text('Bénéficiaires'), findsOneWidget);
       expect(find.text('Occupants'), findsOneWidget);
       expect(
-        find.text(
-          fullNames
-              ? 'LECUYER Daniel\nLECUYER Heike'
-              : 'EXEMPLE René\nEXEMPLE Madeleine',
-        ),
+        find.text(fullNames ? 'LECUYER Daniel' : 'EXEMPLE René'),
+        findsOneWidget,
+      );
+      expect(
+        find.text(fullNames ? 'LECUYER Heike' : 'EXEMPLE Madeleine'),
         findsOneWidget,
       );
       expect(repository.writes, isEmpty);

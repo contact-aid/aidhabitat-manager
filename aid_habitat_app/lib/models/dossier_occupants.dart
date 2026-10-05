@@ -2,8 +2,9 @@ import 'dart:math' as math;
 
 import 'types.dart';
 
-/// Presentation only: never pass these inferred rows to a repository save.
-/// Stored identities and medical information are never changed by this helper.
+/// Projects stored identities for the form without mutating the patient.
+/// Only an explicit identity edit may persist this projection; opening a form
+/// or changing an unrelated field must never convert the stored identities.
 List<Occupant> dossierOccupants(Patient patient) {
   final hasSecond =
       patient.secondFirstName.trim().isNotEmpty ||
