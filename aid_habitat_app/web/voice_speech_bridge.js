@@ -1,214 +1,126 @@
 (function installAidHabitatSpeechBridge() {
-  const originalWebkitRecognition = window.webkitSpeechRecognition;
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let runtime = 'remote';
+  let retryWithBrowserService = false;
 
-  function isArcBrowser() {
-    try {
-      const styles = window.getComputedStyle(document.documentElement);
-      return Boolean(
-        styles.getPropertyValue('--arc-palette-background').trim() ||
-        styles.getPropertyValue('--arc-palette-title').trim()
-      );
-    } catch (_) {
-      return false;
-    }
+  function setRuntime(value) {
+    runtime = value;
+    window.__aidHabitatSpeechRuntime = value;
+    return value;
   }
 
-  function shouldUseRemoteRecognition() {
-    try {
-      return isArcBrowser() ||
-        window.sessionStorage.getItem('aidHabitatRemoteSpeech') === '1';
-    } catch (_) {
-      return isArcBrowser();
-    }
+  function record(type, error) {
+    // Diagnostics contain event names/codes only, never audio or transcripts.
+    const events = window.__aidHabitatSpeechEvents || [];
+    events.push(type + (error ? ':' + error : ''));
+    window.__aidHabitatSpeechEvents = events.slice(-30);
   }
 
-  function useRecognitionBridge(Recognition, locale, processLocally, useExplicitTrack) {
+  if (Recognition) {
+    // speech_to_text keeps one recognition object after initialize(). Install
+    // its constructor alias once; apply the CURRENT mode each time it starts.
+    // This also supports browsers exposing only the unprefixed constructor.
     function BridgedSpeechRecognition() {
       const recognition = new Recognition();
-      recognition.lang = locale;
-      recognition.processLocally = processLocally;
       const nativeStart = recognition.start.bind(recognition);
       const nativeStop = recognition.stop.bind(recognition);
       const nativeAbort = recognition.abort.bind(recognition);
-      let microphoneStream = null;
-      let startCancelled = false;
-      let heardSpeech = false;
+      let intentionalStop = false;
       let receivedResult = false;
-
-      const releaseMicrophone = function() {
-        if (!microphoneStream) return;
-        microphoneStream.getTracks().forEach(function(track) {
-          track.stop();
-        });
-        microphoneStream = null;
+      let failed = false;
+      let localSession = false;
+      let startTimer = null;
+      const clearStartTimer = function() {
+        clearTimeout(startTimer);
+        startTimer = null;
       };
-
-      // Keep only event names and error codes for troubleshooting. Never
-      // retain recognized words or microphone data in this diagnostic log.
-      window.__aidHabitatSpeechEvents = [];
-      const record = function(event) {
-        const detail = event && event.error ? ':' + event.error : '';
-        window.__aidHabitatSpeechEvents.push(event.type + detail);
-        window.__aidHabitatSpeechEvents =
-          window.__aidHabitatSpeechEvents.slice(-30);
+      const emitError = function(code) {
+        const event = new Event('error');
+        Object.defineProperty(event, 'error', { value: code });
+        recognition.dispatchEvent(event);
       };
-      [
-        'start',
-        'audiostart',
-        'soundstart',
-        'speechstart',
-        'result',
-        'speechend',
-        'soundend',
-        'audioend',
-        'error',
-        'end',
-      ].forEach(function(type) {
-        recognition.addEventListener(type, record);
+      ['start', 'audiostart', 'soundstart', 'speechstart', 'result',
+        'speechend', 'soundend', 'audioend', 'error', 'end'].forEach(function(type) {
+        recognition.addEventListener(type, function(event) { record(type, event.error); });
       });
-
-      recognition.addEventListener('speechstart', function() {
-        heardSpeech = true;
-      });
-      recognition.addEventListener('result', function() {
-        receivedResult = true;
+      recognition.addEventListener('start', clearStartTimer);
+      recognition.addEventListener('result', function() { receivedResult = true; });
+      recognition.addEventListener('error', function(event) {
+        clearStartTimer();
+        failed = true;
+        if (localSession && ['language-not-supported', 'network', 'no-speech'].includes(event.error)) {
+          retryWithBrowserService = true;
+        }
       });
       recognition.addEventListener('end', function() {
-        if (processLocally && heardSpeech && !receivedResult && !startCancelled) {
-          try {
-            window.sessionStorage.setItem('aidHabitatRemoteSpeech', '1');
-          } catch (_) {
-            // The next page load can still use Arc's palette detection.
-          }
-          window.__aidHabitatSpeechEvents.push('fallback:remote-next-session');
+        clearStartTimer();
+        if (!receivedResult && !failed && !intentionalStop) {
+          // Do not silently flash the microphone then return to idle.
+          if (localSession) retryWithBrowserService = true;
+          emitError('no-speech');
         }
-        releaseMicrophone();
       });
-      recognition.start = function(audioTrack) {
-        if (audioTrack) {
-          nativeStart(audioTrack);
-          return;
-        }
-
-        // Chrome's recognizer can acquire the microphone itself. Passing a
-        // separately opened track adds an asynchronous start and can abort an
-        // otherwise valid recognition session. Arc alone needs that track.
-        if (!useExplicitTrack) {
+      recognition.start = function() {
+        clearStartTimer();
+        intentionalStop = false;
+        receivedResult = false;
+        failed = false;
+        localSession = runtime === 'local';
+        recognition.lang = 'fr-FR';
+        if ('processLocally' in recognition) recognition.processLocally = localSession;
+        window.__aidHabitatSpeechEvents = [];
+        startTimer = setTimeout(function() {
+          startTimer = null;
+          emitError('start-timeout');
+          nativeAbort();
+        }, 15000);
+        try {
+          // The recognizer requests and owns its microphone directly. Opening
+          // then closing getUserMedia first can lose the click activation or
+          // leave the input busy. Passing an audio track is not portable.
           nativeStart();
-          return;
+        } catch (error) {
+          clearStartTimer();
+          throw error;
         }
-
-        startCancelled = false;
-        navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        }).then(function(stream) {
-          if (startCancelled) {
-            stream.getTracks().forEach(function(track) {
-              track.stop();
-            });
-            return;
-          }
-
-          const track = stream.getAudioTracks()[0];
-          if (!track) throw new Error('No live audio track');
-          microphoneStream = stream;
-          if ('contentHint' in track) {
-            track.contentHint = 'speech-recognition';
-          }
-          window.__aidHabitatSpeechInput = track.label || 'microphone';
-          nativeStart(track);
-        }).catch(function(error) {
-          window.__aidHabitatSpeechEvents.push(
-            'microphone-error:' + (error.name || 'unknown')
-          );
-          releaseMicrophone();
-          // Preserve the browser's normal microphone fallback when explicit
-          // audio-track recognition is unavailable.
-          nativeStart();
-        });
       };
       recognition.stop = function() {
-        startCancelled = true;
-        try {
-          nativeStop();
-        } finally {
-          releaseMicrophone();
-        }
+        intentionalStop = true;
+        clearStartTimer();
+        nativeStop();
       };
       recognition.abort = function() {
-        startCancelled = true;
-        try {
-          nativeAbort();
-        } finally {
-          releaseMicrophone();
-        }
+        intentionalStop = true;
+        clearStartTimer();
+        nativeAbort();
       };
       return recognition;
     }
-
     BridgedSpeechRecognition.prototype = Recognition.prototype;
     Object.defineProperty(window, 'webkitSpeechRecognition', {
-      configurable: true,
-      writable: true,
-      value: BridgedSpeechRecognition,
+      configurable: true, writable: true, value: BridgedSpeechRecognition,
     });
   }
 
   window.aidHabitatPrepareSpeechRecognition = async function(locale) {
-    const Recognition = window.SpeechRecognition || originalWebkitRecognition;
-    if (!Recognition) {
-      window.__aidHabitatSpeechRuntime = 'unsupported';
-      return 'unsupported';
+    if (!Recognition) return setRuntime('unsupported');
+    if (retryWithBrowserService || typeof Recognition.available !== 'function') {
+      return setRuntime('remote');
     }
-
-    // Arc exposes itself as Chromium. Its local French recognizer can detect
-    // speech without ever returning a transcript, so keep the explicit audio
-    // track while using the connected recognizer that Arc handles reliably.
-    if (shouldUseRemoteRecognition()) {
-      const useExplicitTrack = isArcBrowser();
-      useRecognitionBridge(Recognition, locale, false, useExplicitTrack);
-      window.__aidHabitatSpeechRuntime = useExplicitTrack ? 'remote-track' : 'remote';
-      return window.__aidHabitatSpeechRuntime;
-    }
-
-    // Browsers without the on-device API keep their existing remote service.
-    if (typeof Recognition.available !== 'function' ||
-        typeof Recognition.install !== 'function') {
-      window.__aidHabitatSpeechRuntime = 'remote';
-      return 'remote';
-    }
-
-    const options = {
-      langs: [locale],
-      processLocally: true,
-    };
-
+    let timeout;
     try {
-      let availability = await Recognition.available(options);
-      if (availability === 'downloadable' || availability === 'downloading') {
-        const installed = await Recognition.install(options);
-        if (!installed) {
-          window.__aidHabitatSpeechRuntime = 'install-failed';
-          return 'install-failed';
-        }
-        availability = await Recognition.available(options);
-      }
-
-      if (availability !== 'available') {
-        window.__aidHabitatSpeechRuntime = 'remote';
-        return 'remote';
-      }
-      useRecognitionBridge(Recognition, locale, true, false);
-      window.__aidHabitatSpeechRuntime = 'local';
-      return 'local';
-    } catch (error) {
-      console.warn('[voice] local recognition preparation failed', error);
-      window.__aidHabitatSpeechRuntime = 'local-error';
-      return 'local-error';
+      // Use an already-installed local language pack. A download, browser
+      // policy denial or stalled experimental API must not block dictation.
+      const availability = await Promise.race([
+        Recognition.available({ langs: [locale], processLocally: true }),
+        new Promise(resolve => { timeout = setTimeout(() => resolve('unavailable'), 1500); }),
+      ]);
+      return setRuntime(availability === 'available' ? 'local' : 'remote');
+    } catch (_) {
+      record('preparation', 'local-unavailable');
+      return setRuntime('remote');
+    } finally {
+      clearTimeout(timeout);
     }
   };
 })();

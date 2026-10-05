@@ -37,12 +37,14 @@ import '../services/web_file_picker.dart';
 import '../services/web_file_saver.dart';
 import '../services/app_config.dart';
 import '../services/aggir_document_service.dart';
+import '../services/auth_service.dart';
 import '../services/data_service.dart';
 import '../services/document_file_naming.dart';
 import '../services/document_page_save.dart';
 import '../services/document_scanner_service.dart';
 import '../services/document_repository.dart';
 import '../services/media_cache_service.dart';
+import '../services/mandate_document_service.dart';
 import '../services/native_file_protection.dart';
 import '../services/pencil_interaction_service.dart';
 import '../services/pdf_rotation_service.dart';
@@ -228,6 +230,22 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   }) async {
     final dossier = await _dataService.fetchDossierById(widget.dossier.id);
     if (dossier == null) return _dataService.fetchDocuments(_patientId);
+    try {
+      final user = await AuthService().getCurrentUser();
+      await MandateDocumentService(
+        repository: _documentRepository,
+      ).documentsFor(dossier, user, createIfMissing: createIfMissing);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Le mandat n’a pas pu être préparé. Réouvrez Documents pour réessayer.',
+            ),
+          ),
+        );
+      }
+    }
     try {
       return await AggirDocumentService(
         repository: _documentRepository,
@@ -430,7 +448,13 @@ class _DocumentsScreenState extends State<DocumentsScreen>
         );
         return;
       }
-      if (Platform.isIOS || Platform.isAndroid) {
+      if (Platform.isIOS) {
+        final path = await DocumentScannerService.instance.capturePhoto();
+        if (path == null) return;
+        await _openUploadModal(File(path), defaultTag: 'Photo');
+        return;
+      }
+      if (Platform.isAndroid) {
         final xfile = await _imagePicker.pickImage(
           source: ImageSource.camera,
           maxWidth: _kCompressMaxWidth,

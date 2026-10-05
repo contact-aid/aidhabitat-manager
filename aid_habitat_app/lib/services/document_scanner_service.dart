@@ -39,6 +39,20 @@ class DocumentScannerService {
   bool get isNativeScannerSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
+  /// Full-screen iOS photo capture for Documents, with system rotation enabled.
+  /// The returned local file follows the existing document import/sync path.
+  Future<String?> capturePhoto() async {
+    if (!isNativeScannerSupported) return null;
+    try {
+      final path = await _channel.invokeMethod<String>('capturePhoto');
+      return path == null || path.trim().isEmpty ? null : path;
+    } on PlatformException catch (error) {
+      final code = error.code.trim().toLowerCase();
+      if (code == 'cancelled' || code == 'user_cancelled') return null;
+      rethrow;
+    }
+  }
+
   Future<ScannedDocumentResult?> scanToPdf() async {
     if (!isNativeScannerSupported) return null;
     try {
