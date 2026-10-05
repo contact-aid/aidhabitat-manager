@@ -2739,7 +2739,7 @@ class NocodbApiClient {
     String? scopeType,
     String? scopeId,
   }) async {
-    if (!AppConfig.hasRemoteConfig) return null;
+    if (!AppConfig.hasRemoteConfig) throw StateError('Remote config missing');
 
     final uri = Uri.parse('$_baseUrl/api/note-pages/$patientId').replace(
       queryParameters: {
@@ -2762,13 +2762,21 @@ class NocodbApiClient {
     }
 
     final payload = jsonDecode(response.body) as Map<String, dynamic>;
-    final data = (payload['data'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final notePages = ((data['notePages'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((item) => item.cast<String, dynamic>())
-        .toList();
-    if (notePages.isEmpty) return null;
-    return notePages.first;
+    final data = payload['data'];
+    if (payload['success'] != true || data is! Map || data['notePages'] is! List) {
+      throw const FormatException('Unverified remote note response');
+    }
+    final pages = data['notePages'] as List;
+    if (pages.isEmpty) return null;
+    if (pages.length != 1 || pages.single is! Map) {
+      throw const FormatException('Ambiguous remote note response');
+    }
+    final note = (pages.single as Map).cast<String, dynamic>();
+    if (note['patientId'] != patientId || note['tabKey'] != tabKey ||
+        int.tryParse('${note['pageNumber']}') != pageNumber) {
+      throw const FormatException('Remote note identity mismatch');
+    }
+    return note;
   }
 
   /// Fetches TOUTES les notes d'un patient en UNE seule requête HTTP.

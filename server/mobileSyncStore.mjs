@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import process from 'node:process';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { createKeyedSerialExecutor } from './keyedSerialExecutor.mjs';
 
 import { callNocoTool, requestConditionalNocodbRest } from './nocodbMcpClient.mjs';
 import { notePageReadFields } from './notePageFields.mjs';
@@ -950,7 +951,14 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
   },
 });
 
-const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId, notePagesTableId, preferLocal = false }) => {
+const defaultStoreIO = { queryAll, createRecord, updateRecord, deleteRecord,
+  callNocoTool, requestConditionalNocodbRest };
+// Process-local protection only. Multiple writers need a distributed uniqueness gate.
+const serializeNoteWrite = createKeyedSerialExecutor();
+export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId,
+  notePagesTableId, preferLocal = false, io = defaultStoreIO }) => {
+  const { queryAll, createRecord, updateRecord, deleteRecord,
+    callNocoTool, requestConditionalNocodbRest } = io;
   let notePageFieldNamesPromise = null;
 
   const getNotePageFieldNames = async () => {
@@ -1185,7 +1193,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
     return latestRecord(byClientId);
   };
 
-  return {
+  const adapter = {
   mode: 'nocodb',
 
   async listDocumentsByPatient(patientId, filters = {}) {
@@ -1689,12 +1697,15 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
         throw forbiddenNotePageAccessError();
       }
     }
-    if (!existing) {
-      existing = latestRecord(await queryAll(notePagesTableId, {
-        fields: notePageFields,
-        where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})~and(scope_type,eq,${JSON.stringify(String(scopeType || 'legacy'))})~and(scope_id,eq,${JSON.stringify(String(scopeId || dossierId || patientId))})~and(tab_key,eq,${JSON.stringify(String(tabKey))})~and(sub_tab_key,eq,${JSON.stringify(String(subTabKey || ''))})~and(page_number,eq,${Number(pageNumber)})`,
-      }));
+    const samePage = await queryAll(notePagesTableId, {
+      fields: notePageFields,
+      where: notePageIdentityWhere({ patientId, scopeType,
+        scopeId: scopeId || dossierId || patientId, tabKey, subTabKey, pageNumber }),
+    });
+    if (samePage.length > 1 || (existing && samePage.some((row) => row.id !== existing.id))) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_DUPLICATES_REQUIRE_REVIEW', existing);
     }
+    existing ??= samePage[0] ?? null;
     if (existing && !sameNotePageIdentity(existing.fields, {
       patientId,
       scopeType,
@@ -1708,7 +1719,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
 
     const now = new Date().toISOString();
     const beneficiary = normalizeBeneficiaryMetadata({ patientFirstName, patientLastName, patientDisplayName, dossierLabel, dossierId });
-    const resolvedPreviewUrl = absoluteUrl(`/public/note-pages/${encodeURIComponent(stringValue(notePageId) || stringValue(field(existing, 'uuid_source')) || crypto.randomUUID())}/preview`);
+    const resolvedPreviewUrl = absoluteUrl(`/public/note-pages/${encodeURIComponent(stringValue(field(existing, 'uuid_source')) || stringValue(notePageId) || crypto.randomUUID())}/preview`);
     const supportsPreviewField = await supportsNotePageField('preview_data_url');
     const supportsPreviewUrlField = await supportsNotePageField('preview_url');
     // `plan_phase` n'a été ajouté qu'avec le générateur de rapport
@@ -1906,6 +1917,13 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       buffer: Buffer.from(chunkedContent, 'base64'),
     };
   },
+  };
+  return { ...adapter,
+    upsertNotePage: (payload) => serializeNoteWrite(JSON.stringify([
+      payload.patientId, payload.scopeType || 'legacy',
+      payload.scopeId || payload.dossierId || payload.patientId,
+      payload.tabKey, payload.subTabKey || '', Number(payload.pageNumber) || 0,
+    ]), () => adapter.upsertNotePage(payload)),
   };
 };
 
