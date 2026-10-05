@@ -9,4 +9,4 @@ mkdir -p "$snapshot/aid_habitat_app/test/compat"
 cp "$repo_root/aid_habitat_app/test/compat/mobility_build64_test.dart" "$snapshot/aid_habitat_app/test/compat/"
 printf 'Build 64 source: %s\nSnapshot: %s\n' "$build64" "$snapshot"
 cd "$snapshot/aid_habitat_app"
-flutter test --reporter expanded test/compat/mobility_build64_test.dart
+flutter test --dart-define=LEGACY_BUILD64=true --reporter expanded test/compat/mobility_build64_test.dart

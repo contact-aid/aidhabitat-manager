@@ -112,6 +112,7 @@ Future<void> _connectivity(bool online) async {
 }
 
 void main() {
+  const legacyBuild64 = bool.fromEnvironment('LEGACY_BUILD64');
   TestWidgetsFlutterBinding.ensureInitialized();
   sqfliteFfiInit();
 
@@ -140,10 +141,21 @@ void main() {
       expect(repository.writes, isEmpty);
       final selector = tester.widget<FormToggleGroup>(
         find.byWidgetPredicate(
-          (w) => w is FormToggleGroup && w.label == 'Dépendance',
+          (w) =>
+              w is FormToggleGroup &&
+              (legacyBuild64
+                  ? w.label == 'Dépendance'
+                  : w.options.length == 1 && w.options.single == 'Canne'),
         ),
       );
-      expect(selector.selected, aids);
+      expect(
+        selector.selected,
+        legacyBuild64
+            ? aids
+            : aids.split(', ').contains('Canne')
+            ? 'Canne'
+            : '',
+      );
       final detail = tester.widget<FormTextField>(
         find.byWidgetPredicate(
           (w) => w is FormTextField && w.label == 'Détails',
@@ -185,19 +197,26 @@ void main() {
       await tester.pump();
       final selector = tester.widget<FormToggleGroup>(
         find.byWidgetPredicate(
-          (w) => w is FormToggleGroup && w.label == 'Dépendance',
+          (w) =>
+              w is FormToggleGroup &&
+              (legacyBuild64
+                  ? w.label == 'Dépendance'
+                  : w.options.length == 1 && w.options.single == 'Canne'),
         ),
       );
-      expect(selector.options.contains(selector.selected), isFalse);
+      expect(selector.options.contains(selector.selected), !legacyBuild64);
       await tester.tap(find.text('Canne'));
       await tester.pump();
       await tester.runAsync(controller.flushPendingSave);
-      expect(repository.writes.single['dependence_txt'], 'Canne');
+      final expected = legacyBuild64
+          ? 'Canne'
+          : 'Déambulateur, Orthèse spéciale';
+      expect(repository.writes.single['dependence_txt'], expected);
       expect(
         (jsonDecode(repository.writes.single['occupants_json'] as String)
                 as List)
             .first['dependenceTxt'],
-        'Canne',
+        expected,
       );
     },
   );
