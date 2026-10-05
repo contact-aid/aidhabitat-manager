@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import 'sanitary_room_links.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
 import '../../components/brand_colors.dart';
@@ -164,7 +165,9 @@ List<SanitaryLevel> buildSanitaryLevelSelections(
       final decoded = jsonDecode(raw);
       if (decoded is List &&
           decoded.any(
-            (r) => r.toString().toLowerCase() == targetRoom.toLowerCase(),
+            (r) =>
+                (r is Map ? r['label'] : r).toString().toLowerCase() ==
+                targetRoom.toLowerCase(),
           )) {
         result.add(lvl);
       }
@@ -284,6 +287,9 @@ class _BathroomTabState extends State<BathroomTab>
   Timer? _saveTimer;
   Future<void>? _saveFuture;
   int _loadGeneration = 0;
+  int _editGeneration = 0;
+  List<BathroomInstance> _displayInstances = [];
+  Map<String, String> _roomLinks = {};
   int _activeLevelIndex = 0;
   String? _pendingLevelField;
   // (Anciens Sets d'édition/repli retirés : les toggles et listes
@@ -346,67 +352,60 @@ class _BathroomTabState extends State<BathroomTab>
   }
 
   Future<void> _hydrateFromLocal(int generation) async {
+    if ((_saveTimer?.isActive ?? false) || _saveFuture != null) return;
+    final editGeneration = _editGeneration;
+    final activeId = _active?.id;
     final result = await widget.repository.fetchDiagnosticSanitaire(
       widget.dossier.id,
     );
     final housingRow = await widget.repository.fetchHousingRaw(
       widget.dossier.id,
     );
-    final selectedLevels = buildSanitaryLevelSelections(
-      housingRow,
-      'Salle de bain',
-    );
-    if (!mounted || generation != _loadGeneration) return;
-
+    if (!mounted ||
+        generation != _loadGeneration ||
+        editGeneration != _editGeneration)
+      return;
     final previous = result?.sdbInstances ?? const <BathroomInstance>[];
-    // One instance per level with "Salle de bain" selected. Preserve any
-    // existing saved instance for that level; create an empty one otherwise.
-    final nextInstances = <BathroomInstance>[];
-    for (final lvl in selectedLevels) {
-      final existing = previous
-          .where((i) => i.levelField == lvl.field)
-          .toList();
-      if (existing.isNotEmpty) {
+    final rooms = sanitaryHousingRooms(housingRow);
+    final links = sanitaryRoomLinks(
+      roomsByLevel: rooms,
+      target: 'Salle de bain',
+      diagnostics: previous.map((instance) => instance.toJson()),
+    );
+    // Saved records remain intact, including records absent from the housing list.
+    final nextInstances = List<BathroomInstance>.from(previous);
+    final used = links.values.toSet();
+    final ids = previous.map((instance) => instance.id).toSet();
+    for (final entry in rooms.entries) {
+      for (final room in entry.value) {
+        if (room.label.toLowerCase() != 'Salle de bain'.toLowerCase() ||
+            used.contains(room.id))
+          continue;
+        var id = 'sdb_room_${room.id}';
+        while (ids.contains(id)) {
+          id = '${id}_new';
+        }
+        ids.add(id);
+        links[id] = room.id;
+        // An unsaved form slot is materialized only by a deliberate field edit.
         nextInstances.add(
           BathroomInstance(
-            id: existing.first.id,
-            levelField: lvl.field,
-            levelLabel: lvl.label,
-            sdbBaignoire: existing.first.sdbBaignoire,
-            sdbBaignoireHauteur: existing.first.sdbBaignoireHauteur,
-            sdbBacDouche: existing.first.sdbBacDouche,
-            sdbBacDoucheHauteur: existing.first.sdbBacDoucheHauteur,
-            sdbVasqueSuspendue: existing.first.sdbVasqueSuspendue,
-            sdbVasqueSuspendueHauteur: existing.first.sdbVasqueSuspendueHauteur,
-            sdbVasqueColonne: existing.first.sdbVasqueColonne,
-            sdbVasqueColonneHauteur: existing.first.sdbVasqueColonneHauteur,
-            sdbMeubleVasque: existing.first.sdbMeubleVasque,
-            sdbMeubleVasqueHauteur: existing.first.sdbMeubleVasqueHauteur,
-            sdbBidet: existing.first.sdbBidet,
-            sdbBidetHauteur: existing.first.sdbBidetHauteur,
-            sdbParoiDouche: existing.first.sdbParoiDouche,
-            sdbParoiDoucheHauteur: existing.first.sdbParoiDoucheHauteur,
-            sdbSolGlissant: existing.first.sdbSolGlissant,
-            sdbMachineALaver: existing.first.sdbMachineALaver,
-            sdbMachineALaverHauteur: existing.first.sdbMachineALaverHauteur,
-            porteSdbLargeurSuffisante: existing.first.porteSdbLargeurSuffisante,
-            porteSdbDimension: existing.first.porteSdbDimension,
-            porteSdbSensAdapte: existing.first.porteSdbSensAdapte,
-          ),
-        );
-      } else {
-        nextInstances.add(
-          BathroomInstance(
-            id: 'sdb_${lvl.field}',
-            levelField: lvl.field,
-            levelLabel: lvl.label,
+            id: id,
+            housingRoomId: room.id,
+            levelField: entry.key,
+            levelLabel: sanitaryLevelLabel(entry.key),
           ),
         );
       }
     }
+    _roomLinks = links;
+    _displayInstances = nextInstances;
 
     final pendingLevelField = _pendingLevelField;
-    var nextActiveLevelIndex = _activeLevelIndex;
+    var nextActiveLevelIndex = activeId == null
+        ? _activeLevelIndex
+        : nextInstances.indexWhere((instance) => instance.id == activeId);
+    if (nextActiveLevelIndex < 0) nextActiveLevelIndex = 0;
     if (pendingLevelField != null) {
       final idx = nextInstances.indexWhere(
         (instance) => instance.levelField == pendingLevelField,
@@ -420,7 +419,7 @@ class _BathroomTabState extends State<BathroomTab>
     setState(() {
       _diagnostic = DiagnosticSanitaire(
         dossierId: widget.dossier.id,
-        sdbInstances: nextInstances,
+        sdbInstances: previous,
         wcInstances: result?.wcInstances ?? const [],
       );
       // Keep activeLevelIndex in range.
@@ -434,7 +433,7 @@ class _BathroomTabState extends State<BathroomTab>
 
   /// Called when the parent pushes a refreshed dossier (e.g. after the user
   /// toggled a bathroom in Accessibilité > Intérieur). Re-derives instances.
-  List<BathroomInstance> get _instances => _diagnostic?.sdbInstances ?? [];
+  List<BathroomInstance> get _instances => _displayInstances;
 
   BathroomInstance? get _active {
     if (_instances.isEmpty) return null;
@@ -448,6 +447,8 @@ class _BathroomTabState extends State<BathroomTab>
   }
 
   Future<void> _save() async {
+    final inFlight = _saveFuture;
+    if (inFlight != null) await inFlight;
     final diagnostic = _diagnostic;
     if (diagnostic == null) return;
     // Pas de setState(_saving) — voir dossier_screen.dart.
@@ -501,9 +502,24 @@ class _BathroomTabState extends State<BathroomTab>
   }
 
   void _updateActive(BathroomInstance updated) {
-    if (_active == null) return;
-    final idx = _activeLevelIndex.clamp(0, _instances.length - 1).toInt();
-    final next = List<BathroomInstance>.from(_instances)..[idx] = updated;
+    final idx = _instances.indexWhere((instance) => instance.id == updated.id);
+    if (idx < 0) return;
+    updated = BathroomInstance.fromJson({
+      ...updated.toJson(),
+      'housingRoomId': _roomLinks[updated.id] ?? updated.housingRoomId,
+    });
+    _editGeneration++;
+    _displayInstances = List<BathroomInstance>.from(_instances)
+      ..[idx] = updated;
+    final next = List<BathroomInstance>.from(_diagnostic?.sdbInstances ?? []);
+    final storedIndex = next.indexWhere(
+      (instance) => instance.id == updated.id,
+    );
+    if (storedIndex < 0) {
+      next.add(updated);
+    } else {
+      next[storedIndex] = updated;
+    }
     setState(() {
       _diagnostic = DiagnosticSanitaire(
         dossierId: widget.dossier.id,
@@ -651,7 +667,18 @@ class _BathroomTabState extends State<BathroomTab>
   Widget _buildLevelPills() {
     final labels = _instances.isEmpty
         ? const ['Salle de bain']
-        : _instances.map((instance) => instance.levelLabel).toList();
+        : [
+            for (var i = 0; i < _instances.length; i++)
+              _instances
+                          .where(
+                            (room) =>
+                                room.levelField == _instances[i].levelField,
+                          )
+                          .length >
+                      1
+                  ? '${_instances[i].levelLabel} · Salle de bain ${i + 1}'
+                  : _instances[i].levelLabel,
+          ];
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 8),

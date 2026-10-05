@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/types.dart';
+import 'sanitary_room_links.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
 import '../../components/brand_colors.dart';
@@ -9,7 +10,6 @@ import '../../components/soft_transitions.dart';
 import 'bathroom_tab.dart'
     show
         SanitaryLevelIcon,
-        buildSanitaryLevelSelections,
         sanitaryLevelIconIndexFromLabel,
         sanitaryLevelIconLayerCount;
 
@@ -94,6 +94,9 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
   Timer? _saveTimer;
   Future<void>? _saveFuture;
   int _loadGeneration = 0;
+  int _editGeneration = 0;
+  List<WcInstance> _displayInstances = [];
+  Map<String, String> _roomLinks = {};
   int _activeLevelIndex = 0;
   String? _pendingLevelField;
   // (Ancien Set de clés d'édition pour le repli "CollapsedValueRow"
@@ -141,52 +144,60 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
   }
 
   Future<void> _hydrateFromLocal(int generation) async {
+    if ((_saveTimer?.isActive ?? false) || _saveFuture != null) return;
+    final editGeneration = _editGeneration;
+    final activeId = _active?.id;
     final result = await widget.repository.fetchDiagnosticSanitaire(
       widget.dossier.id,
     );
     final housingRow = await widget.repository.fetchHousingRaw(
       widget.dossier.id,
     );
-    final selectedLevels = buildSanitaryLevelSelections(housingRow, 'WC');
-    if (!mounted || generation != _loadGeneration) return;
-
+    if (!mounted ||
+        generation != _loadGeneration ||
+        editGeneration != _editGeneration)
+      return;
     final previous = result?.wcInstances ?? const <WcInstance>[];
-    final nextInstances = <WcInstance>[];
-    for (final lvl in selectedLevels) {
-      final existing = previous
-          .where((i) => i.levelField == lvl.field)
-          .toList();
-      if (existing.isNotEmpty) {
+    final rooms = sanitaryHousingRooms(housingRow);
+    final links = sanitaryRoomLinks(
+      roomsByLevel: rooms,
+      target: 'WC',
+      diagnostics: previous.map((instance) => instance.toJson()),
+    );
+    // Saved records remain intact, including records absent from the housing list.
+    final nextInstances = List<WcInstance>.from(previous);
+    final used = links.values.toSet();
+    final ids = previous.map((instance) => instance.id).toSet();
+    for (final entry in rooms.entries) {
+      for (final room in entry.value) {
+        if (room.label.toLowerCase() != 'WC'.toLowerCase() ||
+            used.contains(room.id))
+          continue;
+        var id = 'wc_room_${room.id}';
+        while (ids.contains(id)) {
+          id = '${id}_new';
+        }
+        ids.add(id);
+        links[id] = room.id;
+        // An unsaved form slot is materialized only by a deliberate field edit.
         nextInstances.add(
           WcInstance(
-            id: existing.first.id,
-            levelField: lvl.field,
-            levelLabel: lvl.label,
-            wcCuvetteBonneHauteur: existing.first.wcCuvetteBonneHauteur,
-            wcCuvetteTropBasse: existing.first.wcCuvetteTropBasse,
-            wcCuvetteTropHaute: existing.first.wcCuvetteTropHaute,
-            wcCuvetteHauteur: existing.first.wcCuvetteHauteur,
-            wcBarreRelevement: existing.first.wcBarreRelevement,
-            porteWcLargeurSuffisante: existing.first.porteWcLargeurSuffisante,
-            porteWcDimension: existing.first.porteWcDimension,
-            porteWcSensAdapte: existing.first.porteWcSensAdapte,
-            observationEquipementsUtilisation:
-                existing.first.observationEquipementsUtilisation,
-          ),
-        );
-      } else {
-        nextInstances.add(
-          WcInstance(
-            id: 'wc_${lvl.field}',
-            levelField: lvl.field,
-            levelLabel: lvl.label,
+            id: id,
+            housingRoomId: room.id,
+            levelField: entry.key,
+            levelLabel: sanitaryLevelLabel(entry.key),
           ),
         );
       }
     }
+    _roomLinks = links;
+    _displayInstances = nextInstances;
 
     final pendingLevelField = _pendingLevelField;
-    var nextActiveLevelIndex = _activeLevelIndex;
+    var nextActiveLevelIndex = activeId == null
+        ? _activeLevelIndex
+        : nextInstances.indexWhere((instance) => instance.id == activeId);
+    if (nextActiveLevelIndex < 0) nextActiveLevelIndex = 0;
     if (pendingLevelField != null) {
       final idx = nextInstances.indexWhere(
         (instance) => instance.levelField == pendingLevelField,
@@ -201,7 +212,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
       _diagnostic = DiagnosticSanitaire(
         dossierId: widget.dossier.id,
         sdbInstances: result?.sdbInstances ?? const [],
-        wcInstances: nextInstances,
+        wcInstances: previous,
       );
       _activeLevelIndex = nextActiveLevelIndex;
       if (_activeLevelIndex >= nextInstances.length) {
@@ -224,7 +235,7 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
     }
   }
 
-  List<WcInstance> get _instances => _diagnostic?.wcInstances ?? [];
+  List<WcInstance> get _instances => _displayInstances;
 
   WcInstance? get _active {
     if (_instances.isEmpty) return null;
@@ -238,6 +249,8 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
   }
 
   Future<void> _save() async {
+    final inFlight = _saveFuture;
+    if (inFlight != null) await inFlight;
     final diagnostic = _diagnostic;
     if (diagnostic == null) return;
     // Pas de setState(_saving) — voir dossier_screen.dart.
@@ -291,9 +304,23 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
   }
 
   void _updateActive(WcInstance updated) {
-    if (_active == null) return;
-    final idx = _activeLevelIndex.clamp(0, _instances.length - 1).toInt();
-    final next = List<WcInstance>.from(_instances)..[idx] = updated;
+    final idx = _instances.indexWhere((instance) => instance.id == updated.id);
+    if (idx < 0) return;
+    updated = WcInstance.fromJson({
+      ...updated.toJson(),
+      'housingRoomId': _roomLinks[updated.id] ?? updated.housingRoomId,
+    });
+    _editGeneration++;
+    _displayInstances = List<WcInstance>.from(_instances)..[idx] = updated;
+    final next = List<WcInstance>.from(_diagnostic?.wcInstances ?? []);
+    final storedIndex = next.indexWhere(
+      (instance) => instance.id == updated.id,
+    );
+    if (storedIndex < 0) {
+      next.add(updated);
+    } else {
+      next[storedIndex] = updated;
+    }
     setState(() {
       _diagnostic = DiagnosticSanitaire(
         dossierId: widget.dossier.id,
@@ -386,7 +413,18 @@ class _WcTabState extends State<WcTab> with AutomaticKeepAliveClientMixin {
   Widget _buildLevelPills() {
     final labels = _instances.isEmpty
         ? const ['WC']
-        : _instances.map((instance) => instance.levelLabel).toList();
+        : [
+            for (var i = 0; i < _instances.length; i++)
+              _instances
+                          .where(
+                            (room) =>
+                                room.levelField == _instances[i].levelField,
+                          )
+                          .length >
+                      1
+                  ? '${_instances[i].levelLabel} · WC ${i + 1}'
+                  : _instances[i].levelLabel,
+          ];
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 8),
