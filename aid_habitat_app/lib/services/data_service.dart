@@ -894,6 +894,12 @@ class DataService {
       scopeId: details['scopeId']?.toString(),
     );
     final revision = remote?['revision']?.toString();
+    if (remote == null) {
+      return _syncRepository.resolveNoteConflictKeepingLocal(
+        operationId,
+        verifiedRemoteMissing: true,
+      );
+    }
     if (revision == null || revision.isEmpty) return false;
     return _syncRepository.resolveNoteConflictKeepingLocal(
       operationId,
