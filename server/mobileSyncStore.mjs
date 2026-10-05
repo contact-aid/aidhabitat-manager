@@ -958,6 +958,7 @@ const defaultStoreIO = { queryAll, createRecord, updateRecord, deleteRecord,
   callNocoTool, requestConditionalNocodbRest };
 // Process-local protection only. Multiple writers need a distributed uniqueness gate.
 const serializeNoteWrite = createKeyedSerialExecutor();
+const serializeMandateImport = createKeyedSerialExecutor();
 export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId,
   notePagesTableId, preferLocal = false, io = defaultStoreIO }) => {
   const { queryAll, createRecord, updateRecord, deleteRecord,
@@ -1303,12 +1304,41 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
 
     const existingRecords = documentLocalId
       ? await queryAll(documentsTableId, {
-        fields: ['uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom', 'beneficiaire_nom_complet', 'dossier_libelle', 'titre', 'nom_fichier', 'mime_type', 'tags_json', 'created_at', 'updated_at', 'client_document_id'],
+        fields: ['uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom', 'beneficiaire_nom_complet', 'dossier_libelle', 'titre', 'nom_fichier', 'mime_type', 'tags_json', 'created_at', 'updated_at', 'client_document_id', 'contenu_base64'],
         where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})~and(client_document_id,eq,${JSON.stringify(String(documentLocalId))})`,
       })
       : [];
 
     const existing = latestRecord(existingRecords);
+    if (existing && stringValue(documentLocalId).startsWith('doc_mandat_')) {
+      if (stringValue(field(existing, 'dossier_id')) !== stringValue(dossierId)) {
+        throw Object.assign(new Error('Mandat lié à un autre dossier'), { status: 403, statusCode: 403 });
+      }
+      let storedContent = stringValue(field(existing, 'contenu_base64'));
+      if (!storedContent) {
+        const chunks = await queryAll(documentChunksTableId, {
+          fields: ['document_uuid_source', 'chunk_index', 'chunk_base64'],
+          where: `(document_uuid_source,eq,${JSON.stringify(stringValue(field(existing, 'uuid_source')))})`,
+        });
+        chunks.sort((a,b) => Number(field(a, 'chunk_index')) - Number(field(b, 'chunk_index')));
+        if (chunks.every((row,index) => Number(field(row,'chunk_index')) === index)) {
+          storedContent = chunks.map(row => stringValue(field(row,'chunk_base64'))).join('');
+        }
+      }
+      // Never replace an annotated copy or acknowledge different pending bytes.
+      if (existingRecords.length !== 1 || storedContent !== base64) {
+        throw Object.assign(new Error('Un mandat existe déjà. Votre copie locale est conservée pour comparaison.'), {
+          status: 409, statusCode: 409, code: 'DOCUMENT_IMPORT_ALREADY_EXISTS',
+        });
+      }
+      return buildDocumentPayload({
+        id: stringValue(field(existing, 'uuid_source') || existing.id), patientId, dossierId,
+        clientDocumentId: stringValue(documentLocalId),
+        title: stringValue(field(existing, 'titre')), fileName: stringValue(field(existing, 'nom_fichier')),
+        mimeType: stringValue(field(existing, 'mime_type')), tags: safeParseJsonArray(field(existing, 'tags_json')),
+        createdAt: stringValue(field(existing, 'created_at')), updatedAt: stringValue(field(existing, 'updated_at')),
+      }, absoluteUrl, 'nocodb');
+    }
     const now = new Date().toISOString();
     const storedInlineContent = base64.length <= MAX_NOCODB_LONG_TEXT_LENGTH ? base64 : '';
     const beneficiary = normalizeBeneficiaryMetadata({ patientFirstName, patientLastName, patientDisplayName, dossierLabel, dossierId });
@@ -1937,6 +1967,10 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
     payload.tabKey, payload.subTabKey || '',
   ]);
   return { ...adapter,
+    upsertDocument: (payload) => stringValue(payload.documentLocalId).startsWith('doc_mandat_')
+      ? serializeMandateImport(JSON.stringify([documentsTableId, payload.patientId, payload.documentLocalId]),
+        () => adapter.upsertDocument(payload))
+      : adapter.upsertDocument(payload),
     // Share the lock with page-number allocation, including a page created
     // between a missing-page GET and an upsert. No destructive deduplication.
     upsertNotePage: (payload) => serializeNoteWrite(noteGroupKey(payload), () => adapter.upsertNotePage(payload)),
