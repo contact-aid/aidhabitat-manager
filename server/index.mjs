@@ -9710,7 +9710,7 @@ app.use(async (req, res, next) => {
 });
 
 app.use((error, _req, res, _next) => {
-  if (!res.locals.noteRequestId) console.error('[nocodb-api]', error);
+  if (!res.locals?.noteRequestId) console.error('[nocodb-api]', error);
   else res.locals.noteErrorCode = safeNoteErrorCode(error?.code);
   const isMulterLimit = error?.name === 'MulterError' &&
     ['LIMIT_FILE_SIZE', 'LIMIT_FILE_COUNT', 'LIMIT_PART_COUNT'].includes(error?.code);
@@ -9726,7 +9726,7 @@ app.use((error, _req, res, _next) => {
   res.status(statusCode).json({
     success: false,
     error: message,
-    ...(res.locals.noteRequestId ? { requestId: res.locals.noteRequestId } : {}),
+    ...(res.locals?.noteRequestId ? { requestId: res.locals.noteRequestId } : {}),
   });
 });
 
