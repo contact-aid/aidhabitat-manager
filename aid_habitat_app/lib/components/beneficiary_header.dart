@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/types.dart';
+import '../models/dossier_occupants.dart';
 import 'beneficiary_badges.dart';
 
 /// Header bénéficiaire partagé entre :
@@ -94,7 +95,7 @@ class BeneficiaryHeader extends StatelessWidget {
                     ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 380),
                       child: Text(
-                        '${patient.lastName.toUpperCase()} ${patient.firstName}',
+                        dossierBeneficiaryTitle(patient),
                         style: GoogleFonts.nunito(
                           fontSize: 22,
                           fontWeight: FontWeight.w600,

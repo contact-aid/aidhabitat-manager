@@ -333,8 +333,12 @@ class TrustedPerson {
 class Occupant {
   final String firstName;
   final String lastName;
-  /// Null means absent on legacy records; an empty string clears the choice.
+
+  /// Null means absent on legacy clients; an empty string is an explicit clear.
   final String? gender;
+
+  /// Null means absent on older records; an empty string is an explicit clear.
+  final String? maidenName;
   final String birthDate;
   final bool apa;
   final bool invalidity;
@@ -360,6 +364,7 @@ class Occupant {
     this.firstName = '',
     this.lastName = '',
     this.gender,
+    this.maidenName,
     this.birthDate = '',
     this.apa = false,
     this.invalidity = false,
@@ -382,6 +387,7 @@ class Occupant {
         : (const ['Homme', 'Femme'].contains(json['gender'])
               ? json['gender'] as String
               : ''),
+    maidenName: json['maidenName'] as String?,
     birthDate: json['birthDate'] as String? ?? '',
     apa: json['apa'] as bool? ?? false,
     invalidity: json['invalidity'] as bool? ?? false,
@@ -401,6 +407,7 @@ class Occupant {
     'firstName': firstName,
     'lastName': lastName,
     if (gender != null) 'gender': gender,
+    if (maidenName != null) 'maidenName': maidenName,
     'birthDate': birthDate,
     'apa': apa,
     'invalidity': invalidity,
@@ -419,6 +426,7 @@ class Occupant {
     String? firstName,
     String? lastName,
     String? gender,
+    String? maidenName,
     String? birthDate,
     bool? apa,
     bool? invalidity,
@@ -437,6 +445,7 @@ class Occupant {
       firstName: firstName ?? this.firstName,
       lastName: lastName ?? this.lastName,
       gender: gender ?? this.gender,
+      maidenName: maidenName ?? this.maidenName,
       birthDate: birthDate ?? this.birthDate,
       apa: apa ?? this.apa,
       invalidity: invalidity ?? this.invalidity,
