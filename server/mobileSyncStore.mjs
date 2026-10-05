@@ -1918,12 +1918,16 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
     };
   },
   };
+  const noteGroupKey = (payload) => JSON.stringify([
+    payload.patientId, payload.scopeType || 'legacy',
+    payload.scopeId || payload.dossierId || payload.patientId,
+    payload.tabKey, payload.subTabKey || '',
+  ]);
   return { ...adapter,
-    upsertNotePage: (payload) => serializeNoteWrite(JSON.stringify([
-      payload.patientId, payload.scopeType || 'legacy',
-      payload.scopeId || payload.dossierId || payload.patientId,
-      payload.tabKey, payload.subTabKey || '', Number(payload.pageNumber) || 0,
-    ]), () => adapter.upsertNotePage(payload)),
+    // Share the lock with page-number allocation, including a page created
+    // between a missing-page GET and an upsert. No destructive deduplication.
+    upsertNotePage: (payload) => serializeNoteWrite(noteGroupKey(payload), () => adapter.upsertNotePage(payload)),
+    createNotePage: (payload) => serializeNoteWrite(noteGroupKey(payload), () => adapter.createNotePage(payload)),
   };
 };
 
