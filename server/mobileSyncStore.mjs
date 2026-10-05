@@ -38,32 +38,31 @@ export class NotePageMutationError extends Error {
 const DRAWING_GZIP_PREFIX = 'GZIP:';
 const DRAWING_COMPRESS_THRESHOLD = 80_000;
 
-const compressDrawingForStorage = (drawingJson) => {
+export const compressDrawingForStorage = (drawingJson) => {
   const raw = drawingJson == null ? '' : String(drawingJson);
   if (raw.length <= DRAWING_COMPRESS_THRESHOLD) return raw;
   try {
     const compressed = gzipSync(Buffer.from(raw, 'utf8'));
-    return DRAWING_GZIP_PREFIX + compressed.toString('base64');
+    const encoded = DRAWING_GZIP_PREFIX + compressed.toString('base64');
+    if (encoded.length > 100000) {
+      throw new NotePageMutationError(413, 'NOTE_PAGE_CONTENT_TOO_LARGE');
+    }
+    return encoded;
   } catch (err) {
-    // Si gzip échoue (improbable), on renvoie le brut — NocoDB peut
-    // ensuite refuser avec 422, mais c'est moins pire qu'une corruption
-    // silencieuse.
-    console.warn('[drawing-compress] gzip échoué, fallback brut :', err?.message || err);
-    return raw;
+    if (err instanceof NotePageMutationError) throw err;
+    throw new NotePageMutationError(503, 'NOTE_PAGE_COMPRESSION_FAILED');
   }
 };
 
-const decompressDrawingForRead = (stored) => {
+export const decompressDrawingForRead = (stored) => {
   const raw = stored == null ? '' : String(stored);
   if (!raw.startsWith(DRAWING_GZIP_PREFIX)) return raw;
   try {
     const base64 = raw.slice(DRAWING_GZIP_PREFIX.length);
     return gunzipSync(Buffer.from(base64, 'base64')).toString('utf8');
   } catch (err) {
-    // Donnée corrompue : on logue + renvoie une chaîne vide pour ne
-    // pas planter le rendu côté client (mieux qu'une exception).
-    console.warn('[drawing-compress] gunzip échoué :', err?.message || err);
-    return '';
+    // Never turn unreadable stored content into an empty note.
+    throw new NotePageMutationError(503, 'NOTE_PAGE_DECOMPRESSION_FAILED');
   }
 };
 
@@ -74,6 +73,27 @@ const decompressDrawingForRead = (stored) => {
 // clarté côté caller — l'implémentation est strictement identique.
 const compressTextForStorage = compressDrawingForStorage;
 const decompressTextForRead = decompressDrawingForRead;
+
+export const assertNotePageWriteAllowed = ({ observedRevision, expectedRevision, writeId, matchesDesired }) => {
+  if (observedRevision === writeId) {
+    if (!matchesDesired) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_WRITE_ID_REUSED');
+    }
+    return 'replay';
+  }
+  if (observedRevision !== expectedRevision) {
+    throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT');
+  }
+  return 'update';
+};
+
+export const sameNotePageIdentity = (recordFields, { patientId, scopeType, scopeId, tabKey, subTabKey, pageNumber }) =>
+  stringValue(recordFields.beneficiaire_id) === stringValue(patientId)
+  && stringValue(recordFields.scope_type || 'legacy') === stringValue(scopeType || 'legacy')
+  && stringValue(recordFields.scope_id) === stringValue(scopeId)
+  && stringValue(recordFields.tab_key) === stringValue(tabKey)
+  && stringValue(recordFields.sub_tab_key) === stringValue(subTabKey)
+  && Number(recordFields.page_number) === Number(pageNumber);
 
 const DATA_DIR_URL = new URL('./data/', import.meta.url);
 const DOCUMENTS_DIR_URL = new URL('./data/documents/', import.meta.url);
@@ -1606,22 +1626,6 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       updated_at: now,
     });
 
-    await cleanupRemoteNotePageDuplicates({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      tabKey,
-      subTabKey,
-      pageNumber,
-      keepRecordId: created?.id,
-    });
-    await cleanupLegacyEmptyNoteCrossKey({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      pageNumber,
-      currentTabKey: tabKey,
-    });
     await syncRemoteNotePagesBeneficiaryMetadata(patientId, { ...beneficiary, dossierId });
 
     return buildNotePagePayload({
@@ -1684,11 +1688,22 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       if (existing && !sameId(field(existing, 'beneficiaire_id'), patientId)) {
         throw forbiddenNotePageAccessError();
       }
-    } else {
+    }
+    if (!existing) {
       existing = latestRecord(await queryAll(notePagesTableId, {
         fields: notePageFields,
         where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})~and(scope_type,eq,${JSON.stringify(String(scopeType || 'legacy'))})~and(scope_id,eq,${JSON.stringify(String(scopeId || dossierId || patientId))})~and(tab_key,eq,${JSON.stringify(String(tabKey))})~and(sub_tab_key,eq,${JSON.stringify(String(subTabKey || ''))})~and(page_number,eq,${Number(pageNumber)})`,
       }));
+    }
+    if (existing && !sameNotePageIdentity(existing.fields, {
+      patientId,
+      scopeType,
+      scopeId: scopeId || dossierId || patientId,
+      tabKey,
+      subTabKey,
+      pageNumber,
+    })) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_IDENTITY_CONFLICT', existing);
     }
 
     const now = new Date().toISOString();
@@ -1725,19 +1740,21 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
     );
     if (existing) {
       const observedRevision = stringValue(field(existing, syncRevisionField));
-      if (observedRevision === writeId) {
-        if (!matchesDesired(existing)) {
-          throw new NotePageMutationError(409, 'NOTE_PAGE_WRITE_ID_REUSED', existing);
-        }
-      } else {
-        if (!preferLocal && observedRevision !== expectedRevision) {
-          throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT', existing);
-        }
-        if (preferLocal && !uuidPattern.test(observedRevision)) {
-          throw new NotePageMutationError(503, 'NOTE_PAGE_REVISION_NOT_PREPARED', existing);
-        }
+      let writeDecision;
+      try {
+        writeDecision = assertNotePageWriteAllowed({
+          observedRevision,
+          expectedRevision,
+          writeId,
+          matchesDesired: matchesDesired(existing),
+        });
+      } catch (error) {
+        if (error instanceof NotePageMutationError) error.observed = existing;
+        throw error;
+      }
+      if (writeDecision === 'update') {
         const params = new URLSearchParams({
-          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${preferLocal ? observedRevision : expectedRevision})`,
+          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${expectedRevision})`,
         });
         await requestConditionalNocodbRest({
           method: 'PATCH',
@@ -1754,22 +1771,6 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
         existing = confirmed;
       }
 
-      await cleanupRemoteNotePageDuplicates({
-        patientId,
-        scopeType,
-        scopeId: scopeId || dossierId || patientId,
-        tabKey,
-        subTabKey,
-        pageNumber,
-        keepRecordId: existing.id,
-      });
-      await cleanupLegacyEmptyNoteCrossKey({
-        patientId,
-        scopeType,
-        scopeId: scopeId || dossierId || patientId,
-        pageNumber,
-        currentTabKey: tabKey,
-      });
       await syncRemoteNotePagesBeneficiaryMetadata(patientId, { ...beneficiary, dossierId });
 
       return buildNotePagePayload({
@@ -1832,22 +1833,6 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       created = observed;
     }
 
-    await cleanupRemoteNotePageDuplicates({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      tabKey,
-      subTabKey,
-      pageNumber,
-      keepRecordId: created?.id,
-    });
-    await cleanupLegacyEmptyNoteCrossKey({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      pageNumber,
-      currentTabKey: tabKey,
-    });
     await syncRemoteNotePagesBeneficiaryMetadata(patientId, { ...beneficiary, dossierId });
 
     return buildNotePagePayload({

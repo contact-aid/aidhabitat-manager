@@ -1850,6 +1850,7 @@ class SyncRepository {
     String operationId, {
     String? revision,
     String? observedRevision,
+    bool verifiedRemoteMissing = false,
   }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
@@ -1874,10 +1875,29 @@ class SyncRepository {
       final verifiedRevision = suppliedRevision == null
           ? _noteConflictRevision(payload['conflict'])
           : _noteConflictRevision({'revision': suppliedRevision});
-      if (verifiedRevision == null) return false;
+      final missingRecordConflict =
+          (payload['conflict'] as Map?)?['remote'] is Map &&
+          ((payload['conflict'] as Map)['remote'] as Map)['error'] ==
+              'NOTE_PAGE_RECORD_MISSING';
+      if (verifiedRemoteMissing) {
+        // Only an explicit missing-record conflict and a fresh successful
+        // remote read can convert a stale update into a create. The server
+        // must still reject the create if a writer races us to this key.
+        if (!missingRecordConflict || suppliedRevision != null) return false;
+        final local = await txn.query(
+          'note_pages',
+          columns: const ['local_id'],
+          where: 'local_id = ?',
+          whereArgs: [rows.single['entity_local_id']],
+          limit: 1,
+        );
+        if (local.length != 1) return false;
+      } else if (verifiedRevision == null) {
+        return false;
+      }
       payload
         ..remove('conflict')
-        ..['expectedRevision'] = verifiedRevision
+        ..['expectedRevision'] = verifiedRemoteMissing ? null : verifiedRevision
         ..['writeId'] = newSyncWriteId()
         ..['predecessorWriteIds'] = <String>[];
       final updated = await txn.update(
@@ -1895,15 +1915,18 @@ class SyncRepository {
         whereArgs: [operationId, 'conflict'],
       );
       if (updated != 1) return false;
-      await txn.update(
+      final noteUpdated = await txn.update(
         'note_pages',
         {
-          'remote_revision': verifiedRevision,
+          'remote_revision': verifiedRemoteMissing ? null : verifiedRevision,
           'sync_state': SyncState.pendingSync.name,
         },
         where: 'local_id = ?',
         whereArgs: [rows.single['entity_local_id']],
       );
+      if (noteUpdated != 1) {
+        throw StateError('Local note disappeared while resolving conflict');
+      }
       return true;
     });
   }
