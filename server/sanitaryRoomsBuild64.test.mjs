@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
 if (process.argv.includes('--runner')) await run();
-else test('sanitary build64 array loss is accepted after a fresh pull; stale offline saves also replace the array', { timeout: 45000 }, async () => {
+else test('sanitary build64 projections cannot remove rooms or undo deliberate clears', { timeout: 45000 }, async () => {
   const root = await mkdtemp(`${tmpdir()}/secondary-atomic-`);
   try {
     for (const creation of ['1']) {
@@ -86,9 +86,19 @@ async function run() {
     for (const kind of ['sdb', 'wc']) {
       const key = `${kind}Instances`;
       const dbKey = `${kind}_instances_json`;
+      const bathroomDefaults = Object.fromEntries([
+        'sdbBaignoire', 'sdbBacDouche', 'sdbVasqueSuspendue', 'sdbVasqueColonne',
+        'sdbMeubleVasque', 'sdbBidet', 'sdbParoiDouche', 'sdbSolGlissant', 'sdbMachineALaver',
+      ].map(key => [key, false]));
+      const bathroomHeights = Object.fromEntries([
+        'sdbBaignoireHauteur', 'sdbBacDoucheHauteur', 'sdbVasqueSuspendueHauteur',
+        'sdbVasqueColonneHauteur', 'sdbMeubleVasqueHauteur', 'sdbBidetHauteur',
+        'sdbParoiDoucheHauteur', 'sdbMachineALaverHauteur', 'porteSdbLargeurSuffisante',
+        'porteSdbDimension', 'porteSdbSensAdapte',
+      ].map(key => [key, null]));
       const room = (id, height) => kind === 'sdb'
-        ? { id, levelField: 'rdc', levelLabel: 'RDC', sdbBaignoire: true, sdbBaignoireHauteur: height }
-        : { id, levelField: 'rdc', levelLabel: 'RDC', wcCuvetteHauteur: height, observationEquipementsUtilisation: `Fictif ${id}` };
+        ? { ...bathroomDefaults, ...bathroomHeights, id, levelField: 'rdc', levelLabel: 'RDC', sdbBaignoire: true, sdbBaignoireHauteur: height }
+        : { wcCuvetteBonneHauteur: false, wcCuvetteTropBasse: false, wcCuvetteTropHaute: false, wcBarreRelevement: false, porteWcLargeurSuffisante: null, porteWcDimension: null, porteWcSensAdapte: null, id, levelField: 'rdc', levelLabel: 'RDC', wcCuvetteHauteur: height, observationEquipementsUtilisation: `Fictif ${id}` };
       rows.set(table, { Id: 401, dossier_id: dossierId, uuid_source: 'synthetic-sanitary',
         app_sync_revision: randomUUID(), UpdatedAt: '2026-09-01T00:00:00Z',
         sdb_instances_json: '[]', wc_instances_json: '[]',
@@ -97,33 +107,31 @@ async function run() {
         const result = await request(path, undefined, token, 'GET');
         assert.equal(result.status, 200); return result.body[key];
       };
-      const save = (value, baseline) => request(path, { [key]: value,
-        concurrency: { version: 1, writeId: randomUUID(), baseValues: { [key]: baseline } } }, token);
+      const save = (value, baseline, capable = false) => request(path, { [key]: value,
+        concurrency: { version: 1, writeId: randomUUID(), baseValues: { [key]: baseline },
+          ...(capable ? { collectionContract: 'collections-v2' } : {}) } }, token);
       const initial = await pull();
       assert.equal(initial.length, 2);
-      // Payload produced by the exact64 widget: first instance only, full list baseline.
+      // Exact64 projection keeps only the first room even after a fresh pull.
       const ipadValue = [{ ...initial[0], ...(kind === 'sdb' ? { sdbBacDouche: true } : { wcCuvetteTropBasse: true }) }];
-      assert.equal((await save(ipadValue, initial)).status, 200);
-      assert.deepEqual((await pull()).map(r => r.id), ['one'],
-        'KNOWN BLOCKER: server accepts omitted second room as a deletion');
-      // Sequential web -> fresh iPad -> web: no stale baseline can protect the second room.
-      const webBase = await pull();
-      assert.equal((await save([...webBase, room('two', 63)], webBase)).status, 200);
-      const ipadFresh = await pull();
-      assert.equal((await save([ipadFresh[0]], ipadFresh)).status, 200);
-      assert.deepEqual((await pull()).map(r => r.id), ['one']);
-      // Current sanitary contract also accepts this offline stale replacement.
-      const offlineBase = await pull();
-      assert.equal((await save([room('one', 71), room('two', 82)], offlineBase)).status, 200);
-      const stale = await save([room('one', 42)], offlineBase);
-      assert.equal(stale.status, 200, JSON.stringify(stale));
-      assert.deepEqual((await pull()).map(r => r.id), ['one'], 'KNOWN BLOCKER: stale offline replacement drops the web addition too');
+      const beforeWrites = writes;
+      const rejected = await save(ipadValue, initial);
+      assert.equal(rejected.status, 409);
+      assert.equal(rejected.body.error, 'COLLECTION_CLIENT_UPGRADE_REQUIRED');
+      assert.equal(writes, beforeWrites);
+      assert.deepEqual((await pull()).map(r => r.id), ['one', 'two']);
+      assert.equal((await save([room('one', 71), room('two', 82)], initial, true)).status, 200);
+      const offline = await save([room('one', 42)], initial);
+      assert.equal(offline.status, 409);
+      assert.deepEqual((await pull()).map(r => r.id), ['one', 'two']);
+      // Capable clients must also compare the observed values, not overwrite by timestamp.
+      assert.equal((await save([room('one', 42)], initial, true)).status, 409);
       const beforeDeletion = await pull();
-      assert.equal((await save([], beforeDeletion)).status, 200);
+      assert.equal((await save([], beforeDeletion, true)).status, 200);
       assert.equal((await pull()).length, 0);
-      assert.equal((await save([room('one', 46)], beforeDeletion)).status, 200);
-      assert.deepEqual((await pull()).map(r => r.id), ['one'],
-        'KNOWN BLOCKER: stale iPad save restores a room explicitly deleted on web');
+      assert.equal((await save([room('one', 46)], beforeDeletion)).status, 409);
+      assert.equal((await pull()).length, 0);
+
     }
     assert.deepEqual(base.violations, []);
     console.log('SANITARY_BUILD64_PASS');

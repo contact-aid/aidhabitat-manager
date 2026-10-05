@@ -1,3 +1,4 @@
+import { assertCollectionMutationAllowed } from './collectionMutationContract.mjs';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import fs from 'node:fs/promises';
@@ -497,8 +498,7 @@ const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter
   request: requestConditionalNocodbRest,
 }) : null;
 const serializeHousingMutation = createKeyedSerialExecutor();
-const guardedMutation = conditionalWriter ? createGuardedMutation({
-  preferLocal: true,
+const guardedMutationOptions = {
   writer: conditionalWriter,
   readColumns: async (tableId) => {
     if (!conditionalTables.includes(tableId)) throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
@@ -518,7 +518,15 @@ const guardedMutation = conditionalWriter ? createGuardedMutation({
     }
     return result.list[0] ?? null;
   },
-}) : null;
+};
+const guardedMutation = conditionalWriter ? createGuardedMutation({ ...guardedMutationOptions, preferLocal: true }) : null;
+const strictCollectionMutation = conditionalWriter ? createGuardedMutation({ ...guardedMutationOptions, preferLocal: false }) : null;
+const changesCollection = (tableId, body) => {
+  const keys = tableId === TABLES.beneficiaires ? ['occupants', 'dependenceTxt']
+    : tableId === TABLES.logements ? ['roomsBreakdown', 'basement', 'rdc', 'floor', 'secondFloor', 'thirdFloor']
+    : tableId === TABLES.diagnosticSanitaires ? ['sdbInstances', 'wcInstances'] : [];
+  return keys.some(key => Object.hasOwn(body || {}, key));
+};
 
 async function applyConditionalSync(req, res, { tableId, record, fields, mapBaseline,
   normalizeObserved }) {
@@ -529,7 +537,8 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
         Array.isArray(guard.baseValues)) {
       throw new SyncMutationError(428, 'SYNC_BASELINE_REQUIRED');
     }
-    await guardedMutation({ tableId, recordId: Number(record.id), fields,
+    const mutate = changesCollection(tableId, req.body) ? strictCollectionMutation : guardedMutation;
+    await mutate({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
       normalizeObserved,
       authorizeObserved: tableId === TABLES.dossiers
@@ -7688,6 +7697,7 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       return;
     }
 
+    assertCollectionMutationAllowed({ kind: 'patient', payload: updates });
     const storedOccupantsJson = field(beneficiaryRecord, 'occupants_json');
     const protectedUpdates = preserveLegacyOccupantGender(updates, storedOccupantsJson);
     const fields = mapBeneficiaryUpdatesToFields(protectedUpdates, references);
@@ -7924,6 +7934,8 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
       res.status(403).json({ success: false, error: 'Accès interdit à ce logement' });
       return;
     }
+    assertCollectionMutationAllowed({ kind: 'housing', payload: updates });
+
 
     const existingHousing = latestRecord(
       logements.filter((record) => field(record, 'beneficiaire_id') === beneficiaryId || String(field(record, 'beneficiaires_id')) === String(beneficiaryRecord.id))
@@ -8193,6 +8205,14 @@ app.get('/api/documents/:patientId', requireAuth, async (req, res, next) => {
   }
 });
 
+function assertMandateImportIdentity(appUser, documentLocalId, dossierId) {
+  if (!documentLocalId.startsWith('doc_mandat_')) return;
+  const account = crypto.createHash('sha256').update(normalizeEmail(appUser.email)).digest('hex');
+  if (!dossierId || documentLocalId !== `doc_mandat_${dossierId}_${account}`) {
+    throw httpError(403, 'Identité de mandat incompatible avec le compte connecté');
+  }
+}
+
 app.post(
   '/api/documents/upload',
   requireAuth,
@@ -8204,6 +8224,7 @@ app.post(
       const title = stringValue(req.query?.title).trim() || 'Document';
       const requestedFileName = stringValue(req.query?.fileName).trim();
       const requestedDossierId = stringValue(req.query?.dossierId).trim();
+      assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
       const tags = safeParseJsonArray(req.query?.tagsJson).map((tag) => String(tag).trim()).filter(Boolean);
       const mimeType = stringValue(req.get('content-type')).trim() || 'application/octet-stream';
       const bodyBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -8270,6 +8291,7 @@ app.post('/api/documents', requireAuth, documentUpload.single('file'), async (re
     const title = stringValue(req.body?.title).trim() || 'Document';
     const requestedFileName = stringValue(req.body?.fileName).trim();
     const requestedDossierId = stringValue(req.body?.dossierId).trim();
+    assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
 
     // tags may arrive as JSON string (multipart) or array (JSON body)
     const rawTags = req.body?.tags;
@@ -8445,6 +8467,7 @@ app.post(
       const title = stringValue(req.body?.title).trim() || 'Document';
       const requestedFileName = stringValue(req.body?.fileName).trim();
       const requestedDossierId = stringValue(req.body?.dossierId).trim();
+    assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
       const rawTags = req.body?.tags;
       const parsedTags = typeof rawTags === 'string'
         ? (() => {
@@ -9335,6 +9358,8 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
+    assertCollectionMutationAllowed({ kind: 'sanitary', payload });
+
     const mapFields = (payload) => {
       const sdbInstances = Array.isArray(payload.sdbInstances) ? payload.sdbInstances : [];
       const wcInstances = Array.isArray(payload.wcInstances) ? payload.wcInstances : [];
@@ -9710,6 +9735,10 @@ app.use(async (req, res, next) => {
 });
 
 app.use((error, _req, res, _next) => {
+  if (['COLLECTION_CLIENT_UPGRADE_REQUIRED', 'DOCUMENT_IMPORT_ALREADY_EXISTS'].includes(error?.code)) {
+    res.status(409).json({ success: false, error: error.code, message: error.message, fields: error.fields });
+    return;
+  }
   if (!res.locals?.noteRequestId) console.error('[nocodb-api]', error);
   else res.locals.noteErrorCode = safeNoteErrorCode(error?.code);
   const isMulterLimit = error?.name === 'MulterError' &&
