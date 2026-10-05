@@ -107,6 +107,31 @@ DiagnosticSanitaire _fixture(List<String> levels) => DiagnosticSanitaire(
 void main() {
   for (final bathroom in [true, false]) {
     testWidgets(
+      '${bathroom ? "Bathroom" : "WC"} preserves saved rooms when legacy housing is malformed',
+      (tester) async {
+        final repo = _MemoryRepository()..stored = _fixture(['rdc', 'rdc']);
+        repo.housing['rdc_rooms_json'] = '{broken';
+        final before = jsonEncode(repo.stored.toJson());
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: bathroom
+                  ? BathroomTab(dossier: _dossier, repository: repo)
+                  : WcTab(dossier: _dossier, repository: repo),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('pièces anciennes sont à vérifier'),
+          findsOneWidget,
+        );
+        expect(repo.writes, 0);
+        expect(jsonEncode(repo.stored.toJson()), before);
+        expect(tester.takeException(), isNull);
+      },
+    );
+    testWidgets(
       '${bathroom ? "Bathroom" : "WC"} edits the chosen identity and preserves unmatched legacy rooms',
       (tester) async {
         final repo = _MemoryRepository()

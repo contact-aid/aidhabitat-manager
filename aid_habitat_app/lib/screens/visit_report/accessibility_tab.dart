@@ -213,6 +213,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   List<String> _orderedLevels = [];
   final Map<String, List<HousingRoom>> _levelRooms = {};
   Map<String, List<HousingRoom>> _baselineRoomsByLevel = {};
+  final Map<String, String> _invalidRoomRaw = {};
   final Map<String, TextEditingController> _customRoomCtrls = {};
   final Map<String, String?> _activeRoomByLevel = {};
 
@@ -455,10 +456,16 @@ class _AccessibilityTabState extends State<AccessibilityTab>
 
     // Niveaux
     for (final cfg in _kLevelConfigs) {
-      _levelRooms[cfg.field] = parseHousingRooms(
-        row?[cfg.roomsField] as String?,
-        cfg.field,
-      );
+      try {
+        _levelRooms[cfg.field] = parseHousingRooms(
+          row?[cfg.roomsField] as String?,
+          cfg.field,
+        );
+        _invalidRoomRaw.remove(cfg.field);
+      } catch (_) {
+        _invalidRoomRaw[cfg.field] = row?[cfg.roomsField]?.toString() ?? '';
+        _levelRooms[cfg.field] = [];
+      }
       final controller = _customRoomCtrls.putIfAbsent(
         cfg.field,
         () => TextEditingController(),
@@ -736,9 +743,13 @@ class _AccessibilityTabState extends State<AccessibilityTab>
 
     for (final cfg in _kLevelConfigs) {
       map[cfg.field] = _orderedLevels.contains(cfg.field) ? 1 : 0;
-      map[cfg.roomsField] = jsonEncode(
-        (_levelRooms[cfg.field] ?? []).map((room) => room.toJson()).toList(),
-      );
+      map[cfg.roomsField] =
+          _invalidRoomRaw[cfg.field] ??
+          jsonEncode(
+            (_levelRooms[cfg.field] ?? [])
+                .map((room) => room.toJson())
+                .toList(),
+          );
       // Auto-remplit la description du niveau avec la liste des pièces
       // séparées par des virgules (avec exposants ² ³ pour les
       // doublons). Cf. `_formatRoomsWithCounts`. Alimente les champs
@@ -1861,6 +1872,14 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   }
 
   Widget _buildLevelCard(_LevelConfig cfg) {
+    if (_invalidRoomRaw.containsKey(cfg.field)) {
+      return ListTile(
+        title: Text(cfg.label),
+        subtitle: const Text(
+          'Liste de pièces ancienne illisible. Les données sont conservées ; ce niveau ne peut pas être modifié.',
+        ),
+      );
+    }
     final rooms = (_levelRooms[cfg.field] ?? [])
         .map((room) => room.label)
         .toList();

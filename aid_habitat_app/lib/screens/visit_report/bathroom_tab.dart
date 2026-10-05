@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/housing_rooms.dart';
 import 'sanitary_room_links.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
@@ -288,6 +289,7 @@ class _BathroomTabState extends State<BathroomTab>
   Future<void>? _saveFuture;
   int _loadGeneration = 0;
   int _editGeneration = 0;
+  bool _roomIdentityError = false;
   List<BathroomInstance> _displayInstances = [];
   Map<String, String> _roomLinks = {};
   int _activeLevelIndex = 0;
@@ -363,10 +365,17 @@ class _BathroomTabState extends State<BathroomTab>
     );
     if (!mounted ||
         generation != _loadGeneration ||
-        editGeneration != _editGeneration)
+        editGeneration != _editGeneration) {
       return;
+    }
     final previous = result?.sdbInstances ?? const <BathroomInstance>[];
-    final rooms = sanitaryHousingRooms(housingRow);
+    final rooms = <String, List<HousingRoom>>{};
+    _roomIdentityError = false;
+    try {
+      rooms.addAll(sanitaryHousingRooms(housingRow));
+    } catch (_) {
+      _roomIdentityError = true;
+    }
     final links = sanitaryRoomLinks(
       roomsByLevel: rooms,
       target: 'Salle de bain',
@@ -375,12 +384,19 @@ class _BathroomTabState extends State<BathroomTab>
     // Saved records remain intact, including records absent from the housing list.
     final nextInstances = List<BathroomInstance>.from(previous);
     final used = links.values.toSet();
+    final ambiguousLevels = previous
+        .where((room) => !links.containsKey(room.id))
+        .map((room) => canonicalSanitaryLevel(room.levelField))
+        .toSet();
+    _roomIdentityError = _roomIdentityError || ambiguousLevels.isNotEmpty;
     final ids = previous.map((instance) => instance.id).toSet();
     for (final entry in rooms.entries) {
+      if (ambiguousLevels.contains(canonicalSanitaryLevel(entry.key))) continue;
       for (final room in entry.value) {
         if (room.label.toLowerCase() != 'Salle de bain'.toLowerCase() ||
-            used.contains(room.id))
+            used.contains(room.id)) {
           continue;
+        }
         var id = 'sdb_room_${room.id}';
         while (ids.contains(id)) {
           id = '${id}_new';
@@ -602,6 +618,13 @@ class _BathroomTabState extends State<BathroomTab>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildLevelPills(),
+        if (_roomIdentityError)
+          const Padding(
+            padding: EdgeInsets.all(8),
+            child: Text(
+              'Certaines pièces anciennes sont à vérifier. Leurs données sont conservées sans association automatique.',
+            ),
+          ),
         Expanded(
           child: HorizontalSlideSwitcher(
             index: _instances.isEmpty ? -1 : _activeLevelIndex,
