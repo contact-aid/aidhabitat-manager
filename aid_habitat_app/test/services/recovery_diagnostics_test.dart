@@ -60,17 +60,20 @@ void main() {
     },
   );
   test(
-    '500 and 413 keep correlation but never expose response content',
+    '409, 428, 500 and 413 keep correlation without exposing content',
     () async {
-      for (final status in [500, 413]) {
+      for (final status in [409, 428, 500, 413]) {
         const requestId = '00000000-0000-4000-8000-000000000001';
         final client = NocodbApiClient(
           client: MockClient(
             (_) async => http.Response(
               jsonEncode({
-                'error': status == 413
-                    ? 'NOTE_PAGE_CONTENT_TOO_LARGE'
-                    : 'private clinical text',
+                'error': switch (status) {
+                  409 => 'NOTE_PAGE_REVISION_CONFLICT',
+                  428 => 'NOTE_PAGE_REVISION_REQUIRED',
+                  413 => 'NOTE_PAGE_CONTENT_TOO_LARGE',
+                  _ => 'private clinical text',
+                },
                 'requestId': requestId,
                 'drawingJson': 'private drawing',
               }),
@@ -94,6 +97,10 @@ void main() {
           expect(e.toString(), isNot(contains('private')));
           if (status == 500) {
             expect(e, isA<TransientRemoteException>());
+          } else if (status == 409 || status == 428) {
+            expect(e, isA<ConflictException>());
+            expect(e.toString(), contains('($status)'));
+            expect(e.toString(), contains('NOTE_PAGE_REVISION_'));
           } else {
             expect(e.toString(), contains('NOTE_PAGE_CONTENT_TOO_LARGE'));
           }

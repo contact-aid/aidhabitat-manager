@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'note_legacy_identity.dart';
 import 'dart:convert';
 import 'context_sync_protocol.dart';
 import 'dart:io';
@@ -1569,6 +1570,44 @@ class NocodbApiClient {
     return document;
   }
 
+  /// Read-only proof for a narrowly scoped legacy identity repair.
+  Future<Map<String, dynamic>?> findLegacyNoteForRevision({
+    required String patientId,
+    required String dossierId,
+    required String scopeType,
+    required String tabKey,
+    required int pageNumber,
+    required String? expectedRevision,
+    String? writeId,
+  }) async {
+    if (expectedRevision == null ||
+        dossierId.isEmpty ||
+        dossierId == patientId) {
+      return null;
+    }
+    final remote = await fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: scopeType,
+      scopeId: patientId,
+    );
+    if (remote == null ||
+        !matchesLegacyNoteIdentity(
+          remote: remote,
+          patientId: patientId,
+          dossierId: dossierId,
+          scopeType: scopeType,
+          tabKey: tabKey,
+          pageNumber: pageNumber,
+          expectedRevision: expectedRevision,
+          writeId: writeId,
+        )) {
+      return null;
+    }
+    return remote;
+  }
+
   Future<Map<String, dynamic>> upsertNotePage({
     required String notePageId,
     required String patientId,
@@ -1630,7 +1669,8 @@ class NocodbApiClient {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
       } catch (_) {}
       throw ConflictException(
-        'Conflit de note pour $tabKey, page $pageNumber',
+        'Conflit de note pour $tabKey, page $pageNumber '
+        '(${response.statusCode})${_noteDiagnosticSuffix(response)}',
         remoteData: remoteData,
       );
     }

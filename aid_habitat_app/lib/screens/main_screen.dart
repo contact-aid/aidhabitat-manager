@@ -527,33 +527,48 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final note = await _dataService.noteConflictDetails(operationId);
     if (note != null) {
       if (!mounted) return;
+      final missing = note['errorCode'] == 'NOTE_PAGE_RECORD_MISSING';
       final choice = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Conflit sur une note'),
+          title: Text(
+            missing
+                ? 'Emplacement de la note à vérifier'
+                : 'Conflit sur une note',
+          ),
           content: Text(
-            'La note « ${note['tabKey'] ?? 'sans titre'} », page '
-            '${note['pageNumber'] ?? 0}, existe en deux versions. '
-            'Choisissez celle à conserver.',
+            missing
+                ? 'La note est conservée sur cet appareil, mais le serveur ne la '
+                      'retrouve pas à l’emplacement demandé. Vérifiez son emplacement '
+                      'pour réessayer sans remplacer une autre version.'
+                : 'La note « ${note['tabKey'] ?? 'sans titre'} », page '
+                      '${note['pageNumber'] ?? 0}, existe en deux versions. '
+                      'Choisissez celle à conserver.',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('Annuler'),
             ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop('server'),
-              child: const Text('Prendre la note du serveur'),
-            ),
+            if (!missing)
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop('server'),
+                child: const Text('Prendre la note du serveur'),
+              ),
             FilledButton(
-              onPressed: () => Navigator.of(ctx).pop('local'),
-              child: const Text('Conserver ma note locale'),
+              onPressed: () =>
+                  Navigator.of(ctx).pop(missing ? 'repair' : 'local'),
+              child: Text(
+                missing ? 'Vérifier et réessayer' : 'Conserver ma note locale',
+              ),
             ),
           ],
         ),
       );
       if (choice == null || !mounted) return;
-      final resolved = choice == 'local'
+      final resolved = choice == 'repair'
+          ? await _dataService.repairMissingNoteIdentity(operationId)
+          : choice == 'local'
           ? await _dataService.resolveNoteConflictKeepingLocal(operationId)
           : await _dataService.resolveNoteConflictUsingServer(operationId);
       if (!mounted) return;
@@ -562,7 +577,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              choice == 'local'
+              choice == 'repair'
+                  ? 'Emplacement retrouvé. Note locale remise en synchronisation.'
+                  : choice == 'local'
                   ? 'Note locale conservée et remise en synchronisation.'
                   : 'Note du serveur restaurée sur cet appareil.',
             ),

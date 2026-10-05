@@ -900,6 +900,32 @@ class DataService {
   Future<Map<String, dynamic>?> noteConflictDetails(String operationId) =>
       _syncRepository.noteConflictDetails(operationId);
 
+  Future<bool> repairMissingNoteIdentity(String operationId) async {
+    final details = await _syncRepository.noteConflictDetails(operationId);
+    if (details == null || details['errorCode'] != 'NOTE_PAGE_RECORD_MISSING') {
+      return false;
+    }
+    try {
+      final remote = await _nocodbApiClient.findLegacyNoteForRevision(
+        patientId: details['patientId']?.toString() ?? '',
+        dossierId: details['dossierId']?.toString() ?? '',
+        scopeType: details['scopeType']?.toString() ?? '',
+        tabKey: details['tabKey']?.toString() ?? '',
+        pageNumber: int.tryParse('${details['pageNumber']}') ?? -1,
+        expectedRevision: details['expectedRevision']?.toString(),
+        writeId: details['writeId']?.toString(),
+      );
+      if (remote == null) return false;
+      return _syncRepository.repairMissingNoteIdentity(
+        operationId,
+        writeId: details['writeId']?.toString() ?? '',
+        remote: remote,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> resolveNoteConflictKeepingLocal(String operationId) async {
     final details = await _syncRepository.noteConflictDetails(operationId);
     if (details == null) return false;
