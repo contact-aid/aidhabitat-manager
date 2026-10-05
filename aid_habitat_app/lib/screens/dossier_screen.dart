@@ -14,6 +14,7 @@ import '../components/form_widgets.dart';
 import '../components/notes_widget.dart';
 import '../components/soft_transitions.dart';
 import '../models/types.dart';
+import '../models/dossier_occupants.dart';
 import '../services/data_service.dart';
 import '../services/dossier_repository.dart';
 import '../services/references_service.dart';
@@ -97,6 +98,17 @@ class _DossierScreenState extends State<DossierScreen> {
   late bool _beneficiaryPrepared;
 
   // Editable fields shown in the card
+  // Latest stored identity snapshot; inferred display rows never enter _save.
+  late Patient _identityPatient;
+  List<Occupant> get _displayOccupants {
+    final rows = dossierOccupants(_identityPatient);
+    if (_firstName != _identityPatient.firstName ||
+        _lastName != _identityPatient.lastName) {
+      rows[0] = rows[0].copyWith(firstName: _firstName, lastName: _lastName);
+    }
+    return rows;
+  }
+
   late String _firstName;
   late String _lastName;
   late String _numberPeople; // dropdown value: '1'..'5' or '5+'
@@ -195,6 +207,7 @@ class _DossierScreenState extends State<DossierScreen> {
 
   void _loadFromDossier() {
     final p = widget.dossier.patient;
+    _identityPatient = p;
     _firstName = p.firstName;
     _lastName = p.lastName;
     _address = p.address;
@@ -737,6 +750,7 @@ class _DossierScreenState extends State<DossierScreen> {
       return;
     }
     setState(() {
+      _identityPatient = fresh.patient;
       _firstName = fresh.patient.firstName;
       _lastName = fresh.patient.lastName;
       _city = fresh.patient.city;
@@ -866,8 +880,10 @@ class _DossierScreenState extends State<DossierScreen> {
                       fontWeight: FontWeight.bold,
                       color: bannerFg,
                     ),
-                    child: const Text(
-                      'Bénéficiaire',
+                    child: Text(
+                      _displayOccupants.length > 1
+                          ? 'Bénéficiaires'
+                          : 'Bénéficiaire',
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -971,44 +987,36 @@ class _DossierScreenState extends State<DossierScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (_isBeneficiaryLocked) ...[
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: _PlainField(
-                              label: 'Nom',
-                              value: _lastName.trim().isEmpty ? '—' : _lastName,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _PlainField(
-                              label: 'Prénom',
-                              value: _firstName.trim().isEmpty
-                                  ? '—'
-                                  : _firstName,
-                            ),
-                          ),
-                        ],
+                      _PlainField(
+                        label: _displayOccupants.length > 1
+                            ? 'Occupants'
+                            : 'Occupant',
+                        value: _displayOccupants.indexed
+                            .map(
+                              (entry) => dossierOccupantDisplayName(
+                                entry.$2,
+                                entry.$1,
+                              ),
+                            )
+                            .join('\n'),
+                        multiline: true,
                       ),
+                      if (dossierIdentityNeedsReview(_identityPatient)) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Identité à vérifier : ${dossierLegacyIdentityDescription(_identityPatient)}. '
+                          'Les informations d’origine sont conservées.',
+                          key: const ValueKey('occupant-identity-review'),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: kBrandPurple,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: _PlainField(
-                              label: 'Occupants',
-                              value: _numberPeople == '1' ? '1' : _numberPeople,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _PlainField(
-                              label: 'RFR du foyer',
-                              value: _formatFiscalRevenue(_fiscalRevenue),
-                            ),
-                          ),
-                        ],
+                      _PlainField(
+                        label: 'RFR du foyer',
+                        value: _formatFiscalRevenue(_fiscalRevenue),
                       ),
                       const SizedBox(height: 16),
                       _PlainField(
