@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 import 'package:sqflite/sqflite.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
@@ -1783,6 +1784,110 @@ class SyncRepository {
     );
     // Never guess which dossier to review when the binding is ambiguous.
     return dossiers.length == 1 ? dossiers.single['local_id'] as String : null;
+  }
+
+  /// Explicit, read-only inspection of one owned pending operation. Never
+  /// exports text, strokes, preview bytes, credentials or raw server errors.
+  Future<Map<String, dynamic>?> operationDiagnostic(String operationId) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership) {
+        final owner = await txn.rawQuery(
+          '''
+          SELECT 1 FROM sync_operations AS operation
+          JOIN ${SyncOperationOwnership.tableName} AS ownership ON ownership.operation_id = operation.id
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE operation.id = ? AND ownership.attribution_state IN (?, ?)
+        ''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owner.isEmpty) return null;
+      }
+      final rows = await txn.query(
+        'sync_operations',
+        where: 'id = ? AND status != ?',
+        whereArgs: [operationId, 'completed'],
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      final row = rows.single;
+      final result = <String, dynamic>{
+        'operationId': operationId,
+        'entityType': row['entity_type'],
+        'entityLocalId': row['entity_local_id'],
+        'operationType': row['operation_type'],
+        'status': row['status'],
+        'attemptCount': row['attempt_count'],
+        'createdAt': row['created_at'],
+        'updatedAt': row['updated_at'],
+        'inspectedAt': DateTime.now().toUtc().toIso8601String(),
+      };
+      final error = row['last_error']?.toString() ?? '';
+      result['httpStatus'] = RegExp(
+        r'\b[45]\d\d\b',
+      ).firstMatch(error)?.group(0);
+      result['requestId'] = RegExp(
+        r'requestId=([a-fA-F0-9-]{36})',
+      ).firstMatch(error)?.group(1);
+      result['errorCode'] = RegExp(
+        r'\bNOTE_[A-Z0-9_]+\b',
+      ).firstMatch(error)?.group(0);
+      try {
+        final raw = await OfflineVault.instance.openString(
+          row['payload_json'] as String,
+        );
+        result['payloadBytes'] = utf8.encode(raw).length;
+        result['payloadSha256'] = sha256.convert(utf8.encode(raw)).toString();
+        final payload = jsonDecode(raw) as Map;
+        for (final key in [
+          'writeId',
+          'expectedRevision',
+          'patientLocalId',
+          'dossierId',
+          'scopeType',
+          'scopeId',
+          'tabKey',
+          'subTabKey',
+          'pageNumber',
+        ]) {
+          result[key] = payload[key];
+        }
+        final drawing = payload['drawingJson'];
+        if (drawing is String) {
+          result['drawingBytes'] = utf8.encode(drawing).length;
+          result['drawingCharacters'] = drawing.length;
+          result['drawingSha256'] = sha256
+              .convert(utf8.encode(drawing))
+              .toString();
+        }
+        if (row['entity_type'] == 'note_page') {
+          final notes = await txn.query(
+            'note_pages',
+            columns: ['drawing_json'],
+            where: 'local_id = ?',
+            whereArgs: [row['entity_local_id']],
+            limit: 1,
+          );
+          if (notes.isNotEmpty && notes.single['drawing_json'] is String) {
+            final local = await OfflineVault.instance.openString(
+              notes.single['drawing_json'] as String,
+            );
+            result['localDrawingSha256'] = sha256
+                .convert(utf8.encode(local))
+                .toString();
+            result['queuedMatchesLocal'] = drawing == local;
+          }
+        }
+      } catch (_) {
+        result['inspectionError'] = 'LOCAL_PAYLOAD_UNREADABLE';
+      }
+      return result;
+    });
   }
 
   Future<Map<String, dynamic>?> noteConflictDetails(String operationId) async {
