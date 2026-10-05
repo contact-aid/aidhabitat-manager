@@ -22,6 +22,7 @@ import { registerContextRoutes } from './contextRoutes.mjs';
 import { isTechnicianEmail } from './technicianProfiles.mjs';
 import { contextServerReference, contextRecordToSections } from './contextGuardedSync.mjs';
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
+import { noteSyncDiagnostics, safeNoteErrorCode } from './noteSyncDiagnostic.mjs';
 import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 import { syncCurrentProfileDossiers } from './airtableDossierSync.mjs';
 import { preserveLegacyOccupantGender } from './occupantGender.mjs';
@@ -278,7 +279,7 @@ app.use((req, res, next) => {
   // du mapping AcroForm côté Flutter.
   res.header(
     'Access-Control-Expose-Headers',
-    'Content-Disposition, X-Report-Stats, X-Saved-Doc-Uuid',
+    'Content-Disposition, X-Report-Stats, X-Saved-Doc-Uuid, X-Request-Id',
   );
   // The Flutter PWA runs in a crossOriginIsolated context
   // (COEP: credentialless + COOP: same-origin) so SharedArrayBuffer —
@@ -8732,7 +8733,7 @@ app.get('/api/note-pages/:patientId', requireAuth, async (req, res, next) => {
   }
 });
 
-app.put('/api/note-pages', requireAuth, async (req, res, next) => {
+app.put('/api/note-pages', requireAuth, noteSyncDiagnostics, async (req, res, next) => {
   try {
     const notePageId = stringValue(req.body?.notePageId).trim();
     const patientId = stringValue(req.body?.patientId).trim();
@@ -8823,10 +8824,12 @@ app.put('/api/note-pages', requireAuth, async (req, res, next) => {
       data: { notePage: mapStoredNotePage(notePage) },
     });
   } catch (error) {
+    res.locals.noteErrorCode = safeNoteErrorCode(error?.code);
     if (error instanceof NotePageMutationError) {
       res.status(error.status).json({
         success: false,
         error: error.code,
+        requestId: res.locals.noteRequestId,
         ...(error.observed ? { conflict: error.status === 409, remoteData: error.observed } : {}),
       });
       return;
@@ -9707,7 +9710,8 @@ app.use(async (req, res, next) => {
 });
 
 app.use((error, _req, res, _next) => {
-  console.error('[nocodb-api]', error);
+  if (!res.locals?.noteRequestId) console.error('[nocodb-api]', error);
+  else res.locals.noteErrorCode = safeNoteErrorCode(error?.code);
   const isMulterLimit = error?.name === 'MulterError' &&
     ['LIMIT_FILE_SIZE', 'LIMIT_FILE_COUNT', 'LIMIT_PART_COUNT'].includes(error?.code);
   const isBodyTooLarge = error?.type === 'entity.too.large';
@@ -9722,6 +9726,7 @@ app.use((error, _req, res, _next) => {
   res.status(statusCode).json({
     success: false,
     error: message,
+    ...(res.locals?.noteRequestId ? { requestId: res.locals.noteRequestId } : {}),
   });
 });
 
