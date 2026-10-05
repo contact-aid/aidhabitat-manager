@@ -107,6 +107,7 @@ DiagnosticSanitaire _fixture(List<String> levels) => DiagnosticSanitaire(
 );
 
 void main() {
+  const legacyBuild64 = bool.fromEnvironment('LEGACY_BUILD64');
   for (final bathroom in [true, false]) {
     final kind = bathroom ? 'Bathroom' : 'WC';
     for (final levels in [
@@ -170,12 +171,15 @@ void main() {
         await tester.tap(find.text(bathroom ? 'Douche' : 'Trop basse').first);
         await tester.pump();
         await flush();
-        final expectedCount = levels.toSet().length;
+        final expectedCount = legacyBuild64
+            ? levels.toSet().length
+            : levels.length;
         expect(
           ids().length,
           expectedCount,
-          reason:
-              'KNOWN BLOCKER: build64 drops the second room at the same level',
+          reason: legacyBuild64
+              ? 'KNOWN BLOCKER: build64 drops the second room at the same level'
+              : 'The current client preserves every saved room',
         );
         expect(ids().first, bathroom ? 'bath-0' : 'wc-0');
         expect(

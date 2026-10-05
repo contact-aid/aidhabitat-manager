@@ -107,6 +107,38 @@ test('build 64 ordinary save updates canonical row and stale edit is rejected', 
   assert.equal(state.deletes, 0);
 });
 
+test('a large queued Résumé edit cannot overwrite a newer server revision', async () => {
+  const { state, adapter } = fixture();
+  const original = payload({
+    notePageId: 'note_nocodb-beneficiaire-105_Résumé_0',
+    patientId: 'nocodb-beneficiaire-105',
+    dossierId: null,
+    scopeType: 'dossier_detail',
+    scopeId: 'nocodb-beneficiaire-105',
+    tabKey: 'Résumé',
+    pageNumber: 0,
+  });
+  await adapter.upsertNotePage(original);
+  const storedDrawing = state.rows[0].drawing_json;
+  const currentRevision = randomUUID();
+  state.rows[0].app_sync_revision = currentRevision;
+
+  // Fictional content at the same order of magnitude as the iPad diagnostic.
+  const stale = payload({
+    ...original,
+    expectedRevision: original.writeId,
+    writeId: randomUUID(),
+    drawingJson: JSON.stringify({ text: 'x'.repeat(848_000), strokes: [] }),
+  });
+  await assert.rejects(adapter.upsertNotePage(stale), {
+    status: 409, code: 'NOTE_PAGE_REVISION_CONFLICT',
+  });
+  assert.equal(state.rows[0].app_sync_revision, currentRevision);
+  assert.equal(state.rows[0].drawing_json, storedDrawing);
+  assert.equal(state.patches, 0);
+  assert.equal(state.deletes, 0);
+});
+
 test('a reused id cannot move a page and duplicate identities require review', async () => {
   const { state, adapter } = fixture();
   const otherPage = payload({ pageNumber: 2 });

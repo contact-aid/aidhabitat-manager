@@ -38,6 +38,10 @@ test('imports the work description into visible page zero and is repeatable', as
   const first = await importRows();
   assert.equal(first.result.eligible, 1);
   assert.equal(first.result.imported, 1);
+  assert.equal(first.saved.length, 2);
+  assert.notEqual(first.saved[0].notePageId, first.saved[1].notePageId);
+  assert.equal(first.saved[1].tabKey, 'Bénéficiaire-Notes');
+  assert.equal(first.saved[1].textContent, first.saved[0].textContent);
   assert.equal(first.saved[0].pageNumber, 0);
   assert.equal(first.saved[0].patientId, 'nocodb-beneficiaire-2');
   assert.equal(first.saved[0].textContent, 'Description exacte des travaux');
@@ -71,8 +75,8 @@ test('an existing written note remains unchanged when Airtable differs', async (
     layoutKind: 'freeform', revision: 'old-revision' };
   const pages = [existing];
   const { saved, result } = await importRows({ pages });
-  assert.equal(saved.length, 0);
-  assert.equal(result.alreadyPresent, 1);
+  assert.deepEqual(saved.map(p => p.tabKey), ['Bénéficiaire-Notes']);
+  assert.equal(result.imported, 1);
   assert.equal(pages[0].textContent, existing.textContent);
   const again = await importRows({ pages });
   assert.equal(again.result.imported, 0);
@@ -97,7 +101,7 @@ test('keeps both display text and handwritten note text when they differ', async
     drawingJson: JSON.stringify({ version: 1, text: 'Note personnelle', strokes: [{ x: 1 }] }),
     revision: 'old-revision' };
   const { saved } = await importRows({ pages: [existing] });
-  assert.equal(saved.length, 0);
+  assert.deepEqual(saved.map(p => p.tabKey), ['Bénéficiaire-Notes']);
   assert.equal(existing.textContent.startsWith('Commentaire d’inscription'), true);
   assert.equal(JSON.parse(existing.drawingJson).text, 'Note personnelle');
 });
@@ -109,7 +113,7 @@ test('a note present only in drawing JSON is not overwritten', async () => {
     drawingJson: JSON.stringify({ version: 1, text: 'Note inscription\nNote dossier', strokes: [] }),
     revision: 'old-revision' };
   const { saved } = await importRows({ pages: [existing] });
-  assert.equal(saved.length, 0);
+  assert.deepEqual(saved.map(p => p.tabKey), ['Bénéficiaire-Notes']);
   assert.equal(JSON.parse(existing.drawingJson).text, 'Note inscription\nNote dossier');
 });
 
@@ -120,7 +124,7 @@ test('fills an empty text note while preserving its drawing and revision', async
     drawingJson: JSON.stringify({ version: 1, text: '', strokes: [{ x: 1 }] }),
     previewDataUrl: 'data:image/png;base64,x', revision: 'old-revision' };
   const { saved } = await importRows({ pages: [existing] });
-  assert.equal(saved.length, 1);
+  assert.equal(saved.length, 2);
   assert.equal(saved[0].notePageId, 'empty-page');
   assert.equal(saved[0].expectedRevision, 'old-revision');
   assert.equal(saved[0].textContent, 'Description exacte des travaux');

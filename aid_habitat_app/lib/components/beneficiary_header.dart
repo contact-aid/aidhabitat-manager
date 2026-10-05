@@ -28,6 +28,7 @@ import 'beneficiary_badges.dart';
 class BeneficiaryHeader extends StatelessWidget {
   final Dossier dossier;
   final VoidCallback onBack;
+  final List<Occupant>? occupants;
 
   /// Widget optionnel à afficher tout à droite (après le badge Anah).
   /// Utilisé par le relevé de visite pour le bouton « Générer ».
@@ -37,6 +38,7 @@ class BeneficiaryHeader extends StatelessWidget {
     super.key,
     required this.dossier,
     required this.onBack,
+    this.occupants,
     this.trailing,
   });
 
@@ -76,7 +78,7 @@ class BeneficiaryHeader extends StatelessWidget {
       }
     }
 
-    return LayoutBuilder(
+    final identity = LayoutBuilder(
       builder: (context, constraints) => SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: SizedBox(
@@ -95,7 +97,7 @@ class BeneficiaryHeader extends StatelessWidget {
                     ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 380),
                       child: Text(
-                        dossierBeneficiaryTitle(patient),
+                        dossierBeneficiaryTitle(patient, occupants: occupants),
                         style: GoogleFonts.nunito(
                           fontSize: 22,
                           fontWeight: FontWeight.w600,
@@ -151,11 +153,32 @@ class BeneficiaryHeader extends StatelessWidget {
                 const SizedBox(width: 12),
                 AnahStatusBadge(status: anahStatus, large: true),
               ],
-              if (trailing != null) ...[const SizedBox(width: 12), trailing!],
             ],
           ),
         ),
       ),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (trailing == null) return identity;
+        if (constraints.maxWidth < 700) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              identity,
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerRight, child: trailing!),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: identity),
+            const SizedBox(width: 12),
+            trailing!,
+          ],
+        );
+      },
     );
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/mobility_aids.dart';
 import '../../models/aggir_eligibility.dart';
 import '../../services/data_service.dart';
 import '../../services/dossier_repository.dart';
@@ -990,6 +991,17 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             ),
           ),
           const SizedBox(height: 12),
+          if (_occupants[idx].gender == 'Femme') ...[
+            FormTextField(
+              label: 'Nom de jeune fille',
+              value: _occupants[idx].maidenName ?? '',
+              onChanged: (value) => _updateOccupant(
+                idx,
+                _occupants[idx].copyWith(maidenName: value),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           _buildBirthDateRow(idx),
           if (idx == 0 && requiresAggir(_occupants.first.birthDate))
             const Padding(
@@ -1174,7 +1186,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   /// disparaissent (pas de navigation nécessaire).
   Widget _buildOccupantSwipeContainer({
     required Widget perOccupantContent,
-    required Widget sharedContent,
+    Widget? sharedContent,
   }) {
     final hasMultiple = _occupants.length > 1;
     if (!hasMultiple) {
@@ -1186,8 +1198,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             perOccupantContent,
-            const SizedBox(height: 24),
-            sharedContent,
+            if (sharedContent != null) ...[
+              const SizedBox(height: 24),
+              sharedContent,
+            ],
           ],
         ),
       );
@@ -1230,8 +1244,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         perOccupantContent,
-                        const SizedBox(height: 24),
-                        sharedContent,
+                        if (sharedContent != null) ...[
+                          const SizedBox(height: 24),
+                          sharedContent,
+                        ],
                       ],
                     ),
                   ),
@@ -1471,6 +1487,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               _markChanged();
             },
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );
@@ -1484,7 +1501,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     return _buildOccupantSwipeContainer(
       perOccupantContent: _buildAidesDependenceBlock(idx),
-      sharedContent: const SizedBox.shrink(),
     );
   }
 
@@ -1538,32 +1554,65 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     );
   }
 
-  /// Dépendance : liste de pills toutes égales (Aucune incluse). On
-  /// stocke directement le libellé cliqué dans `dependenceTxt`. Le tap
-  /// sur la pill déjà sélectionnée la désélectionne (cf. FormToggleGroup
-  /// `allowDeselect=true`) → retour à `''` = non renseigné.
-  ///
-  /// NB : avant 2026-04-30, l'historique stockait `''` quand l'ergo
-  /// cliquait « Aucune » (convention partagée avec NocoDB) — résultat :
-  /// la pill « Aucune » ne pouvait jamais être visiblement highlighted,
-  /// et un tap dessus était un no-op visible. Maintenant on stocke le
-  /// libellé tel quel ("Aucune"). Côté NocoDB, `dependance_particuliere`
-  /// (link) ne matchera pas "Aucune" (pas dans le ref list) et le
-  /// fallback `dependance_particuliere_txt` recevra simplement "Aucune"
-  /// comme texte — ce qui est sémantiquement correct.
+  /// Plusieurs aides peuvent être utilisées par un même occupant. On garde
+  /// le champ texte existant et sépare les choix par une virgule pour rester
+  /// compatible avec les dossiers déjà enregistrés. « Aucune » est exclusive.
   Widget _buildDependenceSelector(int index) {
     final occ = _occupants[index];
-    final value = occ.dependenceTxt.trim();
-    return FormToggleGroup(
-      label: 'Dépendance',
-      options: _dependenceOptions,
-      columns: 2,
-      selected: value,
-      onChanged: (v) {
-        // v peut être '' (désélection via FormToggleGroup.allowDeselect)
-        // ou une des options (y compris « Aucune »). On stocke tel quel.
-        _updateOccupant(index, occ.copyWith(dependenceTxt: v));
-      },
+    final selected = parseMobilityAids(occ.dependenceTxt);
+
+    void toggle(String option) {
+      final next = [...selected];
+      if (option == 'Aucune') {
+        if (next.contains(option)) {
+          next.clear();
+        } else {
+          next
+            ..clear()
+            ..add(option);
+        }
+      } else {
+        next.remove('Aucune');
+        if (next.contains(option)) {
+          next.remove(option);
+        } else {
+          next.add(option);
+        }
+      }
+      _updateOccupant(index, occ.copyWith(dependenceTxt: encodeMobilityAids(next)));
+    }
+
+    Widget option(String value) => FormToggleGroup(
+      label: '',
+      options: [value],
+      expand: true,
+      selected: selected.contains(value) ? value : '',
+      onChanged: (_) => toggle(value),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Dépendance',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+            color: Color(0xFF0E1116),
+          ),
+        ),
+        const SizedBox(height: 6),
+        for (var row = 0; row < _dependenceOptions.length; row += 2) ...[
+          if (row > 0) const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: option(_dependenceOptions[row])),
+              const SizedBox(width: 8),
+              Expanded(child: option(_dependenceOptions[row + 1])),
+            ],
+          ),
+        ],
+      ],
     );
   }
 
@@ -2139,6 +2188,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               _markChanged();
             },
           ),
+          const SizedBox(height: 24),
           // NB : le bloc « Création compte ANAH » a été déplacé dans la
           // section Profil (demande utilisateur 2026-05-04). Voir
           // _buildProfilSection > Bloc Compte ANAH.

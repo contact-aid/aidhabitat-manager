@@ -762,6 +762,30 @@ class DataService {
     );
   }
 
+  Future<List<LocalNotePageSnapshot>> fetchLocalNotePages({
+    required String patientId,
+    required String dossierId,
+    String tabKey = 'Plans',
+  }) => _noteRepository.fetchLocalNotePages(
+    patientId: patientId,
+    dossierId: dossierId,
+    tabKey: tabKey,
+  );
+
+  Future<int> duplicateLocalNotePage({
+    required String patientId,
+    required String dossierId,
+    String tabKey = 'Plans',
+    required int sourcePageNumber,
+    String? previewDataUrl,
+  }) => _noteRepository.duplicateLocalNotePage(
+    patientId: patientId,
+    dossierId: dossierId,
+    tabKey: tabKey,
+    sourcePageNumber: sourcePageNumber,
+    previewDataUrl: previewDataUrl,
+  );
+
   Future<String?> fetchNoteDrawingJson({
     required String patientId,
     required String tabKey,

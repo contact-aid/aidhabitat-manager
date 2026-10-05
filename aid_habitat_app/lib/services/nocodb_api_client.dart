@@ -1575,6 +1575,7 @@ class NocodbApiClient {
     required String tabKey,
     required int pageNumber,
     required String drawingJson,
+    String? textContent,
     String scopeType = 'dossier_detail',
     String? scopeId,
     String? subTabKey,
@@ -1605,6 +1606,7 @@ class NocodbApiClient {
               if (subTabKey != null) 'subTabKey': subTabKey,
               'pageNumber': pageNumber,
               'drawingJson': drawingJson,
+              if (textContent != null) 'textContent': textContent,
               'layoutKind': layoutKind,
               // Phase Plans (avant / apres / null). Côté serveur :
               // ignoré si la table NocoDB n'a pas encore la colonne.

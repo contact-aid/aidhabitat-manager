@@ -236,12 +236,12 @@ void main() {
 
     final local = _dossier().copyWith(patient: patientWithDependence('Canne'));
     await _mount(tester, repository, dossier: local, section: 2);
-    FormToggleGroup dependence() => tester.widget<FormToggleGroup>(
+    FormToggleGroup dependence(String option) => tester.widget<FormToggleGroup>(
       find.byWidgetPredicate(
-        (widget) => widget is FormToggleGroup && widget.label == 'Dépendance',
+        (widget) => widget is FormToggleGroup && widget.options.length == 1 && widget.options.single == option,
       ),
     );
-    expect(dependence().selected, 'Canne');
+    expect(dependence('Canne').selected, 'Canne');
 
     final server = local.copyWith(patient: patientWithDependence('Aucune'));
     await _mount(
@@ -251,9 +251,38 @@ void main() {
       section: 2,
       conflictRefreshToken: 1,
     );
-    expect(dependence().selected, 'Aucune');
+    expect(dependence('Aucune').selected, 'Aucune');
+    expect(dependence('Canne').selected, '');
     await _flush(tester);
     expect(repository.patientWrites, isEmpty);
+  });
+
+  testWidgets('multiple aids preserve unknown values and other occupant fields', (tester) async {
+    final repository = _Repository();
+    await _mount(tester, repository, section: 2, dossier: _dossier(occupants: const [
+      Occupant(firstName: 'Alice', lastName: 'Exemple', gender: 'Femme',
+        maidenName: 'Martin', dependenceTxt: 'Canne, Aide personnalisée'),
+    ]));
+    FormToggleGroup choice(String option) => tester.widget<FormToggleGroup>(
+      find.byWidgetPredicate((widget) => widget is FormToggleGroup &&
+        widget.options.length == 1 && widget.options.single == option));
+    choice('Déambulateur').onChanged!('Déambulateur');
+    await tester.pump();
+    await _flush(tester);
+    var saved = (jsonDecode(repository.patientWrites.last['occupants_json']) as List).single;
+    expect(saved['dependenceTxt'], 'Canne, Aide personnalisée, Déambulateur');
+    expect(saved['maidenName'], 'Martin');
+    expect(saved['firstName'], 'Alice');
+    choice('Canne').onChanged!('');
+    await tester.pump();
+    await _flush(tester);
+    saved = (jsonDecode(repository.patientWrites.last['occupants_json']) as List).single;
+    expect(saved['dependenceTxt'], 'Aide personnalisée, Déambulateur');
+    choice('Aucune').onChanged!('Aucune');
+    await tester.pump();
+    await _flush(tester);
+    saved = (jsonDecode(repository.patientWrites.last['occupants_json']) as List).single;
+    expect(saved['dependenceTxt'], 'Aucune');
   });
 
   testWidgets('AGGIR notice follows the primary beneficiary age', (

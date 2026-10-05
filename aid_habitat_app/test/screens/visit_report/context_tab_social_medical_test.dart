@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -325,16 +326,37 @@ void main() {
             )
             as Map<String, dynamic>;
     Future<Map<String, dynamic>> waitForFlag4(bool expected) async {
-      for (var attempt = 0; attempt < 40; attempt++) {
+      Map<String, dynamic>? current;
+      Object? readError;
+      bool reading = false;
+      for (var attempt = 0; attempt < 80; attempt++) {
         await tester.pump(const Duration(milliseconds: 25));
-        final current = (await tester.runAsync(stored))!;
-        final scopes = current['medicalFlagsByScope'] as Map;
-        if ((scopes['occupant_0'] as List).contains(4) == expected) {
-          return current;
-        }
+        // SQLite transactions triggered in FakeAsync need more pumps to
+        // complete; awaiting a queued read would prevent those pumps forever.
         await tester.runAsync(() async {
+          if (!reading) {
+            reading = true;
+            unawaited(
+              stored().then(
+                (value) {
+                  current = value;
+                  reading = false;
+                },
+                onError: (Object error) {
+                  readError = error;
+                  reading = false;
+                },
+              ),
+            );
+          }
           await Future<void>.delayed(const Duration(milliseconds: 25));
         });
+        if (readError != null) throw readError!;
+        final scopes = current?['medicalFlagsByScope'] as Map?;
+        if (scopes != null &&
+            (scopes['occupant_0'] as List).contains(4) == expected) {
+          return current!;
+        }
       }
       throw StateError('Flag 4 state $expected was not saved by NotesWidget');
     }

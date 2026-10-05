@@ -11,4 +11,4 @@ git -C "$repo_dir" archive "$base" aid_habitat_app | tar -x -C "$scratch"
 mkdir -p "$scratch/aid_habitat_app/test/compatibility"
 cp "$app_dir/test/compatibility/build64_sanitary_rooms_test.dart" "$scratch/aid_habitat_app/test/compatibility/"
 cd "$scratch/aid_habitat_app"
-flutter test test/compatibility/build64_sanitary_rooms_test.dart
+flutter test --dart-define=LEGACY_BUILD64=true test/compatibility/build64_sanitary_rooms_test.dart

@@ -3,6 +3,7 @@ import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/components/feedback_tab.dart';
 import 'package:aid_habitat_app/components/cta_text_style.dart';
 import 'package:aid_habitat_app/components/beneficiary_header.dart';
+import 'package:aid_habitat_app/components/dossier_space_shortcut.dart';
 import 'package:aid_habitat_app/services/feedback_activity_service.dart';
 import 'package:aid_habitat_app/services/auth_service.dart';
 import 'package:aid_habitat_app/screens/dashboard_screen.dart';
@@ -178,10 +179,13 @@ void main() {
       final startButton = tester.widget<ElevatedButton>(
         find.ancestor(
           of: find.text('Démarrer le relevé'),
-          matching: find.byWidgetPredicate((widget) => widget is ElevatedButton),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is ElevatedButton,
+          ),
         ),
       );
-      final startShape = startButton.style!.shape!.resolve({}) as RoundedRectangleBorder;
+      final startShape =
+          startButton.style!.shape!.resolve({}) as RoundedRectangleBorder;
       expect(startShape.borderRadius, BorderRadius.circular(999));
     });
 
@@ -225,19 +229,19 @@ void main() {
               ),
             ),
           );
-      final refreshButton = find.byWidgetPredicate((widget) => widget is ElevatedButton);
+      final refreshButton = find.byWidgetPredicate(
+        (widget) => widget is ElevatedButton,
+      );
 
       await tester.pumpWidget(screen(online: false));
-      expect(
-        tester.widget<ElevatedButton>(refreshButton).onPressed,
-        isNull,
-      );
+      expect(tester.widget<ElevatedButton>(refreshButton).onPressed, isNull);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(screen(online: true));
       final refresh = tester.getTopLeft(refreshButton);
-      final refreshShape = tester.widget<ElevatedButton>(refreshButton)
-          .style!.shape!.resolve({}) as RoundedRectangleBorder;
+      final refreshShape =
+          tester.widget<ElevatedButton>(refreshButton).style!.shape!.resolve({})
+              as RoundedRectangleBorder;
       expect(refreshShape.borderRadius, BorderRadius.circular(999));
       final title = tester.getTopLeft(find.text('Mes dossiers'));
       expect(refresh.dx, greaterThan(title.dx));
@@ -247,10 +251,7 @@ void main() {
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(screen(online: true, refreshing: true));
-      expect(
-        tester.widget<ElevatedButton>(refreshButton).onPressed,
-        isNull,
-      );
+      expect(tester.widget<ElevatedButton>(refreshButton).onPressed, isNull);
       expect(tester.takeException(), isNull);
     });
 
@@ -293,6 +294,43 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
+
+    for (final toDocuments in [true, false]) {
+      testWidgets(
+        'space shortcut stays visible at $width px (documents: $toDocuments)',
+        (tester) async {
+          tester.view.devicePixelRatio = 1;
+          tester.view.physicalSize = Size(width, 800);
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          var presses = 0;
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: Align(
+                  alignment: Alignment.topCenter,
+                  child: BeneficiaryHeader(
+                    dossier: sampleDossier(),
+                    onBack: () {},
+                    trailing: DossierSpaceShortcut(
+                      toDocuments: toDocuments,
+                      onPressed: () => presses++,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          final shortcut = find.byType(DossierSpaceShortcut);
+          expect(tester.getRect(shortcut).right, lessThanOrEqualTo(width));
+          expect(tester.getRect(shortcut).left, greaterThanOrEqualTo(0));
+          await tester.tap(shortcut);
+          await tester.pump();
+          expect(presses, 1);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
 
     testWidgets('beneficiary header fits at $width px', (tester) async {
       tester.view.devicePixelRatio = 1;

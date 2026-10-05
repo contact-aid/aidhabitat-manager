@@ -6,7 +6,6 @@ import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import '../services/voice_microphone_permission.dart';
 import '../services/voice_speech_runtime.dart';
 
 /// Applies a complete speech-recognition hypothesis to the text value captured
@@ -74,8 +73,9 @@ String voiceDictationMessageForError(String errorCode, {required bool isWeb}) {
   if (isWeb &&
       (code.contains('service-not-allowed') ||
           code.contains('service_not_allowed'))) {
-    return 'Ce navigateur refuse son service de reconnaissance vocale. '
-        'Essayez app.aidhabitat.fr dans Google Chrome ou Safari.';
+    return 'Le service vocal du navigateur est bloqué (service-not-allowed). '
+        'Sous Safari, activez Siri ou Dictée dans les réglages du Mac. '
+        'Sous Arc, essayez Google Chrome ou Safari.';
   }
   if (isWeb && (code.contains('not-allowed') || code.contains('not_allowed'))) {
     return 'Le navigateur refuse l’accès au microphone ou à la '
@@ -95,12 +95,16 @@ String voiceDictationMessageForError(String errorCode, {required bool isWeb}) {
     return 'La dictée vocale n’est pas disponible dans ce navigateur. '
         'Utilisez une version récente de Safari ou Chrome.';
   }
+  if (isWeb && code.contains('start-timeout')) {
+    return 'Le microphone n’a pas démarré. Vérifiez la demande d’autorisation '
+        'du navigateur et l’accès au micro dans les réglages du Mac.';
+  }
   if (isWeb && code.contains('audio-capture')) {
     return 'Aucun microphone utilisable n’a été détecté par le navigateur.';
   }
   if (isWeb && code.contains('network')) {
     return 'Le service de reconnaissance vocale du navigateur ne répond pas. '
-        'Vérifiez la connexion, puis réessayez.';
+        'Vérifiez la connexion, puis réessayez (network).';
   }
   if (isWeb && (code.contains('language') || code.contains('on_device'))) {
     return 'La reconnaissance française du navigateur n’est pas disponible '
@@ -163,9 +167,8 @@ class _VoiceDictationService {
   static bool get isSupportedPlatform =>
       kIsWeb || defaultTargetPlatform == TargetPlatform.iOS;
 
-  stt.SpeechToText _speech = stt.SpeechToText();
+  final stt.SpeechToText _speech = stt.SpeechToText();
   bool _initialized = false;
-  String? _webRuntime;
   Object? _activeOwner;
   ValueChanged<SpeechRecognitionResult>? _resultCallback;
   ValueChanged<String>? _statusCallback;
@@ -179,14 +182,8 @@ class _VoiceDictationService {
     final message = voiceDictationMessageForWebRuntime(runtime);
     if (message != null) return message;
 
-    // speech_to_text creates and retains the browser recognition object during
-    // initialize(). Recreate it when the local constructor has just changed.
-    if (_webRuntime != runtime) {
-      await _cancelActiveSession();
-      _speech = stt.SpeechToText();
-      _initialized = false;
-      _webRuntime = runtime;
-    }
+    // The web bridge updates the retained recognizer at each start. Calling
+    // SpeechToText() again returns the same singleton, not a new engine.
     return null;
   }
 
@@ -253,7 +250,7 @@ class _VoiceDictationService {
           autoPunctuation: true,
           enableHapticFeedback: !kIsWeb,
           cancelOnError: true,
-          pauseFor: const Duration(seconds: 5),
+          pauseFor: Duration(seconds: kIsWeb ? 15 : 5),
           listenFor: const Duration(minutes: 5),
         ),
       );
@@ -419,15 +416,6 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
         _showMessage(runtimeError);
         return;
       }
-
-      final permissionError = await requestVoiceMicrophonePermission();
-      if (!mounted) return;
-      if (permissionError != null) {
-        setState(() => _isStarting = false);
-        widget.onListeningChanged?.call(false);
-        _showMessage(permissionError);
-        return;
-      }
     }
 
     final result = await _service.start(
@@ -439,10 +427,9 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
     if (!mounted) return;
     final listening = result.started && _service.isActiveOwner(_owner);
     setState(() {
-      _isStarting = false;
-      _isListening = listening;
+      _isStarting = listening && !_isListening;
     });
-    widget.onListeningChanged?.call(listening);
+    widget.onListeningChanged?.call(_isListening);
     if (!result.started && result.errorMessage != null) {
       _showMessage(result.errorMessage!);
     }

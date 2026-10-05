@@ -60,6 +60,72 @@ void main() {
     AppConfig.clearAppSessionToken();
   });
 
+  test(
+    'collection conflict never auto-resolves or upgrades a legacy payload',
+    () async {
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      final local = LocalDatabase.forTesting(db);
+      await local.createSchemaForTesting();
+      final repository = DossierRepository(database: local);
+      final queue = SyncRepository.forTesting(database: local);
+      await repository.mergeRemoteDossierPayloads([
+        dossier(baseline, 'Original'),
+      ]);
+      await repository.updatePatient('patient-1', {'dependence_txt': 'Canne'});
+      final row = (await db.query('sync_operations')).single;
+      final legacy =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  row['payload_json'] as String,
+                ),
+              )
+              as Map<String, dynamic>;
+      (legacy['concurrency'] as Map).remove('collectionContract');
+      await db.update('sync_operations', {
+        'payload_json': await OfflineVault.instance.sealString(
+          jsonEncode(legacy),
+        ),
+      });
+      var writes = 0;
+      final service = NocodbSyncService(
+        database: local,
+        syncRepository: queue,
+        apiClient: NocodbApiClient(
+          client: MockClient((request) async {
+            expect(
+              request.method,
+              'PATCH',
+            ); // No automatic read/rebase after 409.
+            expect(
+              (jsonDecode(request.body)['concurrency'] as Map).containsKey(
+                'collectionContract',
+              ),
+              isFalse,
+            );
+            writes++;
+            return http.Response(
+              jsonEncode({'error': 'COLLECTION_CLIENT_UPGRADE_REQUIRED'}),
+              409,
+            );
+          }),
+        ),
+      );
+      final result = await service.pushPendingChanges();
+      expect(result.conflictCount, 1);
+      expect(writes, 1);
+      final after = (await db.query('sync_operations')).single;
+      expect(after['status'], 'conflict');
+      final retained = jsonDecode(
+        await OfflineVault.instance.openString(after['payload_json'] as String),
+      );
+      expect(retained['updates'], legacy['updates']);
+      expect(retained['concurrency'], legacy['concurrency']);
+      expect(await db.query('sync_conflict_history'), isEmpty);
+      expect((await db.query('patients')).single['dependence_txt'], 'Canne');
+    },
+  );
+
   for (final localWins in [true, false]) {
     test('latest edit wins a patient conflict (local=$localWins)', () async {
       final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);

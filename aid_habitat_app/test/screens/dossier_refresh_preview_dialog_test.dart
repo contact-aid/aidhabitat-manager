@@ -20,6 +20,8 @@ void main() {
             'kind': 'create',
             'fields': {
               'dossier': {'visit_date': '2026-09-29'},
+              'note': 'Texte dossier fictif',
+              'noteBeneficiaire': 'Texte bénéficiaire fictif',
             },
           },
           {
@@ -55,6 +57,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.textContaining('Réattribution : Christelle → Fabien'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Note du dossier : Texte dossier fictif'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Note Bénéficiaire : Texte bénéficiaire fictif'),
         findsOneWidget,
       );
       await tester.tap(find.text('Conserver l’original'));

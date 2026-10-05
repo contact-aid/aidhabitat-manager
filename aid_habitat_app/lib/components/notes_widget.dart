@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -41,6 +42,24 @@ enum NoteToolbarPlacement { bottomCenter, topRight }
 
 /// États du bouton Save (label + animation).
 enum _SaveLabel { idle, saved, error }
+
+/// On iPad, fingers and palms may land on the canvas while writing with an
+/// Apple Pencil. Keep touch for the surrounding controls, but accept only pen
+/// events for drawing on iOS. Other platforms retain mouse and touch input.
+bool isNoteCanvasPointerAllowed(
+  PointerDeviceKind kind, {
+  TargetPlatform? platform,
+}) {
+  final target = platform ?? defaultTargetPlatform;
+  if (target == TargetPlatform.iOS) {
+    return kind == PointerDeviceKind.stylus ||
+        kind == PointerDeviceKind.invertedStylus;
+  }
+  return kind == PointerDeviceKind.mouse ||
+      kind == PointerDeviceKind.touch ||
+      kind == PointerDeviceKind.stylus ||
+      kind == PointerDeviceKind.invertedStylus;
+}
 
 InputDecoration _noteTextDecoration(String placeholder) {
   return InputDecoration(
@@ -466,6 +485,7 @@ class _NotesWidgetState extends State<NotesWidget> {
   late int _totalPages;
   final Map<int, List<Stroke>> _pageStrokes = <int, List<Stroke>>{};
   final Map<int, String> _pageTexts = <int, String>{};
+  bool _dossierTextInitialized = false;
   // Flags médicaux par page (1 = Pathologie, 2 = Suivi, 3 = Sensoriel).
   // Sérialisés dans `drawing_json['medicalFlags']`. Utilisé uniquement
   // quand [widget.medicalFlags] / [widget.onMedicalFlagsChanged] sont
@@ -610,31 +630,27 @@ class _NotesWidgetState extends State<NotesWidget> {
 
   Future<void> _refreshCurrentPageFromRemoteAfterPull() async {
     try {
+      if (widget.sharedText &&
+          widget.tabKey == 'notes_rapides' &&
+          _currentPage != 0) {
+        await _refreshNotePageFromRemote(
+          patientId: widget.patientId,
+          tabKey: widget.tabKey,
+          pageNumber: 0,
+        );
+      }
       await _refreshNotePageFromRemote(
         patientId: widget.patientId,
         tabKey: widget.tabKey,
         pageNumber: _currentPage,
       );
+      await _reloadCurrentPageFromStore();
       if (!mounted ||
           _isDirty ||
           _isDrawingInProgress ||
           _textFocusNode.hasFocus) {
         return;
       }
-      final refreshed = await _fetchNoteDrawingJson(
-        patientId: widget.patientId,
-        tabKey: widget.tabKey,
-        pageNumber: _currentPage,
-      );
-      if (!mounted ||
-          _isDirty ||
-          _isDrawingInProgress ||
-          _textFocusNode.hasFocus) {
-        return;
-      }
-      setState(
-        () => _applyJson(_currentPage, refreshed, hydrateController: true),
-      );
       // Pousse les flags médicaux fraîchement mergés vers le parent —
       // sans ça, ContextTab ne voyait jamais les `medicalFlags` mis à
       // jour côté autre device. Bug 2026-05-07 : pathologie cochée
@@ -671,6 +687,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       // par `_loadPages()`.
       _pageStrokes.clear();
       _pageTexts.clear();
+      _dossierTextInitialized = false;
       _pageMedicalFlags.clear();
       _pageMedicalFlagsByScope.clear();
       _undoStack.clear();
@@ -802,6 +819,17 @@ class _NotesWidgetState extends State<NotesWidget> {
   /// OS note window) edited the same row and we need to mirror the change
   /// into this in-app widget.
   Future<void> _reloadCurrentPageFromStore() async {
+    final readPageZero =
+        widget.sharedText &&
+        widget.tabKey == 'notes_rapides' &&
+        _currentPage != 0;
+    final pageZero = readPageZero
+        ? await _fetchNoteDrawingJson(
+            patientId: widget.patientId,
+            tabKey: widget.tabKey,
+            pageNumber: 0,
+          )
+        : null;
     final json = await _fetchNoteDrawingJson(
       patientId: widget.patientId,
       tabKey: widget.tabKey,
@@ -813,7 +841,10 @@ class _NotesWidgetState extends State<NotesWidget> {
         _textFocusNode.hasFocus) {
       return;
     }
-    setState(() => _applyJson(_currentPage, json, hydrateController: true));
+    setState(() {
+      if (readPageZero) _applyJson(0, pageZero, hydrateController: false);
+      _applyJson(_currentPage, json, hydrateController: true);
+    });
   }
 
   @override
@@ -1115,6 +1146,17 @@ class _NotesWidgetState extends State<NotesWidget> {
     //    sondait jusqu'à 20 pages séquentiellement dans SQLite WASM avant
     //    d'afficher quoi que ce soit, ce qui prenait plusieurs secondes
     //    pour la note rapide du dossier.
+    final readPageZero =
+        widget.sharedText &&
+        widget.tabKey == 'notes_rapides' &&
+        _currentPage != 0;
+    final pageZero = readPageZero
+        ? await _fetchNoteDrawingJson(
+            patientId: widget.patientId,
+            tabKey: widget.tabKey,
+            pageNumber: 0,
+          )
+        : null;
     final firstJson = await _fetchNoteDrawingJson(
       patientId: widget.patientId,
       tabKey: widget.tabKey,
@@ -1122,6 +1164,7 @@ class _NotesWidgetState extends State<NotesWidget> {
     );
     if (!mounted) return;
     setState(() {
+      if (readPageZero) _applyJson(0, pageZero, hydrateController: false);
       _applyJson(_currentPage, firstJson, hydrateController: true);
       _isLoaded = true;
     });
@@ -1216,7 +1259,11 @@ class _NotesWidgetState extends State<NotesWidget> {
           break;
         }
       }
-      final txt = firstText ?? '';
+      // Page zero becomes authoritative after initialization, even when empty.
+      // A stale secondary page from an interrupted sync must not revive text.
+      final txt = widget.tabKey == 'notes_rapides' && _dossierTextInitialized
+          ? (_pageTexts[0] ?? '')
+          : (firstText ?? '');
       for (var i = 0; i < _totalPages; i++) {
         _pageTexts[i] = txt;
       }
@@ -1264,6 +1311,14 @@ class _NotesWidgetState extends State<NotesWidget> {
   }
 
   void _applyJson(int page, String? json, {required bool hydrateController}) {
+    if (page == 0 && widget.tabKey == 'notes_rapides') {
+      _dossierTextInitialized = false;
+      try {
+        final data = jsonDecode(json ?? '{}');
+        _dossierTextInitialized =
+            data is Map && data['noteTextInitialized'] == true;
+      } catch (_) {}
+    }
     if (json == null || json.isEmpty) {
       _pageStrokes[page] = <Stroke>[];
       _pageTexts[page] = '';
@@ -1290,7 +1345,13 @@ class _NotesWidgetState extends State<NotesWidget> {
         if (hydrateController) _setControllerSilently('');
         return;
       }
-      final text = decoded['text']?.toString() ?? '';
+      final text =
+          page != 0 &&
+              widget.sharedText &&
+              widget.tabKey == 'notes_rapides' &&
+              _dossierTextInitialized
+          ? (_pageTexts[0] ?? '')
+          : (decoded['text']?.toString() ?? '');
       final rawStrokes = decoded['strokes'] as List?;
       final strokes = rawStrokes == null
           ? <Stroke>[]
@@ -1518,6 +1579,7 @@ class _NotesWidgetState extends State<NotesWidget> {
   // ---------------------------------------------------------------------------
 
   void _onTextChanged() {
+    if (widget.tabKey == 'notes_rapides') _dossierTextInitialized = true;
     if (widget.sharedText) {
       final txt = _textController.text;
       for (var i = 0; i < _totalPages; i++) {
@@ -1683,15 +1745,8 @@ class _NotesWidgetState extends State<NotesWidget> {
     _refreshPencilDebug(force: force || phase != 'move');
   }
 
-  bool _isStylusKind(PointerDeviceKind kind) {
-    return kind == PointerDeviceKind.stylus ||
-        kind == PointerDeviceKind.invertedStylus;
-  }
-
   bool _isDrawablePointerKind(PointerDeviceKind kind) {
-    return kind == PointerDeviceKind.mouse ||
-        kind == PointerDeviceKind.touch ||
-        _isStylusKind(kind);
+    return isNoteCanvasPointerAllowed(kind);
   }
 
   void _releaseTextFocusForDrawing() {
@@ -1791,6 +1846,10 @@ class _NotesWidgetState extends State<NotesWidget> {
 
   void _onDrawUpdate(PointerMoveEvent event) {
     _recordPointerDebug(event, 'move');
+    if (!_isDrawablePointerKind(event.kind)) {
+      _recordPointerDebug(event, 'ignored', note: 'move-kind', force: true);
+      return;
+    }
     if (_canvasSize.isEmpty) {
       _recordPointerDebug(event, 'ignored', note: 'move-empty', force: true);
       return;
@@ -1824,6 +1883,10 @@ class _NotesWidgetState extends State<NotesWidget> {
 
   void _onDrawEnd(PointerEvent event) {
     _recordPointerDebug(event, 'up');
+    if (!_isDrawablePointerKind(event.kind)) {
+      _recordPointerDebug(event, 'ignored', note: 'up-kind', force: true);
+      return;
+    }
     if (_activePointerId != event.pointer) {
       if (_canvasSize.isEmpty ||
           !_isInsideCanvas(event.localPosition) ||

@@ -1,3 +1,4 @@
+import { assertCollectionMutationAllowed } from './collectionMutationContract.mjs';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import fs from 'node:fs/promises';
@@ -497,8 +498,7 @@ const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter
   request: requestConditionalNocodbRest,
 }) : null;
 const serializeHousingMutation = createKeyedSerialExecutor();
-const guardedMutation = conditionalWriter ? createGuardedMutation({
-  preferLocal: true,
+const guardedMutationOptions = {
   writer: conditionalWriter,
   readColumns: async (tableId) => {
     if (!conditionalTables.includes(tableId)) throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
@@ -518,7 +518,15 @@ const guardedMutation = conditionalWriter ? createGuardedMutation({
     }
     return result.list[0] ?? null;
   },
-}) : null;
+};
+const guardedMutation = conditionalWriter ? createGuardedMutation({ ...guardedMutationOptions, preferLocal: true }) : null;
+const strictCollectionMutation = conditionalWriter ? createGuardedMutation({ ...guardedMutationOptions, preferLocal: false }) : null;
+const changesCollection = (tableId, body) => {
+  const keys = tableId === TABLES.beneficiaires ? ['occupants', 'dependenceTxt']
+    : tableId === TABLES.logements ? ['roomsBreakdown', 'basement', 'rdc', 'floor', 'secondFloor', 'thirdFloor']
+    : tableId === TABLES.diagnosticSanitaires ? ['sdbInstances', 'wcInstances'] : [];
+  return keys.some(key => Object.hasOwn(body || {}, key));
+};
 
 async function applyConditionalSync(req, res, { tableId, record, fields, mapBaseline,
   normalizeObserved }) {
@@ -529,7 +537,8 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
         Array.isArray(guard.baseValues)) {
       throw new SyncMutationError(428, 'SYNC_BASELINE_REQUIRED');
     }
-    await guardedMutation({ tableId, recordId: Number(record.id), fields,
+    const mutate = changesCollection(tableId, req.body) ? strictCollectionMutation : guardedMutation;
+    await mutate({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
       normalizeObserved,
       authorizeObserved: tableId === TABLES.dossiers
@@ -7688,6 +7697,7 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       return;
     }
 
+    assertCollectionMutationAllowed({ kind: 'patient', payload: updates });
     const storedOccupantsJson = field(beneficiaryRecord, 'occupants_json');
     const protectedUpdates = preserveLegacyOccupantGender(updates, storedOccupantsJson);
     const fields = mapBeneficiaryUpdatesToFields(protectedUpdates, references);
@@ -7924,6 +7934,8 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
       res.status(403).json({ success: false, error: 'Accès interdit à ce logement' });
       return;
     }
+    assertCollectionMutationAllowed({ kind: 'housing', payload: updates });
+
 
     const existingHousing = latestRecord(
       logements.filter((record) => field(record, 'beneficiaire_id') === beneficiaryId || String(field(record, 'beneficiaires_id')) === String(beneficiaryRecord.id))
@@ -8193,6 +8205,14 @@ app.get('/api/documents/:patientId', requireAuth, async (req, res, next) => {
   }
 });
 
+function assertMandateImportIdentity(appUser, documentLocalId, dossierId) {
+  if (!documentLocalId.startsWith('doc_mandat_')) return;
+  const account = crypto.createHash('sha256').update(normalizeEmail(appUser.email)).digest('hex');
+  if (!dossierId || documentLocalId !== `doc_mandat_${dossierId}_${account}`) {
+    throw httpError(403, 'Identité de mandat incompatible avec le compte connecté');
+  }
+}
+
 app.post(
   '/api/documents/upload',
   requireAuth,
@@ -8204,6 +8224,7 @@ app.post(
       const title = stringValue(req.query?.title).trim() || 'Document';
       const requestedFileName = stringValue(req.query?.fileName).trim();
       const requestedDossierId = stringValue(req.query?.dossierId).trim();
+      assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
       const tags = safeParseJsonArray(req.query?.tagsJson).map((tag) => String(tag).trim()).filter(Boolean);
       const mimeType = stringValue(req.get('content-type')).trim() || 'application/octet-stream';
       const bodyBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -8270,6 +8291,7 @@ app.post('/api/documents', requireAuth, documentUpload.single('file'), async (re
     const title = stringValue(req.body?.title).trim() || 'Document';
     const requestedFileName = stringValue(req.body?.fileName).trim();
     const requestedDossierId = stringValue(req.body?.dossierId).trim();
+    assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
 
     // tags may arrive as JSON string (multipart) or array (JSON body)
     const rawTags = req.body?.tags;
@@ -8445,6 +8467,7 @@ app.post(
       const title = stringValue(req.body?.title).trim() || 'Document';
       const requestedFileName = stringValue(req.body?.fileName).trim();
       const requestedDossierId = stringValue(req.body?.dossierId).trim();
+    assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
       const rawTags = req.body?.tags;
       const parsedTags = typeof rawTags === 'string'
         ? (() => {
@@ -9335,6 +9358,8 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
       res.status(403).json({ success: false, error: 'Accès interdit à ce dossier' });
       return;
     }
+    assertCollectionMutationAllowed({ kind: 'sanitary', payload });
+
     const mapFields = (payload) => {
       const sdbInstances = Array.isArray(payload.sdbInstances) ? payload.sdbInstances : [];
       const wcInstances = Array.isArray(payload.wcInstances) ? payload.wcInstances : [];
@@ -9342,6 +9367,8 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
       const hasWc = wcInstances.length > 0;
       const primaryBathroom = sdbInstances[0] || {};
       const primaryWc = wcInstances[0] || {};
+      // Sparse historical objects and their observed baselines use identical
+      // scalar defaults. Their original JSON stays exact for atomic comparison.
       const fields = {
         dossier_id: field(dossierRecord, 'uuid_source'),
         dossiers_id: Number(dossierRecord.id),
@@ -9350,35 +9377,35 @@ app.put('/api/diagnostic-sanitaires/:dossierId', requireAuth, async (req, res, n
         sdb_niveau_pieces_vie: boolText(hasBathroom && primaryBathroom.levelField === 'rdc'),
         wc_niveau: boolText(hasWc && primaryWc.levelField === 'rdc'),
         wc_etage: boolText(hasWc && primaryWc.levelField !== 'rdc'),
-        sdb_baignoire: boolText(hasBathroom && primaryBathroom.sdbBaignoire),
-        sdb_baignoire_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBaignoireHauteur : null),
-        sdb_bac_douche: boolText(hasBathroom && primaryBathroom.sdbBacDouche),
-        sdb_bac_douche_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBacDoucheHauteur : null),
-        sdb_vasque_suspendue: boolText(hasBathroom && primaryBathroom.sdbVasqueSuspendue),
-        sdb_vasque_suspendue_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbVasqueSuspendueHauteur : null),
-        sdb_vasque_colonne: boolText(hasBathroom && primaryBathroom.sdbVasqueColonne),
-        sdb_vasque_colonne_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbVasqueColonneHauteur : null),
-        sdb_meuble_vasque: boolText(hasBathroom && primaryBathroom.sdbMeubleVasque),
-        sdb_meuble_vasque_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbMeubleVasqueHauteur : null),
-        sdb_bidet: boolText(hasBathroom && primaryBathroom.sdbBidet),
-        sdb_bidet_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbBidetHauteur : null),
-        sdb_paroi_douche: boolText(hasBathroom && primaryBathroom.sdbParoiDouche),
-        sdb_paroi_douche_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbParoiDoucheHauteur : null),
-        sdb_sol_glissant: boolText(hasBathroom && primaryBathroom.sdbSolGlissant),
-        sdb_machine_a_laver: boolText(hasBathroom && primaryBathroom.sdbMachineALaver),
-        sdb_machine_a_laver_hauteur: nullableString(hasBathroom ? primaryBathroom.sdbMachineALaverHauteur : null),
-        wc_cuvette_bonne_hauteur: boolText(hasWc && primaryWc.wcCuvetteBonneHauteur),
-        wc_cuvette_trop_basse: boolText(hasWc && primaryWc.wcCuvetteTropBasse),
-        wc_cuvette_trop_haute: boolText(hasWc && primaryWc.wcCuvetteTropHaute),
-        wc_cuvette_hauteur: nullableString(hasWc ? primaryWc.wcCuvetteHauteur : null),
-        wc_barre_relevement: boolText(hasWc && primaryWc.wcBarreRelevement),
-        porte_sdb_largeur_suffisante: boolTextOrNull(hasBathroom ? primaryBathroom.porteSdbLargeurSuffisante : null),
-        porte_sdb_dimension: nullableString(hasBathroom ? primaryBathroom.porteSdbDimension : null),
-        porte_sdb_sens_adapte: boolTextOrNull(hasBathroom ? primaryBathroom.porteSdbSensAdapte : null),
-        porte_wc_largeur_suffisante: boolTextOrNull(hasWc ? primaryWc.porteWcLargeurSuffisante : null),
-        porte_wc_dimension: nullableString(hasWc ? primaryWc.porteWcDimension : null),
-        porte_wc_sens_adapte: boolTextOrNull(hasWc ? primaryWc.porteWcSensAdapte : null),
-        observation_equipements_utilisation: nullableString(hasWc ? primaryWc.observationEquipementsUtilisation : null),
+        sdb_baignoire: boolText(hasBathroom && Boolean(primaryBathroom.sdbBaignoire)),
+        sdb_baignoire_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbBaignoireHauteur ?? null) : null),
+        sdb_bac_douche: boolText(hasBathroom && Boolean(primaryBathroom.sdbBacDouche)),
+        sdb_bac_douche_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbBacDoucheHauteur ?? null) : null),
+        sdb_vasque_suspendue: boolText(hasBathroom && Boolean(primaryBathroom.sdbVasqueSuspendue)),
+        sdb_vasque_suspendue_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbVasqueSuspendueHauteur ?? null) : null),
+        sdb_vasque_colonne: boolText(hasBathroom && Boolean(primaryBathroom.sdbVasqueColonne)),
+        sdb_vasque_colonne_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbVasqueColonneHauteur ?? null) : null),
+        sdb_meuble_vasque: boolText(hasBathroom && Boolean(primaryBathroom.sdbMeubleVasque)),
+        sdb_meuble_vasque_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbMeubleVasqueHauteur ?? null) : null),
+        sdb_bidet: boolText(hasBathroom && Boolean(primaryBathroom.sdbBidet)),
+        sdb_bidet_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbBidetHauteur ?? null) : null),
+        sdb_paroi_douche: boolText(hasBathroom && Boolean(primaryBathroom.sdbParoiDouche)),
+        sdb_paroi_douche_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbParoiDoucheHauteur ?? null) : null),
+        sdb_sol_glissant: boolText(hasBathroom && Boolean(primaryBathroom.sdbSolGlissant)),
+        sdb_machine_a_laver: boolText(hasBathroom && Boolean(primaryBathroom.sdbMachineALaver)),
+        sdb_machine_a_laver_hauteur: nullableString(hasBathroom ? (primaryBathroom.sdbMachineALaverHauteur ?? null) : null),
+        wc_cuvette_bonne_hauteur: boolText(hasWc && Boolean(primaryWc.wcCuvetteBonneHauteur)),
+        wc_cuvette_trop_basse: boolText(hasWc && Boolean(primaryWc.wcCuvetteTropBasse)),
+        wc_cuvette_trop_haute: boolText(hasWc && Boolean(primaryWc.wcCuvetteTropHaute)),
+        wc_cuvette_hauteur: nullableString(hasWc ? (primaryWc.wcCuvetteHauteur ?? null) : null),
+        wc_barre_relevement: boolText(hasWc && Boolean(primaryWc.wcBarreRelevement)),
+        porte_sdb_largeur_suffisante: boolTextOrNull(hasBathroom ? (primaryBathroom.porteSdbLargeurSuffisante ?? null) : null),
+        porte_sdb_dimension: nullableString(hasBathroom ? (primaryBathroom.porteSdbDimension ?? null) : null),
+        porte_sdb_sens_adapte: boolTextOrNull(hasBathroom ? (primaryBathroom.porteSdbSensAdapte ?? null) : null),
+        porte_wc_largeur_suffisante: boolTextOrNull(hasWc ? (primaryWc.porteWcLargeurSuffisante ?? null) : null),
+        porte_wc_dimension: nullableString(hasWc ? (primaryWc.porteWcDimension ?? null) : null),
+        porte_wc_sens_adapte: boolTextOrNull(hasWc ? (primaryWc.porteWcSensAdapte ?? null) : null),
+        observation_equipements_utilisation: nullableString(hasWc ? (primaryWc.observationEquipementsUtilisation ?? null) : null),
         updated_at: new Date().toISOString(),
       };
 
@@ -9710,6 +9737,10 @@ app.use(async (req, res, next) => {
 });
 
 app.use((error, _req, res, _next) => {
+  if (['COLLECTION_CLIENT_UPGRADE_REQUIRED', 'DOCUMENT_IMPORT_ALREADY_EXISTS'].includes(error?.code)) {
+    res.status(409).json({ success: false, error: error.code, message: error.message, fields: error.fields });
+    return;
+  }
   if (!res.locals?.noteRequestId) console.error('[nocodb-api]', error);
   else res.locals.noteErrorCode = safeNoteErrorCode(error?.code);
   const isMulterLimit = error?.name === 'MulterError' &&

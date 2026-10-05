@@ -21,6 +21,7 @@ import 'nocodb_api_client.dart';
 import 'report_generation_service.dart';
 import 'sync_repository.dart';
 import 'sync_mutation.dart';
+import 'collection_mutation_contract.dart';
 
 /// Vrai si l'erreur attrapée par le catch générique du sync engine est
 /// en réalité un hoquet réseau (à rejouer silencieusement) plutôt qu'une
@@ -614,6 +615,11 @@ class NocodbSyncService {
   Future<bool> _resolveVisitConflictByLatestEdit(
     SyncOperation operation,
   ) async {
+    final queued = jsonDecode(operation.payloadJson) as Map<String, dynamic>;
+    final updates = queued['updates'] is Map
+        ? queued['updates'] as Map
+        : queued;
+    if (hasCollectionUpdates(operation.entityType, updates)) return false;
     if (operation.entityType == 'note_page') {
       return _resolveNoteConflictByLatestEdit(operation);
     }
@@ -2120,6 +2126,7 @@ class NocodbSyncService {
       tabKey: tabKey,
       pageNumber: pageNumber,
       drawingJson: drawingJson,
+      textContent: payload['textContent']?.toString(),
       scopeType: scopeType,
       scopeId: scopeId,
       planPhase: (planPhase == 'avant' || planPhase == 'apres')

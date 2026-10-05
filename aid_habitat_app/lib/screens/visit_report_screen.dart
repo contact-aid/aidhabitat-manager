@@ -240,8 +240,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// que `Accessibilité-Notes` : une seule note écrite + dessin, conservée
   /// quand l'ergo change de sous-section.
   static const String _kSharedBeneficiaireNotesTabKey = 'Bénéficiaire-Notes';
-  bool get _useDossierDescriptionNote =>
-      kIsWeb && _dossier.id.startsWith('airtable:');
 
   /// TabKey unique pour la note partagée entre les 4 sous-sections de
   /// l'onglet « Accessibilité » (Général, Niveaux, Équipements,
@@ -276,9 +274,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       return _kSharedSanitairesNotesTabKey;
     }
     if (activeTab == 'Bénéficiaire') {
-      return _useDossierDescriptionNote
-          ? 'notes_rapides'
-          : _kSharedBeneficiaireNotesTabKey;
+      return _kSharedBeneficiaireNotesTabKey;
     }
     if (activeTab == 'Accessibilité') {
       return _kSharedAccessibiliteNotesTabKey;
@@ -545,15 +541,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       tabKey: tabKey,
       pageNumber: 0,
       drawingJson: merged,
-      dossierId: tabKey == 'notes_rapides' && _useDossierDescriptionNote
-          ? _dossier.id
-          : null,
-      scopeType: tabKey == 'notes_rapides' && _useDossierDescriptionNote
-          ? 'dossier_detail'
-          : null,
-      scopeId: tabKey == 'notes_rapides' && _useDossierDescriptionNote
-          ? _dossier.id
-          : null,
       mutationOrigin: SyncMutationOrigin.userEdit,
     );
   }
@@ -875,10 +862,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// Text is persisted to the shared SQLite file so both windows stay in
   /// sync via the 1-second polling in [NoteWindowScreen].
   Future<void> _openNoteInSeparateWindow(String sourceTab) async {
-    if (sourceTab == 'notes_rapides' && _useDossierDescriptionNote) {
-      await _openNoteModalFallback(sourceTab);
-      return;
-    }
     final patientId = _dossier.patient.id;
     final existingJson = await _dataService.fetchNoteDrawingJson(
       patientId: patientId,
@@ -1132,70 +1115,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   // NotesWidget reçoit donc `placeholder: ''` (pas de hint).
                   final bannerTitle =
                       activeTab == 'Bénéficiaire' &&
-                          (tabKey == _kSharedBeneficiaireNotesTabKey ||
-                              tabKey == 'notes_rapides')
+                          tabKey == _kSharedBeneficiaireNotesTabKey
                       ? 'Bénéficiaire'
                       : (pdfPlaceholder ?? section);
-                  if (_useDossierDescriptionNote &&
-                      activeTab == 'Bénéficiaire') {
-                    // Web shares the written description with the dossier.
-                    // iPad build 57 still stores the drawing in the original
-                    // Bénéficiaire-Notes page. Read and save each separately.
-                    return _NotesPanelLayer(
-                      isActive: isActive,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          NotesPanelTitleBanner(
-                            title: bannerTitle,
-                            attachedToBelow: true,
-                          ),
-                          SizedBox(
-                            height: 156,
-                            child: NotesWidget(
-                              key: ValueKey('$liveKey:text'),
-                              patientId: _dossier.patient.id,
-                              tabKey: 'notes_rapides',
-                              dossierId: _dossier.id,
-                              scopeType: 'dossier_detail',
-                              scopeId: _dossier.id,
-                              title: section,
-                              placeholder: '',
-                              liveText: _liveText[liveKey],
-                              externalRefreshToken: _notesBulkPullToken,
-                              onDraftChange: (draft) => _pushDraftToOpenWindow(
-                                'notes_rapides',
-                                draft.text,
-                              ),
-                              onExpandToTab: () =>
-                                  _openNoteInSeparateWindow('notes_rapides'),
-                              showCanvas: false,
-                              showSaveButton: false,
-                              fillParentHeight: true,
-                              allowPagination: false,
-                              attachedToTitleBanner: true,
-                            ),
-                          ),
-                          Expanded(
-                            child: NotesWidget(
-                              key: ValueKey('$liveKey:drawing'),
-                              patientId: _dossier.patient.id,
-                              tabKey: _kSharedBeneficiaireNotesTabKey,
-                              title: section,
-                              placeholder: '',
-                              externalRefreshToken: _notesBulkPullToken,
-                              showText: false,
-                              showSaveButton: false,
-                              fillParentHeight: true,
-                              allowPagination: true,
-                              stackedCards: true,
-                              allowTextModal: false,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
                   return _NotesPanelLayer(
                     isActive: isActive,
                     child: Column(
@@ -1210,21 +1132,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                             key: ValueKey(liveKey),
                             patientId: _dossier.patient.id,
                             tabKey: tabKey,
-                            dossierId:
-                                tabKey == 'notes_rapides' &&
-                                    _useDossierDescriptionNote
-                                ? _dossier.id
-                                : null,
-                            scopeType:
-                                tabKey == 'notes_rapides' &&
-                                    _useDossierDescriptionNote
-                                ? 'dossier_detail'
-                                : null,
-                            scopeId:
-                                tabKey == 'notes_rapides' &&
-                                    _useDossierDescriptionNote
-                                ? _dossier.id
-                                : null,
                             title: section,
                             placeholder: '',
                             liveText: _liveText[liveKey],
@@ -3055,15 +2962,16 @@ class _VisitReportScreenState extends State<VisitReportScreen>
             BeneficiaryHeader(
               dossier: _dossier,
               onBack: widget.onBack,
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
+              trailing: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
                 children: [
                   if (widget.onOpenDocuments != null) ...[
                     DossierSpaceShortcut(
                       toDocuments: true,
                       onPressed: _openingDocuments ? null : _openDocuments,
                     ),
-                    const SizedBox(width: 8),
                   ],
                   _buildGenerateReportButton(),
                 ],
