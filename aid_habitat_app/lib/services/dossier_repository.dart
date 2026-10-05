@@ -9,6 +9,7 @@ import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
+import 'collection_mutation_contract.dart';
 import 'context_sync_protocol.dart';
 import 'visit_recommendations_publication.dart';
 
@@ -480,6 +481,8 @@ class DossierRepository {
         if (review.contextReferenceJson != null)
           'reference': jsonDecode(review.contextReferenceJson!),
       };
+      // Only this explicit reviewed decision upgrades a legacy queued edit.
+      stampNewCollectionMutation(review.entityType, payload, null);
       await txn.update(
         'sync_operations',
         {
@@ -2119,6 +2122,7 @@ class DossierRepository {
       expectedUpdatedAt: expectedUpdatedAt,
       previous: previous,
     );
+    stampNewCollectionMutation(entityType, payloadMap, previous);
     if (localConflict != null) {
       payloadMap['conflict'] = {
         ...localConflict,
@@ -2214,6 +2218,7 @@ class DossierRepository {
                 'concurrency': previous['localReference'],
             },
     );
+    stampNewCollectionMutation(entityType, payload, previous);
     if (previous?['concurrency'] == null && !canCaptureVersion) {
       payload['localReference'] = payload.remove('concurrency');
     }

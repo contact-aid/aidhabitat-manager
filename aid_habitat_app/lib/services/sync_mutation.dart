@@ -78,6 +78,11 @@ String describeSyncConflict(Map<String, dynamic> payload) {
   }
   final remote = conflict is Map ? conflict['remote'] : null;
   final code = remote is Map ? remote['error'] : null;
+  if (code == 'COLLECTION_CLIENT_UPGRADE_REQUIRED') {
+    return 'Cette saisie vient d’une ancienne version. Vos valeurs sont conservées. '
+        'Comparez-les dans la nouvelle application puis choisissez explicitement '
+        'la version à conserver.';
+  }
   if (code == 'SYNC_FIELD_CONFLICT' ||
       code == 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW') {
     return 'Les valeurs saisies et les valeurs du serveur ne peuvent pas être '
