@@ -18,6 +18,15 @@ export function formatMobilityAidsForReport(raw) {
   return result.join(', ');
 }
 
+// Preserve the identity of unsupported glyphs in print instead of crashing the
+// whole report or silently deleting characters. Source data is unchanged.
+export function printableMobilityAidsForReport(raw, font) {
+  return [...formatMobilityAidsForReport(raw)].map(char => {
+    try { font.encodeText(char); return char; }
+    catch { return `[U+${char.codePointAt(0).toString(16).toUpperCase()}]`; }
+  }).join('');
+}
+
 function wrapText(text, font, size, width) {
   const lines = [];
   let current = '';
@@ -48,7 +57,7 @@ function wrapText(text, font, size, width) {
  * reduced below a readable 8.5 pt in the existing narrow dependence field.
  */
 export function applyMobilityAidsToReport({ pdfDoc, field, font, rawValue }) {
-  const text = formatMobilityAidsForReport(rawValue);
+  const text = printableMobilityAidsForReport(rawValue, font);
   const widgets = field.acroField.getWidgets();
   const width = Math.min(...widgets.map((widget) => widget.getRectangle().width)) - 8;
   if (!Number.isFinite(width) || width <= 0) throw new Error('Mobility field has no usable widget');

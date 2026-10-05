@@ -8,6 +8,7 @@ import { appendSanitaryRoomsAppendix, needsSanitaryRoomsAppendix } from './repor
 
 test('appendix is absent for old single rooms and complete existing tables', () => {
   assert.equal(needsSanitaryRoomsAppendix({}), false);
+  assert.equal(needsSanitaryRoomsAppendix(null), false);
   assert.equal(needsSanitaryRoomsAppendix({ wcInstances: [{ observationEquipementsUtilisation: 'old note' }] }), false);
   assert.equal(needsSanitaryRoomsAppendix({ wcInstances: [{ levelField: 'rdc', wcCuvetteHauteur: 40 }, { levelField: 'rdc', wcCuvetteHauteur: 42 }] }), false);
 });

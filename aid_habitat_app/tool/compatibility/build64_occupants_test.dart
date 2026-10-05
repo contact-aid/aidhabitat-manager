@@ -97,11 +97,10 @@ void main() {
           isEmpty,
           reason: 'Loading itself must not save',
         );
-        final field = find.byWidgetPredicate(
-          (w) => w is FormToggleGroup && w.label == 'Aide à domicile',
-        );
+        final field = find.byWidgetPredicate((w) =>
+            w is FormToggleGroup && w.label == 'Dépendance');
         expect(field, findsOneWidget);
-        tester.widget<FormToggleGroup>(field).onChanged!('Oui');
+        tester.widget<FormToggleGroup>(field).onChanged!('Canne');
         await tester.pump(kSaveDebounceText);
         await controller.flushPendingSave();
         await tester.pump();

@@ -1001,12 +1001,10 @@ class _DossierScreenState extends State<DossierScreen> {
                             .join('\n'),
                         multiline: true,
                       ),
-                      if (dossierIdentityNeedsReview(
-                        widget.dossier.patient,
-                      )) ...[
+                      if (dossierIdentityNeedsReview(_identityPatient)) ...[
                         const SizedBox(height: 8),
                         Text(
-                          'Identité à vérifier : ${widget.dossier.patient.lastName} ${widget.dossier.patient.firstName}. '
+                          'Identité à vérifier : ${dossierLegacyIdentityDescription(_identityPatient)}. '
                           'Les informations d’origine sont conservées.',
                           key: const ValueKey('occupant-identity-review'),
                           style: const TextStyle(

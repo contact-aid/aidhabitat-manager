@@ -2522,7 +2522,7 @@ const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
         invalidityTxt: stringValue(field(beneficiaryRecord, 'reconnaissance_invalidité_mdph_txt')),
         homeHelp: Boolean(field(beneficiaryRecord, 'aide_a_domicile')),
         homeHelpTxt: stringValue(field(beneficiaryRecord, 'aide_a_domicile_txt')),
-        dependenceTxt: refLabel(field(beneficiaryRecord, 'dependance_particuliere')) || stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')),
+        dependenceTxt: stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')).trim() || refLabel(field(beneficiaryRecord, 'dependance_particuliere')),
         numeroSecuriteSociale: stringValue(field(beneficiaryRecord, 'numero_securite_sociale_monsieur')),
         caisseRetraitePrincipale: refLabel(field(beneficiaryRecord, 'caisse_retraite_principale')),
         caissesRetraiteComplementaires: refLabel(field(beneficiaryRecord, 'caisse_retraite_secondaire')),
@@ -2557,7 +2557,7 @@ const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
   invalidityTxt: stringValue(field(beneficiaryRecord, 'reconnaissance_invalidité_mdph_txt')),
   homeHelp: Boolean(field(beneficiaryRecord, 'aide_a_domicile')),
   homeHelpTxt: stringValue(field(beneficiaryRecord, 'aide_a_domicile_txt')),
-  dependenceTxt: refLabel(field(beneficiaryRecord, 'dependance_particuliere')) || stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')),
+  dependenceTxt: stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')).trim() || refLabel(field(beneficiaryRecord, 'dependance_particuliere')),
   trustedPerson: {
     name: stringValue(field(beneficiaryRecord, 'personne_confiance')),
     phone: stringValue(field(beneficiaryRecord, 'telephone_personne_confiance')),

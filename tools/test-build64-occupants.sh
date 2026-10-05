@@ -6,6 +6,6 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/appergo-build64-occupants.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 # No worktree mutation, no .env, no device/build: export the exact historical sources.
 git -C "$repo_dir" archive "$sha" aid_habitat_app | tar -x -C "$scratch"
-cp "$repo_dir/compatibility/occupants/build64_occupants_test.dart" "$scratch/aid_habitat_app/test/build64_occupants_test.dart"
+cp "$repo_dir/aid_habitat_app/tool/compatibility/build64_occupants_test.dart" "$scratch/aid_habitat_app/test/build64_occupants_test.dart"
 cd "$scratch/aid_habitat_app"
 flutter test test/build64_occupants_test.dart --reporter expanded

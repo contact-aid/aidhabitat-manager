@@ -3,6 +3,7 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 build64=a5b4d9fbe40579160a9290688a7707e7a3376c2c
 snapshot="$(mktemp -d /tmp/appergo-mobility-build64.XXXXXX)"
+trap 'rm -rf "$snapshot"' EXIT
 git -C "$repo_root" archive "$build64" aid_habitat_app | tar -x -C "$snapshot"
 mkdir -p "$snapshot/aid_habitat_app/test/compat"
 cp "$repo_root/aid_habitat_app/test/compat/mobility_build64_test.dart" "$snapshot/aid_habitat_app/test/compat/"

@@ -207,7 +207,17 @@ bool dossierIdentityNeedsReview(Patient patient) {
               _normalizedName(patient.firstName) ||
           _normalizedName(patient.occupants.first.lastName) !=
               _normalizedName(patient.lastName));
-  return conflicts || (grouped && !split);
+  final secondConflict =
+      patient.occupants.length > 1 &&
+      (patient.secondFirstName.trim().isNotEmpty ||
+          patient.secondLastName.trim().isNotEmpty) &&
+      (patient.occupants[1].firstName.trim().isNotEmpty ||
+          patient.occupants[1].lastName.trim().isNotEmpty) &&
+      (_normalizedName(patient.occupants[1].firstName) !=
+              _normalizedName(patient.secondFirstName) ||
+          _normalizedName(patient.occupants[1].lastName) !=
+              _normalizedName(patient.secondLastName));
+  return conflicts || secondConflict || (grouped && !split);
 }
 
 String dossierOccupantDisplayName(Occupant occupant, int index) {
@@ -225,3 +235,8 @@ String dossierOccupantDisplayName(Occupant occupant, int index) {
   return '${name.isEmpty ? 'Occupant ${index + 1}' : name}'
       '${maiden.isEmpty ? '' : ' (nom de naissance : $maiden)'}';
 }
+
+String dossierLegacyIdentityDescription(Patient patient) => [
+  '${patient.lastName} ${patient.firstName}'.trim(),
+  '${patient.secondLastName} ${patient.secondFirstName}'.trim(),
+].where((value) => value.isNotEmpty).join(' ; ');

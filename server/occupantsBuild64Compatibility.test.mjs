@@ -70,6 +70,14 @@ async function run() {
     saved = JSON.parse(mock.row('beneficiaire').occupants_json);
     assert.equal(saved.length, 1, 'BLOCKER: baseline does not stop stale64 deleting Bob');
 
+    // A deliberate web removal is resurrected by an old offline roster.
+    reset([alice]);
+    result = await request(path, mutation([legacy(alice), legacy(bob)], [alice, bob]), token);
+    assert.equal(result.status, 200, JSON.stringify(result));
+    saved = JSON.parse(mock.row('beneficiaire').occupants_json);
+    assert.equal(saved.length, 2, 'BLOCKER: stale64 resurrects a removed occupant');
+    assert.equal(saved[1].firstName, 'Bob');
+
     // Clear supported today when identities are unchanged; a missing key is not a clear.
     reset([alice]);
     result = await request(path, mutation([{ ...alice, gender: '', maidenName: '' }], [alice]), token);

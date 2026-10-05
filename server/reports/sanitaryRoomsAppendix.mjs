@@ -12,7 +12,7 @@ const list = value => Array.isArray(value) ? value : [];
 // historical single-room reports.
 export function needsSanitaryRoomsAppendix(sanitaires = {}) {
   return ['sdbInstances', 'wcInstances'].some(key => {
-    const rooms = list(sanitaires[key]);
+    const rooms = list(sanitaires?.[key]);
     if (rooms.length <= 1) return false;
     if (rooms.length > 3) return true;
     return rooms.some(room => text(room?.observationEquipementsUtilisation)
@@ -101,7 +101,7 @@ export async function appendSanitaryRoomsAppendix({ pdfDoc, sanitaires = {} }) {
     }
   }
   for (const [key, label, bathroom] of [['sdbInstances', 'Salle de bain', true], ['wcInstances', 'WC', false]]) {
-    for (const [index, value] of list(sanitaires[key]).entries()) {
+    for (const [index, value] of list(sanitaires?.[key]).entries()) {
       const room = value && typeof value === 'object' ? value : {};
       if (page && y < 95) newPage();
       currentRoom = `${label} ${index + 1}`;

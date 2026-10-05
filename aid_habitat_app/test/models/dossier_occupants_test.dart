@@ -29,6 +29,24 @@ Patient patient({
 );
 
 void main() {
+  test(
+    'conflicting second legacy identity is flagged without replacing structured name',
+    () {
+      final original = patient(
+        firstName: 'Alice',
+        lastName: 'Exemple',
+        secondName: 'Bob',
+        occupants: const [
+          Occupant(firstName: 'Alice', lastName: 'Exemple'),
+          Occupant(firstName: 'Claire', lastName: 'Autre'),
+        ],
+      );
+      expect(dossierIdentityNeedsReview(original), isTrue);
+      expect(dossierOccupants(original)[1].firstName, 'Claire');
+      expect(dossierLegacyIdentityDescription(original), 'Exemple Alice ; Bob');
+    },
+  );
+
   test('structured conflicting identities remain intact and are flagged', () {
     final original = patient(
       firstName: 'Ancien',

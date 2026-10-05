@@ -69,3 +69,14 @@ test('intentional empty remains empty and flattened report has no remaining widg
     }
   }
 });
+
+
+test('unsupported pasted symbols do not abort the report or disappear silently', async () => {
+  const result = await sandbox.generateVisitReport({
+    dossier: { patient: { dependenceTxt: 'Orthèse ≥ 5 cm 🦯' } }, sanitaires: {},
+    observations: {}, fetchImageBytes: async () => null, flatten: false,
+  });
+  const pdf = await PDFDocument.load(result.bytes);
+  const value = pdf.getForm().getTextField('dépendance').getText();
+  assert.equal(value, 'Orthèse >= 5 cm [U+1F9AF]');
+});
