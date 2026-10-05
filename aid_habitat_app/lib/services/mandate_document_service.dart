@@ -70,14 +70,20 @@ class MandateDocumentService {
     final id = documentId(dossier, user);
     final dossierTag = 'Dossier:${dossier.id}';
     final accountTag = 'Compte:${user.id}';
-    if (docs.any(
-          (doc) =>
-              doc.id == id ||
-              (doc.tags.contains('Mandat automatique') &&
-                  doc.tags.contains(dossierTag) &&
-                  doc.tags.contains(accountTag)),
-        ) ||
-        !createIfMissing) {
+    bool isExistingMandate(DocItem doc) {
+      if (doc.id == id) return true;
+      final dossierTags = doc.tags.where((tag) => tag.startsWith('Dossier:'));
+      if (dossierTags.isNotEmpty && !dossierTags.contains(dossierTag)) return false;
+      final accountTags = doc.tags.where((tag) => tag.startsWith('Compte:'));
+      if (accountTags.isNotEmpty && !accountTags.contains(accountTag)) return false;
+      // Historical imports lack automatic-generation tags and deterministic IDs.
+      // Keep them as-is, including documents with no known account attribution.
+      return doc.tags.any((tag) => tag.trim().toLowerCase() == 'mandat' ||
+          tag.trim().toLowerCase() == 'mandat automatique') ||
+          RegExp(r'^mandat(?:\b|_)', caseSensitive: false).hasMatch(doc.title.trim()) ||
+          RegExp(r'^mandat(?:\b|_)', caseSensitive: false).hasMatch(doc.name.trim());
+    }
+    if (docs.any(isExistingMandate) || !createIfMissing) {
       return docs;
     }
 

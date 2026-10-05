@@ -137,6 +137,23 @@ void main() {
     expect(repository.docs.map((doc) => doc.id).toSet().length, 2);
   });
 
+  for (final tagged in [false, true]) {
+    test('preserves a historical imported mandate without account tags ($tagged)', () async {
+      final repository = _MemoryDocuments();
+      final existing = DocItem(id: 'remote-historical', type: 'pdf',
+        name: tagged ? 'scan.pdf' : 'mandat_signe.pdf',
+        title: tagged ? 'Document ancien' : 'Mandat signé',
+        date: '2025-01-01', tags: tagged ? ['Mandat'] : ['Autre']);
+      repository.docs.add(existing);
+      final service = MandateDocumentService(repository: repository);
+      final dossier = _dossier('{"mandat":"Oui","mandatPar":"Aid\'habitat"}');
+      final docs = await service.documentsFor(dossier,
+        _user('c', 'c.demenais@aidhabitat.fr', 'Coralie'));
+      expect(repository.writes, 0);
+      expect(docs.single, same(existing));
+    });
+  }
+
   test('produces the three two-page PDFs for visual QA', () async {
     final qaDir = Platform.environment['MANDATE_QA_DIR'];
     for (final user in [
