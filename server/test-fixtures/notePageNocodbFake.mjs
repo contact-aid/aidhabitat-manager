@@ -11,7 +11,8 @@ const asRecord = (row) => ({
 
 export const createNotePageNocodbFake = () => {
   const state = {
-    rows: [], nextId: 1, creates: 0, patches: 0, deletes: 0,
+    rows: [], chunkRows: [], chunkCreates: 0, nextId: 1, creates: 0, patches: 0, deletes: 0,
+    beforeChunk: null, loseChunkResponse: false, beforePatch: null, losePatchResponse: false,
     loseCreateResponse: false, beforeCreate: null,
     insert(fields) {
       const row = { Id: this.nextId++, ...structuredClone(fields) };
@@ -20,10 +21,20 @@ export const createNotePageNocodbFake = () => {
     },
   };
   const io = {
-    queryAll: async (_tableId, options = {}) => state.rows
+    queryAll: async (_tableId, options = {}) => (_tableId === 'chunks' ? state.chunkRows : state.rows)
       .filter((row) => matches(row, options.where ?? ''))
       .map((row) => asRecord(structuredClone(row))),
     createRecord: async (_tableId, fields) => {
+      if (_tableId === 'chunks') {
+        await state.beforeChunk?.(state, fields);
+        const row = { Id: state.nextId++, ...structuredClone(fields) };
+        state.chunkRows.push(row); state.chunkCreates++;
+        if (state.loseChunkResponse) {
+          state.loseChunkResponse = false;
+          throw new Error('Synthetic fragment ACK lost');
+        }
+        return asRecord(row);
+      }
       await state.beforeCreate?.(state, fields);
       const row = state.insert(fields);
       state.creates += 1;
@@ -50,10 +61,15 @@ export const createNotePageNocodbFake = () => {
       ].map((title) => ({ title, type: 'SingleLineText' })) };
     },
     requestConditionalNocodbRest: async ({ path, body }) => {
+      await state.beforePatch?.(state, body);
       const where = new URL(path, 'https://fake.test').searchParams.get('where') ?? '';
       const row = state.rows.find((item) => matches(item, where));
       if (row) Object.assign(row, structuredClone(body));
       state.patches += 1;
+      if (state.losePatchResponse) {
+        state.losePatchResponse = false;
+        throw new Error('Synthetic note ACK lost');
+      }
       return { count: row ? 1 : 0 };
     },
   };

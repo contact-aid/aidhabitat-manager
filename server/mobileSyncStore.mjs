@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createNoteContentStore, noteContentOwner, NOTE_CONTENT_PREFIX, NOTE_CONTENT_MAX_BYTES, isNoteChunkKey } from './noteContentChunks.mjs';
 import fs from 'node:fs/promises';
 import process from 'node:process';
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -496,6 +497,7 @@ const discoverMobileSyncTablesDetailed = async () => {
 };
 
 const listDocumentChunks = async (documentChunksTableId, documentId) => {
+  if (isNoteChunkKey(documentId)) throw new Error('Reserved note content namespace');
   const records = await queryAll(documentChunksTableId, {
     fields: ['document_uuid_source', 'chunk_index', 'chunk_base64', 'updated_at'],
     where: `(document_uuid_source,eq,${JSON.stringify(String(documentId))})`,
@@ -554,6 +556,7 @@ const deleteDocumentChunks = async (documentChunksTableId, documentId) => {
 };
 
 const createDocumentChunks = async (documentChunksTableId, documentId, chunks, metadata = {}) => {
+  if (isNoteChunkKey(documentId)) throw new Error('Reserved note content namespace');
   const beneficiary = normalizeBeneficiaryMetadata(metadata);
   const now = new Date().toISOString();
   await Promise.all(
@@ -580,7 +583,7 @@ const listChunkDocumentIdsForPatient = async (documentChunksTableId, patientId) 
     fields: ['document_uuid_source', 'beneficiaire_id'],
     where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})`,
   });
-  return new Set(chunks.map((chunk) => stringValue(field(chunk, 'document_uuid_source'))).filter(Boolean));
+  return new Set(chunks.map((chunk) => stringValue(field(chunk, 'document_uuid_source'))).filter((id) => id && !isNoteChunkKey(id)));
 };
 
 const buildDocumentPayload = (document, absoluteUrl, mode) => {
@@ -780,9 +783,10 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
       .map((notePage) => buildNotePagePayload(notePage, absoluteUrl));
   },
 
-  async getNotePageById(notePageId) {
+  async getNotePageById(notePageId, { metadataOnly = false } = {}) {
     const store = await readNotePagesStore();
     const notePage = store.notePages.find((entry) => String(entry.id) === String(notePageId));
+    if (metadataOnly && notePage) return { id: notePage.id, patientId: notePage.patientId };
     return notePage ? buildNotePagePayload(notePage, absoluteUrl) : null;
   },
 
@@ -963,6 +967,20 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
   notePagesTableId, preferLocal = false, io = defaultStoreIO }) => {
   const { queryAll, createRecord, updateRecord, deleteRecord,
     callNocoTool, requestConditionalNocodbRest } = io;
+  const noteContent = createNoteContentStore({ tableId: documentChunksTableId,
+    queryAll, createRecord, inlineEncode: compressDrawingForStorage, inlineDecode: decompressDrawingForRead });
+  const readContent = (record, kind, maxBytes) => noteContent.read(field(record, kind), noteContentOwner({
+    patientId: field(record, 'beneficiaire_id'), dossierId: field(record, 'dossier_id'),
+    scopeType: field(record, 'scope_type'), scopeId: field(record, 'scope_id'),
+    tabKey: field(record, 'tab_key'), subTabKey: field(record, 'sub_tab_key'),
+    pageNumber: field(record, 'page_number'),
+  }, kind), maxBytes);
+  const readPageContent = async (record, remaining = NOTE_CONTENT_MAX_BYTES) => {
+    const budget = Math.min(NOTE_CONTENT_MAX_BYTES, remaining);
+    const textContent = await readContent(record, 'text_content', budget);
+    const drawingJson = await readContent(record, 'drawing_json', budget - Buffer.byteLength(textContent));
+    return { textContent, drawingJson };
+  };
   let notePageFieldNamesPromise = null;
 
   const getNotePageFieldNames = async () => {
@@ -1095,6 +1113,7 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
     LEGACY_NOTE_TAB_KEYS.has(stringValue(tab).trim().toLowerCase());
 
   const isEmptyNotePageRecord = (record) => {
+    if (['drawing_json', 'text_content'].some((key) => String(field(record, key) || '').startsWith(NOTE_CONTENT_PREFIX))) return false;
     // Décompresser si gzippé (cf. compressDrawingForStorage) avant
     // d'essayer de parser le JSON pour décider si la note est vide.
     const drawingRaw = decompressDrawingForRead(stringValue(field(record, 'drawing_json'))).trim();
@@ -1183,7 +1202,7 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
 
   const findDocumentRecordByAnyId = async (documentId, fields) => {
     const id = stringValue(documentId).trim();
-    if (!id) return null;
+    if (!id || isNoteChunkKey(id)) return null;
     const byUuid = await queryAll(documentsTableId, {
       fields,
       where: `(uuid_source,eq,${JSON.stringify(id)})`,
@@ -1310,6 +1329,7 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
       : [];
 
     const existing = latestRecord(existingRecords);
+    if (existing && isNoteChunkKey(field(existing, 'uuid_source'))) throw new Error('Reserved note content namespace');
     if (existing && stringValue(documentLocalId).startsWith('doc_mandat_')) {
       if (stringValue(field(existing, 'dossier_id')) !== stringValue(dossierId)) {
         throw Object.assign(new Error('Mandat lié à un autre dossier'), { status: 403, statusCode: 403 });
@@ -1572,8 +1592,12 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
       where: clauses.join('~and'),
     });
 
-    return records
-      .map((record) => ({
+    const pages = [];
+    let remaining = 64 * 1024 * 1024;
+    for (const record of records) {
+      const contents = await readPageContent(record, remaining);
+      remaining -= Buffer.byteLength(contents.textContent) + Buffer.byteLength(contents.drawingJson);
+      pages.push({
         id: stringValue(field(record, 'uuid_source') || record.id),
         patientId: stringValue(field(record, 'beneficiaire_id')),
         dossierId: stringValue(field(record, 'dossier_id')) || null,
@@ -1586,25 +1610,28 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
         tabKey: stringValue(field(record, 'tab_key')),
         subTabKey: stringValue(field(record, 'sub_tab_key')),
         pageNumber: Number(field(record, 'page_number')) || 0,
-        textContent: decompressTextForRead(stringValue(field(record, 'text_content'))),
-        drawingJson: decompressDrawingForRead(stringValue(field(record, 'drawing_json'))),
+        ...contents,
         previewDataUrl: stringValue(field(record, 'preview_data_url')),
         previewUrl: stringValue(field(record, 'preview_url')),
         layoutKind: stringValue(field(record, 'layout_kind')) || 'freeform',
         planPhase: stringValue(field(record, 'plan_phase')) || null,
         revision: stringValue(field(record, syncRevisionField)) || null,
         updatedAt: stringValue(field(record, 'updated_at')) || new Date().toISOString(),
-      }))
+      });
+    }
+    return pages
       .sort((a, b) => Number(a.pageNumber) - Number(b.pageNumber))
       .map((notePage) => buildNotePagePayload(notePage, absoluteUrl));
   },
 
-  async getNotePageById(notePageId) {
+  async getNotePageById(notePageId, { metadataOnly = false } = {}) {
     const existing = latestRecord(await queryAll(notePagesTableId, {
-      fields: await getNotePageFields(),
+      fields: metadataOnly ? ['uuid_source', 'beneficiaire_id'] : await getNotePageFields(),
       where: `(uuid_source,eq,${JSON.stringify(String(notePageId))})`,
     }));
     if (!existing) return null;
+    if (metadataOnly) return { id: notePageId, patientId: stringValue(field(existing, 'beneficiaire_id')) };
+    const contents = await readPageContent(existing);
 
     return buildNotePagePayload({
       id: stringValue(field(existing, 'uuid_source') || existing.id),
@@ -1619,8 +1646,7 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
       tabKey: stringValue(field(existing, 'tab_key')),
       subTabKey: stringValue(field(existing, 'sub_tab_key')),
       pageNumber: Number(field(existing, 'page_number')) || 0,
-      textContent: decompressTextForRead(stringValue(field(existing, 'text_content'))),
-      drawingJson: decompressDrawingForRead(stringValue(field(existing, 'drawing_json'))),
+      ...contents,
       previewDataUrl: stringValue(field(existing, 'preview_data_url')),
       previewUrl: stringValue(field(existing, 'preview_url')),
       layoutKind: stringValue(field(existing, 'layout_kind')) || 'freeform',
@@ -1750,12 +1776,21 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
       throw new NotePageMutationError(409, 'NOTE_PAGE_IDENTITY_CONFLICT', existing);
     }
 
+    // Reject a stale version before staging content. The conditional PATCH
+    // below still protects against a writer racing after this read.
+    if (existing && field(existing, syncRevisionField) !== expectedRevision
+      && field(existing, syncRevisionField) !== writeId) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT', existing);
+    }
+    if (!existing && expectedRevision !== null) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_RECORD_MISSING');
+    }
+
     // Stamp genuine saves, including build64 clears. For an acknowledged write
     // predating this rollout, compare the original bytes so replay stays idempotent.
     if (isIndependentNote(tabKey) && Number(pageNumber) === 0) {
       const isReplay = existing && stringValue(field(existing, syncRevisionField)) === writeId;
-      if (!isReplay || readNoteDrawing(decompressDrawingForRead(
-        stringValue(field(existing, 'drawing_json')))).noteTextInitialized === true) {
+      if (!isReplay || readNoteDrawing(await readContent(existing, 'drawing_json')).noteTextInitialized === true) {
         drawingJson = stampNoteInitialization({ tabKey, pageNumber, drawingJson });
       }
     }
@@ -1773,6 +1808,16 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
     const normalizedPlanPhase = (planPhase === 'avant' || planPhase === 'apres')
       ? planPhase
       : null;
+    if (Buffer.byteLength(stringValue(textContent)) + Buffer.byteLength(stringValue(drawingJson)) > NOTE_CONTENT_MAX_BYTES) {
+      throw new NotePageMutationError(413, 'NOTE_PAGE_CONTENT_TOO_LARGE');
+    }
+    const contentIdentity = { patientId, dossierId, scopeType, scopeId, tabKey, subTabKey, pageNumber };
+    const preparedText = noteContent.prepare(stringValue(textContent), noteContentOwner(contentIdentity, 'text_content'));
+    const preparedDrawing = noteContent.prepare(drawingJson, noteContentOwner(contentIdentity, 'drawing_json'));
+    const persistContent = async () => {
+      await noteContent.persist(preparedText);
+      await noteContent.persist(preparedDrawing);
+    };
     const desiredFields = {
       dossier_id: dossierId || null,
       beneficiaire_prenom: beneficiary.patientFirstName,
@@ -1782,8 +1827,8 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
       scope_type: scopeType || 'legacy',
       scope_id: scopeId || dossierId || patientId,
       sub_tab_key: stringValue(subTabKey),
-      text_content: compressTextForStorage(stringValue(textContent)),
-      drawing_json: compressDrawingForStorage(drawingJson),
+      text_content: preparedText.stored,
+      drawing_json: preparedDrawing.stored,
       ...(supportsPreviewField ? { preview_data_url: previewDataUrlForStorage(previewDataUrl) } : {}),
       ...(supportsPreviewUrlField ? { preview_url: resolvedPreviewUrl } : {}),
       layout_kind: layoutKind || 'freeform',
@@ -1806,6 +1851,7 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
         if (error instanceof NotePageMutationError) error.observed = existing;
         throw error;
       }
+      await persistContent();
       if (writeDecision === 'update') {
         const params = new URLSearchParams({
           where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${expectedRevision})`,
@@ -1856,6 +1902,7 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
     if (expectedRevision !== null) {
       throw new NotePageMutationError(409, 'NOTE_PAGE_RECORD_MISSING');
     }
+    await persistContent();
     let created;
     try {
       created = await createRecord(notePagesTableId, {
@@ -1934,6 +1981,7 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
   },
 
   async getDocumentContent(documentId) {
+    if (isNoteChunkKey(documentId)) return null;
     const record = latestRecord(await queryAll(documentsTableId, {
       fields: ['uuid_source', 'beneficiaire_id', 'nom_fichier', 'mime_type', 'contenu_base64'],
       where: `(uuid_source,eq,${JSON.stringify(String(documentId))})`,
@@ -2245,9 +2293,9 @@ export const createMobileSyncStore = ({ absoluteUrl, preferLocal = false }) => {
       return adapter.listNotePagesByPatient(patientId, filters);
     },
 
-    async getNotePageById(notePageId) {
+    async getNotePageById(notePageId, options) {
       const adapter = await getAdapter();
-      return adapter.getNotePageById(notePageId);
+      return adapter.getNotePageById(notePageId, options);
     },
 
     async createNotePage(payload) {
