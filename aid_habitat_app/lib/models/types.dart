@@ -1,6 +1,7 @@
 // ignore_for_file: constant_identifier_names
 
 import 'dart:convert' show jsonDecode, jsonEncode;
+import 'housing_rooms.dart';
 
 enum DossierStatus {
   TO_VISIT,
@@ -561,6 +562,19 @@ class Patient {
 }
 
 class Housing {
+  final Map<String, List<HousingRoom>> _roomsByLevel;
+  Map<String, List<HousingRoom>> get roomsByLevel => {
+    for (final entry in <String, List<String>>{
+      'basement': basementRooms,
+      'rdc': rdcRooms,
+      'floor': floorRooms,
+      'secondFloor': secondFloorRooms,
+      'thirdFloor': thirdFloorRooms,
+    }.entries)
+      entry.key:
+          _roomsByLevel[entry.key] ??
+          parseHousingRooms(jsonEncode(entry.value), entry.key),
+  };
   final HousingType type;
   final int? year;
   final double? surface;
@@ -616,6 +630,7 @@ class Housing {
   final String accessObservation;
 
   Housing({
+    Map<String, List<HousingRoom>> roomsByLevel = const {},
     required this.type,
     this.year,
     this.surface,
@@ -669,7 +684,7 @@ class Housing {
     this.easyAccess = true,
     this.comments = '',
     this.accessObservation = '',
-  });
+  }) : _roomsByLevel = roomsByLevel;
 
   Housing copyWith({
     HousingType? type,
@@ -833,6 +848,7 @@ class AutonomyData {
 
 class BathroomInstance {
   final String id;
+  final String housingRoomId;
   final String levelField;
   final String levelLabel;
   final bool sdbBaignoire;
@@ -867,6 +883,7 @@ class BathroomInstance {
 
   const BathroomInstance({
     required this.id,
+    this.housingRoomId = '',
     this.levelField = '',
     this.levelLabel = '',
     this.sdbBaignoire = false,
@@ -894,6 +911,7 @@ class BathroomInstance {
   factory BathroomInstance.fromJson(Map<String, dynamic> json) =>
       BathroomInstance(
         id: json['id'] as String? ?? '',
+        housingRoomId: json['housingRoomId'] as String? ?? '',
         levelField: json['levelField'] as String? ?? '',
         levelLabel: json['levelLabel'] as String? ?? '',
         sdbBaignoire: json['sdbBaignoire'] as bool? ?? false,
@@ -925,6 +943,7 @@ class BathroomInstance {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    if (housingRoomId.isNotEmpty) 'housingRoomId': housingRoomId,
     'levelField': levelField,
     'levelLabel': levelLabel,
     'sdbBaignoire': sdbBaignoire,
@@ -952,6 +971,7 @@ class BathroomInstance {
 
 class WcInstance {
   final String id;
+  final String housingRoomId;
   final String levelField;
   final String levelLabel;
   // Trois états mutuellement exclusifs pour la hauteur de la cuvette :
@@ -981,6 +1001,7 @@ class WcInstance {
 
   const WcInstance({
     required this.id,
+    this.housingRoomId = '',
     this.levelField = '',
     this.levelLabel = '',
     this.wcCuvetteBonneHauteur = true,
@@ -996,6 +1017,7 @@ class WcInstance {
 
   factory WcInstance.fromJson(Map<String, dynamic> json) => WcInstance(
     id: json['id'] as String? ?? '',
+    housingRoomId: json['housingRoomId'] as String? ?? '',
     levelField: json['levelField'] as String? ?? '',
     levelLabel: json['levelLabel'] as String? ?? '',
     wcCuvetteBonneHauteur: json['wcCuvetteBonneHauteur'] as bool? ?? true,
@@ -1012,6 +1034,7 @@ class WcInstance {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    if (housingRoomId.isNotEmpty) 'housingRoomId': housingRoomId,
     'levelField': levelField,
     'levelLabel': levelLabel,
     'wcCuvetteBonneHauteur': wcCuvetteBonneHauteur,

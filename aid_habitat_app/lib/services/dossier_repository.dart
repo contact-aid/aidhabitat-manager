@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/types.dart';
+import '../models/housing_rooms.dart';
 import 'local_database.dart';
 import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
@@ -1846,24 +1847,24 @@ class DossierRepository {
       } catch (_) {}
     }
     if (map == null) return const {};
-    String encodeList(dynamic value) {
-      if (value is List) {
+    String encodeList(dynamic value, String level) {
+      if (value is! List) return '[]';
+      final identities = map!['_roomIds'];
+      final ids = identities is Map ? identities[level] : null;
+      if (ids is List && ids.length == value.length) {
         return jsonEncode(
-          value
-              .map((e) => e?.toString() ?? '')
-              .where((s) => s.isNotEmpty)
-              .toList(),
+          List.generate(value.length, (i) => {'id': ids[i], 'label': value[i]}),
         );
       }
-      return jsonEncode(const <String>[]);
+      return jsonEncode(value);
     }
 
     return {
-      'basement_rooms_json': encodeList(map['basement']),
-      'rdc_rooms_json': encodeList(map['rdc']),
-      'floor_rooms_json': encodeList(map['floor']),
-      'second_floor_rooms_json': encodeList(map['secondFloor']),
-      'third_floor_rooms_json': encodeList(map['thirdFloor']),
+      'basement_rooms_json': encodeList(map['basement'], 'basement'),
+      'rdc_rooms_json': encodeList(map['rdc'], 'rdc'),
+      'floor_rooms_json': encodeList(map['floor'], 'floor'),
+      'second_floor_rooms_json': encodeList(map['secondFloor'], 'secondFloor'),
+      'third_floor_rooms_json': encodeList(map['thirdFloor'], 'thirdFloor'),
     };
   }
 
@@ -2466,6 +2467,25 @@ class DossierRepository {
       beneficiaryPrepared:
           (row['dossier_beneficiary_prepared'] as int? ?? 0) == 1,
       housing: Housing(
+        roomsByLevel: {
+          'basement': parseHousingRooms(
+            row['housing_basement_rooms'] as String?,
+            'basement',
+          ),
+          'rdc': parseHousingRooms(row['housing_rdc_rooms'] as String?, 'rdc'),
+          'floor': parseHousingRooms(
+            row['housing_floor_rooms'] as String?,
+            'floor',
+          ),
+          'secondFloor': parseHousingRooms(
+            row['housing_second_floor_rooms'] as String?,
+            'secondFloor',
+          ),
+          'thirdFloor': parseHousingRooms(
+            row['housing_third_floor_rooms'] as String?,
+            'thirdFloor',
+          ),
+        },
         type: HousingType.values.byName(row['housing_type'] as String),
         year: row['housing_year_value'] as int?,
         surface: (row['housing_surface'] as num?)?.toDouble(),
@@ -2579,7 +2599,9 @@ class DossierRepository {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is List) {
-        return decoded.map((e) => e.toString()).toList(growable: false);
+        return decoded
+            .map((e) => e is Map ? e['label'].toString() : e.toString())
+            .toList(growable: false);
       }
     } catch (_) {
       /* fall through */
@@ -3034,7 +3056,8 @@ class DossierRepository {
       'second_floor_rooms_json': 'secondFloor',
       'third_floor_rooms_json': 'thirdFloor',
     };
-    final roomsBreakdown = <String, List<String>>{};
+    final roomsBreakdown = <String, dynamic>{};
+    final roomIds = <String, List<String>>{};
     final out = <String, dynamic>{};
     fields.forEach((key, value) {
       if (key == 'updated_at' || key == 'sync_state') return;
@@ -3048,10 +3071,13 @@ class DossierRepository {
           try {
             final decoded = jsonDecode(value);
             if (decoded is List) {
-              roomsBreakdown[breakdownKey] = decoded
-                  .map((e) => e?.toString() ?? '')
-                  .where((s) => s.isNotEmpty)
+              final rooms = parseHousingRooms(value, breakdownKey);
+              roomsBreakdown[breakdownKey] = rooms
+                  .map((room) => room.label)
                   .toList();
+              if (decoded.any((room) => room is Map)) {
+                roomIds[breakdownKey] = rooms.map((room) => room.id).toList();
+              }
             }
           } catch (_) {
             // JSON malformé → on n'ajoute pas cette clé.
@@ -3124,6 +3150,7 @@ class DossierRepository {
     // toutes les listes sont vides — c'est le moyen explicite de
     // « vider » les pièces côté serveur (ex. niveau désactivé).
     if (roomsBreakdown.isNotEmpty) {
+      if (roomIds.isNotEmpty) roomsBreakdown['_roomIds'] = roomIds;
       out['roomsBreakdown'] = roomsBreakdown;
     }
     return out;
@@ -3327,6 +3354,34 @@ class DossierRepository {
       );
     });
     SyncEngine().notify();
+  }
+
+  /// Explicit removal by diagnostic identity, never by count or position.
+  Future<void> removeDiagnosticRooms(
+    String dossierId, {
+    required Set<String> bathroomIds,
+    required Set<String> wcIds,
+  }) async {
+    final current = await fetchDiagnosticSanitaire(dossierId);
+    if (current == null) return;
+    final bathrooms = current.sdbInstances
+        .where((room) => !bathroomIds.contains(room.id))
+        .toList();
+    final toilets = current.wcInstances
+        .where((room) => !wcIds.contains(room.id))
+        .toList();
+    if (bathrooms.length == current.sdbInstances.length &&
+        toilets.length == current.wcInstances.length) {
+      return;
+    }
+    await upsertDiagnosticSanitaire(
+      dossierId,
+      DiagnosticSanitaire(
+        dossierId: dossierId,
+        sdbInstances: bathrooms,
+        wcInstances: toilets,
+      ),
+    );
   }
 
   /// Removes sanitary details whose room no longer exists in Accessibility.

@@ -28,8 +28,9 @@ void stampNewCollectionMutation(
   final guard = payload['concurrency'];
   if (updates is! Map ||
       guard is! Map ||
-      !hasCollectionUpdates(entityType, updates))
+      !hasCollectionUpdates(entityType, updates)) {
     return;
+  }
   final previousGuard = previous?['concurrency'];
   if (previous == null ||
       (previousGuard is Map &&
