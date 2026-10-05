@@ -25,7 +25,15 @@ The existing HTTP JSON limit remains 30 MiB for the entire serialized request, i
 
 ## Delivery prerequisites and rollback
 
-Independent review, exact candidate tests, backup of notes AND document fragments, verified encrypted iPad backup, and deployment authorization are still required. This code does not resolve the two incident operations or any version choice.
+Independent review, exact candidate tests, backup of server notes AND document fragments, and deployment authorization are required. This code does not resolve the two incident operations or any version choice.
+
+The incident uses API-only backup; a wired iPad backup is not a prerequisite. Build 70 cannot explicitly export its queued note and a conflict is not resent by global retry. Therefore an API-only backup of the blocked plan cannot be guaranteed before installing a client with explicit export support. Server backups do not contain unsent iPad edits. Coordinate that client dependency and verify each real backup receipt plus exact content readback before treating a local note as protected. Do not resolve a conflict merely to trigger capture.
+
+## Prepared API fallback
+
+Branch `codex/appergo-api-reader-fallback` starts at production 71 (`b7d054d6288b40d1f9af3df328357f4ce8a839de`) and adds only the note chunk implementation plus this documentation. It deliberately has no note-backup API endpoints or passive capture hook. This is an API code fallback, not a downgrade of the iPad or web client. Main owns image construction, publication and service configuration.
+
+When reverting the backup API, keep its encrypted volume and all key versions intact; endpoint removal does not erase the archives. Retain the independent backup verifier from the backup release in a secure recovery toolkit. Client backup requests will no longer be supported on this fallback, so never present them as successful. This branch keeps both reading and writing of NOTE_CHUNKS_V1, including the conditional-write protections. It does not flatten or migrate manifests back to inline text.
 
 After the first manifest is written, rolling the server back to a version without this reader is unsafe: that server cannot reconstruct the content. Keep a compatible reader in any rollback build. Old clients remain compatible through the upgraded API; direct NocoDB readers and external automation have not been inventoried beyond this repository.
 
