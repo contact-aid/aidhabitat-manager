@@ -1942,6 +1942,14 @@ class SyncRepository {
           );
           if (notes.length != 1) return null;
           local = notes.single;
+          // The current wire contract normalizes omitted/null text to empty.
+          // Reject pre-existing divergence, not only edits during the GET.
+          final localText = await OfflineVault.instance.openString(
+            local['text_content'] as String? ?? '',
+          );
+          if (localText != (payload['textContent']?.toString() ?? '')) {
+            return null;
+          }
           if (local['patient_local_id'] != payload['patientLocalId'] ||
               await OfflineVault.instance.openString(
                     local['drawing_json'] as String? ?? '',

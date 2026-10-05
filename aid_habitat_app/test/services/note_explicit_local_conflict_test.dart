@@ -247,6 +247,78 @@ void main() {
       expect(await db.query('note_pages'), editedNotes ?? beforeNotes);
     });
   }
+  for (final textCase in ['different', 'absent', 'null', 'same', 'empty']) {
+    test(
+      'pre-existing text contract $textCase is checked before remote reads',
+      () async {
+        final queuedText = textCase == 'different'
+            ? 'old text'
+            : textCase == 'same'
+            ? 'local text'
+            : textCase == 'empty'
+            ? ''
+            : null;
+        if (textCase != 'absent') {
+          await alterPayload({'textContent': queuedText});
+        }
+        final localText = textCase == 'empty' ? '' : 'local text';
+        await db.update('note_pages', {
+          'text_content': await OfflineVault.instance.sealString(localText),
+        });
+        final beforeOps = await db.query('sync_operations');
+        final beforeNotes = await db.query('note_pages');
+        var gets = 0;
+        final client = NocodbApiClient(
+          client: MockClient((request) async {
+            gets++;
+            return response(
+              request.url.queryParameters['scopeId'] == dossier
+                  ? []
+                  : [remote()],
+            );
+          }),
+        );
+        final allowed = textCase == 'same' || textCase == 'empty';
+        expect(
+          await DataService.forTesting(
+            apiClient: client,
+            syncRepository: sync,
+          ).resolveNoteConflictKeepingLocal(op),
+          allowed,
+        );
+        expect(gets, allowed ? 2 : 0);
+        expect(
+          (await db.query('note_pages')).single['text_content'],
+          beforeNotes.single['text_content'],
+        );
+        if (!allowed) {
+          expect(await db.query('sync_operations'), beforeOps);
+          expect(await db.query('note_pages'), beforeNotes);
+        }
+      },
+    );
+  }
+  test(
+    'explicit null text and empty local text permit a drawing-only resolution',
+    () async {
+      await alterPayload({'textContent': null});
+      final client = NocodbApiClient(
+        client: MockClient(
+          (request) async => response(
+            request.url.queryParameters['scopeId'] == dossier ? [] : [remote()],
+          ),
+        ),
+      );
+      expect(
+        await DataService.forTesting(
+          apiClient: client,
+          syncRepository: sync,
+        ).resolveNoteConflictKeepingLocal(op),
+        isTrue,
+      );
+      expect((await payload())['textContent'], isNull);
+    },
+  );
   test(
     'another account cannot even start the remote resolution read',
     () async {
