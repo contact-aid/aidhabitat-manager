@@ -1,4 +1,4 @@
-// Catalog des caisses de retraite principales (15 entrées NocoDB).
+// Catalog des caisses de retraite principales du référentiel NocoDB.
 //
 // Chaque entrée mappe un nom NocoDB normalisé (lowercase + espaces) vers :
 //  • `logoUrl` : chemin statique servi par express (public/ ou dist/)
@@ -18,6 +18,12 @@
 // composition typographique d'origine (.svg dans le même dossier).
 
 export const PRINCIPAL_FUNDS_CATALOG = {
+  'carsat': {
+    displayName: 'CARSAT',
+    logoUrl: '/retirement-logos/principal/carsat.jpg',
+    primary: '#002395',
+    secondary: '#6C8CC0',
+  },
   'cnav (assurance retraite / carsat)': {
     displayName: 'CNAV / CARSAT',
     logoUrl: '/retirement-logos/principal/cnav.png',
