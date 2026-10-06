@@ -10,9 +10,15 @@ test('CARSAT uses its dedicated official logo', () => {
   assert.equal(branding?.logoUrl, '/retirement-logos/principal/carsat.jpg');
 });
 
-test('the existing CNAV / CARSAT entry keeps its historical branding', () => {
+test('CNAV keeps its logo with the Assurance retraite label', () => {
+  const branding = getPrincipalFundBranding('CNAV (Assurance retraite)');
+
+  assert.equal(branding?.displayName, 'CNAV');
+  assert.equal(branding?.logoUrl, '/retirement-logos/principal/cnav.png');
+});
+
+test('the previous CNAV label remains a compatible branding alias', () => {
   const branding = getPrincipalFundBranding('CNAV (Assurance retraite / CARSAT)');
 
-  assert.equal(branding?.displayName, 'CNAV / CARSAT');
   assert.equal(branding?.logoUrl, '/retirement-logos/principal/cnav.png');
 });

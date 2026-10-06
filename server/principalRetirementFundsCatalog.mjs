@@ -24,8 +24,16 @@ export const PRINCIPAL_FUNDS_CATALOG = {
     primary: '#002395',
     secondary: '#6C8CC0',
   },
+  'cnav (assurance retraite)': {
+    displayName: 'CNAV',
+    logoUrl: '/retirement-logos/principal/cnav.png',
+    primary: '#0055A4',
+    secondary: '#003781',
+  },
+  // Ancien libellé conservé comme alias pour les caches locaux qui
+  // n'ont pas encore reçu le nouveau référentiel NocoDB.
   'cnav (assurance retraite / carsat)': {
-    displayName: 'CNAV / CARSAT',
+    displayName: 'CNAV',
     logoUrl: '/retirement-logos/principal/cnav.png',
     primary: '#0055A4',
     secondary: '#003781',
@@ -125,7 +133,7 @@ export const getPrincipalFundBranding = (name) => {
   if (!raw) return null;
   if (PRINCIPAL_FUNDS_CATALOG[raw]) return PRINCIPAL_FUNDS_CATALOG[raw];
   // Essai avec la partie avant la première parenthèse (ex. « CNAV »
-  // depuis « CNAV (Assurance retraite / CARSAT) »).
+  // depuis « CNAV (Assurance retraite) »).
   const short = raw.split('(')[0].trim();
   if (short && PRINCIPAL_FUNDS_CATALOG[short]) return PRINCIPAL_FUNDS_CATALOG[short];
   return null;
