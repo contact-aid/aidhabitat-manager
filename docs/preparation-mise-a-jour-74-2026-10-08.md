@@ -29,19 +29,21 @@ Le numéro candidat est `1.0.0+74`. Avant un build, confirmer dans App Store Con
 
 ## Recette à faire avant diffusion
 
+Ordre retenu avec l'utilisateur : tester d'abord la candidate dans une webapp isolée, puis sur iPad. L'URL active `app.aidhabitat.fr` sert encore `1.0.0+73` et ne permet pas de valider la candidate `+74`. Les services Easypanel portant le nom « staging » servent les domaines de production ; ils ne constituent pas un environnement de test. Une simple prévisualisation du bundle web raccordée à l'API actuelle serait également incomplète, car les nouvelles fonctions utilisent la candidate API. Préparer un couple web/API isolé avec des données fictives avant la recette interactive, ou obtenir une décision explicite de diffusion sur les services actifs après examen du plan de retour arrière.
+
 Utiliser uniquement des dossiers et documents fictifs :
 
 1. Créer, modifier puis supprimer un occupant ; vérifier RFR, année et catégorie de revenu après fermeture et réouverture.
 2. Sélectionner « Pacsé(e) », synchroniser, recharger sur web et iPad, puis vérifier le PDF.
 3. Mettre un dossier Airtable en attente, actualiser web et iPad, vérifier son masquage sans suppression de données ; enlever l'attente et vérifier sa réapparition. Répéter après suppression d'un dossier Airtable fictif.
-4. Sur iPad hors ligne, remplir un relevé fictif, utiliser « Valider » puis « Prévisualiser », corriger les champs signalés, revenir en ligne et vérifier que « Générer » produit le PDF attendu.
+4. Sur web, remplir un relevé fictif, utiliser « Valider » puis « Prévisualiser », corriger les champs signalés et vérifier que « Générer » produit le PDF attendu. Refaire ensuite le parcours hors ligne sur iPad après validation web.
 5. Sur un PDF ou une image de plusieurs pages, zoomer, changer de page et revenir, puis double-taper pour recentrer. Vérifier l'absence de scintillement visible.
 6. Comparer les notes longues, les occupants et les cases d'occupation du PDF généré avec le relevé. Vérifier que la note Bénéficiaire reste hors du rapport.
 
 ## Ordre de livraison proposé
 
-1. Effectuer la recette fictive, notamment du changement manuel d'état et de la référence « Pacsé(e) », sans modifier de dossier réel.
-2. Résoudre les deux blocages du contrôle iPad et terminer la recette sur appareil physique.
+1. Rendre le couple web/API candidat accessible sur un environnement isolé avec des données fictives, puis effectuer la recette web, notamment du changement manuel d'état et de la référence « Pacsé(e) ».
+2. Résoudre les deux blocages du contrôle iPad et terminer la recette sur appareil physique après validation web.
 3. Diffuser l'API compatible avec les anciens clients, puis la webapp, puis le build iPad après vérification des versions et des sauvegardes.
 4. Après diffusion, l'utilisateur remettra lui-même à leur bonne place, ajoutera ou supprimera les dossiers notés sur son post-it et sa feuille blanche, en utilisant notamment le changement manuel d'état. Ces documents ne sont pas une entrée attendue pour le développement de la version `+74`.
 
