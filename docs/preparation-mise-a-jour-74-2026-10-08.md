@@ -2,6 +2,8 @@
 
 Date : 8 octobre 2026. Source : branche `codex/appergo-next-update-20261008`.
 
+Lecture seule des services actifs le même jour : la webapp annonce `1.0.0+73` ; `/api/health/live` et `/api/health/ready` répondent HTTP 200 avec le SHA API `c757288ac03965c785dd14f82aadccd0f5a8a57b`. Le `main` distant pointe vers `96a2a416878aa32a0899c6d5a51061f35a7a833e`, ancêtre de la branche candidate. La candidate n'est donc pas la version actuellement servie.
+
 ## Vérifications effectuées
 
 - La suite serveur passe sur données fictives : 408 tests. Elle couvre notamment le statut Airtable « En attente », la conservation des occupants et RFR, la suppression de « dépendance » du PDF, les détails APA/invalidité, la référence « Pacsé(e) » et les pages de continuation des notes.
