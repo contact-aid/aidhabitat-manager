@@ -24,7 +24,8 @@ class ContextTab extends StatefulWidget {
   final int conflictRefreshToken;
 
   /// Called when the user toggles a numbered medical flag (1 = Pathologie,
-  /// 2 = Suivi médical, 3 = Sensoriel). `checked` is the new state. Le
+  /// 2 = Suivi médical, 3 = Sensoriel, 4 = Environnement social).
+  /// `checked` is the new state. Le
   /// parent met à jour les flags de la PAGE COURANTE de la note Médical
   /// (les numéros sont désormais par-page, plus globaux — un onglet
   /// Médical peut afficher {1} sur page 1 et {2, 3} sur page 2).
@@ -33,7 +34,7 @@ class ContextTab extends StatefulWidget {
 
   /// Flags médicaux actuellement visibles sur la PAGE COURANTE de la
   /// note "Contexte de vie > Médical". Source unique de vérité pour
-  /// l'état coché des cases Pathologie / Suivi / Sensoriel. Poussé par
+  /// l'état coché des quatre cases médicales. Poussé par
   /// le parent à chaque changement de page dans NotesWidget.
   final Set<int>? currentMedicalFlags;
 
@@ -339,6 +340,7 @@ class _ContextTabState extends State<ContextTab>
       'pathology' => 1,
       'followUp' => 2,
       'sensory' => 3,
+      'socialEnvironment' => 4,
       _ => 0,
     };
     if (flagNumber == 0) return;
@@ -697,9 +699,9 @@ class _ContextTabState extends State<ContextTab>
       first = p.occupants[idx].firstName.trim();
       last = p.occupants[idx].lastName.trim();
     }
-    final display = (first.isEmpty && last.isEmpty)
-        ? 'Occupant ${idx + 1}'
-        : [first, last.toUpperCase()].where((s) => s.isNotEmpty).join(' ');
+    final display = first.isNotEmpty
+        ? first
+        : (last.isNotEmpty ? last : 'Occupant ${idx + 1}');
     final total = _contextOccupants.length;
     final hasNav = total > 1;
     // `role` (BÉNÉFICIAIRE PRINCIPAL / CONJOINT·E) retiré sur demande user
@@ -897,7 +899,7 @@ class _ContextTabState extends State<ContextTab>
 
   Widget _buildMedical() {
     final occ = _active;
-    // Les cases à cocher Pathologie / Suivi / Sensoriel représentent
+    // Les quatre cases à cocher représentent
     // désormais les flags de la PAGE COURANTE de la note Médical —
     // poussés par le parent via [widget.currentMedicalFlags]. Quand
     // l'utilisateur change de page dans NotesWidget, ces cases se
@@ -918,6 +920,11 @@ class _ContextTabState extends State<ContextTab>
         key: 'sensory',
         label: 'Sensoriel',
         completed: pageFlags.contains(3),
+      ),
+      _MedicalFlag(
+        key: 'socialEnvironment',
+        label: 'Environnement social',
+        completed: pageFlags.contains(4),
       ),
     ];
     return Column(

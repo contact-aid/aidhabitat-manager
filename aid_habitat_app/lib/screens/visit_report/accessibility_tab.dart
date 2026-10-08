@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/housing_rooms.dart';
+import 'sanitary_room_links.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
 import '../../components/brand_colors.dart';
@@ -10,6 +12,7 @@ import '../../components/cta_text_style.dart';
 import '../../components/confirmation_dialog.dart';
 import '../../components/form_widgets.dart';
 import '../../components/soft_transitions.dart';
+import '../../components/year_picker_field.dart';
 
 /// Accessibilité tab — refonte :
 ///   Général : type logement · années · surface · chauffage · niveaux
@@ -209,7 +212,9 @@ class _AccessibilityTabState extends State<AccessibilityTab>
 
   // Niveaux (ordre d'ajout par l'utilisateur)
   List<String> _orderedLevels = [];
-  final Map<String, List<String>> _levelRooms = {};
+  final Map<String, List<HousingRoom>> _levelRooms = {};
+  Map<String, List<HousingRoom>> _baselineRoomsByLevel = {};
+  final Map<String, String> _invalidRoomRaw = {};
   final Map<String, TextEditingController> _customRoomCtrls = {};
   final Map<String, String?> _activeRoomByLevel = {};
 
@@ -452,15 +457,25 @@ class _AccessibilityTabState extends State<AccessibilityTab>
 
     // Niveaux
     for (final cfg in _kLevelConfigs) {
-      _levelRooms[cfg.field] = _parseRooms(
-        row?[cfg.roomsField] as String? ?? '[]',
-      );
+      try {
+        _levelRooms[cfg.field] = parseHousingRooms(
+          row?[cfg.roomsField] as String?,
+          cfg.field,
+        );
+        _invalidRoomRaw.remove(cfg.field);
+      } catch (_) {
+        _invalidRoomRaw[cfg.field] = row?[cfg.roomsField]?.toString() ?? '';
+        _levelRooms[cfg.field] = [];
+      }
       final controller = _customRoomCtrls.putIfAbsent(
         cfg.field,
         () => TextEditingController(),
       );
       controller.clear();
     }
+    _baselineRoomsByLevel = {
+      for (final entry in _levelRooms.entries) entry.key: List.of(entry.value),
+    };
     _orderedLevels = _kLevelConfigs
         .where((c) => (row?[c.field] as int? ?? 0) == 1)
         .map((c) => c.field)
@@ -533,7 +548,9 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     if ((row?['jardin'] as int? ?? 0) == 1) _annexes.add('Jardin');
     // Sync Garage depuis les pièces des niveaux : si "Garage" est coché
     // dans n'importe quel niveau, l'annexe Garage est automatiquement activée.
-    if (_levelRooms.values.any((rooms) => rooms.contains('Garage'))) {
+    if (_levelRooms.values.any(
+      (rooms) => rooms.any((room) => room.label == 'Garage'),
+    )) {
       _annexes.add('Garage');
     }
 
@@ -555,15 +572,6 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     if (_portail) _motorisationOrder.add('Portail');
 
     if (mounted) setState(() => _loaded = true);
-  }
-
-  List<String> _parseRooms(String raw) {
-    if (raw.trim().isEmpty) return [];
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is List) return decoded.map((e) => e.toString()).toList();
-    } catch (_) {}
-    return [];
   }
 
   Set<String> _parseHeatingJson(String raw) {
@@ -736,7 +744,13 @@ class _AccessibilityTabState extends State<AccessibilityTab>
 
     for (final cfg in _kLevelConfigs) {
       map[cfg.field] = _orderedLevels.contains(cfg.field) ? 1 : 0;
-      map[cfg.roomsField] = jsonEncode(_levelRooms[cfg.field] ?? []);
+      map[cfg.roomsField] =
+          _invalidRoomRaw[cfg.field] ??
+          jsonEncode(
+            (_levelRooms[cfg.field] ?? [])
+                .map((room) => room.toJson())
+                .toList(),
+          );
       // Auto-remplit la description du niveau avec la liste des pièces
       // séparées par des virgules (avec exposants ² ³ pour les
       // doublons). Cf. `_formatRoomsWithCounts`. Alimente les champs
@@ -750,7 +764,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
       // Pour second_floor / third_floor on stocke quand même côté local
       // (au cas où une colonne serait ajoutée plus tard).
       map['${cfg.field}_desc'] = _formatRoomsWithCounts(
-        _levelRooms[cfg.field] ?? [],
+        (_levelRooms[cfg.field] ?? []).map((room) => room.label).toList(),
       );
     }
 
@@ -798,7 +812,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
       (cfg) => latestSnapshot[cfg.roomsField] == nextSnapshot[cfg.roomsField],
     );
     if (roomsChanged && roomsStillMatch) {
-      await _pruneSanitaryRooms();
+      await _pruneSanitaryRooms(sanitaryHousingRooms(nextSnapshot));
     }
     // A second edit may have changed the same field while updateHousing was
     // awaiting SQLite. Keep that field dirty for the drain loop instead of
@@ -812,19 +826,51 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     if (mounted) widget.onHousingChanged?.call();
   }
 
-  Future<void> _pruneSanitaryRooms() async {
-    final bathroomLevels = <String>{};
-    final wcLevels = <String>{};
-    for (final cfg in _kLevelConfigs) {
-      final rooms = _levelRooms[cfg.field] ?? const <String>[];
-      if (rooms.contains('Salle de bain')) bathroomLevels.add(cfg.field);
-      if (rooms.contains('WC')) wcLevels.add(cfg.field);
+  Future<void> _pruneSanitaryRooms(
+    Map<String, List<HousingRoom>> savedRooms,
+  ) async {
+    final retained = savedRooms.values
+        .expand((rooms) => rooms)
+        .map((room) => room.id)
+        .toSet();
+    final removed = _baselineRoomsByLevel.values
+        .expand((rooms) => rooms)
+        .map((room) => room.id)
+        .where((id) => !retained.contains(id))
+        .toSet();
+    if (removed.isNotEmpty) {
+      final diagnostic = await widget.repository.fetchDiagnosticSanitaire(
+        widget.dossier.id,
+      );
+      final bathrooms = sanitaryRoomLinks(
+        roomsByLevel: _baselineRoomsByLevel,
+        target: 'Salle de bain',
+        diagnostics: (diagnostic?.sdbInstances ?? []).map(
+          (room) => room.toJson(),
+        ),
+      );
+      final toilets = sanitaryRoomLinks(
+        roomsByLevel: _baselineRoomsByLevel,
+        target: 'WC',
+        diagnostics: (diagnostic?.wcInstances ?? []).map(
+          (room) => room.toJson(),
+        ),
+      );
+      await widget.repository.removeDiagnosticRooms(
+        widget.dossier.id,
+        bathroomIds: bathrooms.entries
+            .where((entry) => removed.contains(entry.value))
+            .map((entry) => entry.key)
+            .toSet(),
+        wcIds: toilets.entries
+            .where((entry) => removed.contains(entry.value))
+            .map((entry) => entry.key)
+            .toSet(),
+      );
     }
-    await widget.repository.pruneDiagnosticSanitaireForRooms(
-      widget.dossier.id,
-      bathroomLevelFields: bathroomLevels,
-      wcLevelFields: wcLevels,
-    );
+    _baselineRoomsByLevel = {
+      for (final entry in savedRooms.entries) entry.key: List.of(entry.value),
+    };
   }
 
   void _markChanged([Iterable<String> dirtyKeys = const []]) {
@@ -996,7 +1042,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: _YearPickerField(
+              child: YearPickerField(
                 label: 'Construction',
                 value: _yearConstruction,
                 showWarning: yearConstructionInvalid,
@@ -1040,7 +1086,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: _YearPickerField(
+              child: YearPickerField(
                 label: "Habitation",
                 value: _yearHabitation,
                 showWarning: yearHabitationInvalid,
@@ -1571,7 +1617,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
 
   void _syncGarageAnnexeFromLevels() {
     final stillPresent = _levelRooms.values.any(
-      (rooms) => rooms.contains('Garage'),
+      (rooms) => rooms.any((room) => room.label == 'Garage'),
     );
     if (stillPresent) {
       _annexes.add('Garage');
@@ -1614,15 +1660,15 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   }
 
   void _changeRoomCount(_LevelConfig cfg, String room, int delta) {
-    final current = List<String>.from(_levelRooms[cfg.field] ?? []);
-    final count = current.where((r) => r == room).length;
+    final current = List<HousingRoom>.from(_levelRooms[cfg.field] ?? []);
+    final count = current.where((r) => r.label == room).length;
     if (delta > 0) {
       if (count >= 4) return;
-      current.add(room);
+      current.add(createHousingRoom(room));
     } else {
       if (count <= 0) return;
       for (var i = current.length - 1; i >= 0; i--) {
-        if (current[i] == room) {
+        if (current[i].label == room) {
           current.removeAt(i);
           break;
         }
@@ -1633,7 +1679,7 @@ class _AccessibilityTabState extends State<AccessibilityTab>
       final roomKey = room.toLowerCase();
       final roomStillVisible =
           cfg.presetRooms.any((preset) => preset.toLowerCase() == roomKey) ||
-          current.any((value) => value.toLowerCase() == roomKey);
+          current.any((value) => value.label.toLowerCase() == roomKey);
       if (!roomStillVisible && _activeRoomByLevel[cfg.field] == room) {
         _activeRoomByLevel[cfg.field] = null;
       }
@@ -1650,7 +1696,8 @@ class _AccessibilityTabState extends State<AccessibilityTab>
       return;
     }
 
-    final current = List<String>.from(_levelRooms[cfg.field] ?? [])..add(room);
+    final current = List<HousingRoom>.from(_levelRooms[cfg.field] ?? [])
+      ..add(createHousingRoom(room));
     setState(() {
       _levelRooms[cfg.field] = current;
       _activeRoomByLevel[cfg.field] = room;
@@ -1826,7 +1873,17 @@ class _AccessibilityTabState extends State<AccessibilityTab>
   }
 
   Widget _buildLevelCard(_LevelConfig cfg) {
-    final rooms = _levelRooms[cfg.field] ?? [];
+    if (_invalidRoomRaw.containsKey(cfg.field)) {
+      return ListTile(
+        title: Text(cfg.label),
+        subtitle: const Text(
+          'Liste de pièces ancienne illisible. Les données sont conservées ; ce niveau ne peut pas être modifié.',
+        ),
+      );
+    }
+    final rooms = (_levelRooms[cfg.field] ?? [])
+        .map((room) => room.label)
+        .toList();
     final allItems = <String>[
       ...cfg.presetRooms,
       ...rooms.where(
@@ -2150,19 +2207,19 @@ class _AccessibilityTabState extends State<AccessibilityTab>
     final ctrl = _customRoomCtrls[cfg.field]!;
     final val = ctrl.text.trim();
     if (val.isEmpty) return;
-    final current = List<String>.from(_levelRooms[cfg.field] ?? []);
+    final current = List<HousingRoom>.from(_levelRooms[cfg.field] ?? []);
     final lc = val.toLowerCase();
-    if (!current.any((r) => r.toLowerCase() == lc) &&
+    if (!current.any((r) => r.label.toLowerCase() == lc) &&
         !cfg.presetRooms.any((p) => p.toLowerCase() == lc)) {
-      current.add(val);
+      current.add(createHousingRoom(val));
     }
     ctrl.clear();
     final activeRoom = cfg.presetRooms.cast<String?>().firstWhere(
       (room) => room?.toLowerCase() == lc,
-      orElse: () => current.cast<String?>().firstWhere(
-        (room) => room?.toLowerCase() == lc,
-        orElse: () => val,
-      ),
+      orElse: () => current
+          .map((room) => room.label)
+          .cast<String?>()
+          .firstWhere((room) => room?.toLowerCase() == lc, orElse: () => val),
     )!;
     setState(() {
       _levelRooms[cfg.field] = current;
@@ -2383,229 +2440,6 @@ class _AccessibilityTabState extends State<AccessibilityTab>
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-class _YearPickerField extends StatelessWidget {
-  const _YearPickerField({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-    this.showWarning = false,
-    this.warningText,
-  });
-
-  final String label;
-  final String value;
-  final ValueChanged<String> onChanged;
-  final bool showWarning;
-  final String? warningText;
-
-  Future<void> _pickYear(BuildContext context) async {
-    final now = DateTime.now().year;
-    final parsed = int.tryParse(value.trim());
-    final years = List<int>.generate(now - 1700 + 2, (i) => now + 1 - i);
-    final initialValue = parsed != null && years.contains(parsed)
-        ? parsed
-        : now;
-    final initialIdx = years.indexOf(initialValue);
-    final scrollCtrl = ScrollController(
-      initialScrollOffset: initialIdx > 5 ? ((initialIdx ~/ 3) - 1) * 56.0 : 0,
-    );
-
-    final picked = await showSoftDialog<int>(
-      context: context,
-      barrierDismissible: true,
-      builder: (dialogCtx) {
-        int pending = initialValue;
-        bool closing = false;
-        return StatefulBuilder(
-          builder: (ctx, setLocal) => AlertDialog(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.white,
-            title: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.25,
-                color: Color(0xFF0E1116),
-              ),
-            ),
-            contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-            content: SizedBox(
-              width: 320,
-              height: 360,
-              child: Scrollbar(
-                controller: scrollCtrl,
-                child: GridView.builder(
-                  controller: scrollCtrl,
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    mainAxisSpacing: 8,
-                    crossAxisSpacing: 8,
-                    childAspectRatio: 2.2,
-                  ),
-                  itemCount: years.length,
-                  itemBuilder: (_, i) {
-                    final isSelected = years[i] == pending;
-                    return InkWell(
-                      onTap: closing
-                          ? null
-                          : () {
-                              final selectedValue = years[i];
-                              setLocal(() {
-                                pending = selectedValue;
-                                closing = true;
-                              });
-                              Future.delayed(
-                                const Duration(milliseconds: 180),
-                                () {
-                                  if (!dialogCtx.mounted) return;
-                                  if (Navigator.of(dialogCtx).canPop()) {
-                                    Navigator.pop(dialogCtx, selectedValue);
-                                  }
-                                },
-                              );
-                            },
-                      borderRadius: BorderRadius.circular(10),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        curve: Curves.easeOut,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? const Color(0xFF0E1116)
-                              : const Color(0xFFF2F4F6),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: AnimatedDefaultTextStyle(
-                          duration: const Duration(milliseconds: 180),
-                          curve: Curves.easeOut,
-                          style: DefaultTextStyle.of(ctx).style.copyWith(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w400,
-                            color: isSelected
-                                ? Colors.white
-                                : const Color(0xFF0E1116),
-                            decoration: TextDecoration.none,
-                          ),
-                          child: Text('${years[i]}'),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-            actionsPadding: const EdgeInsets.only(right: 16, bottom: 8),
-            actions: [
-              TextButton(
-                onPressed: closing
-                    ? null
-                    : () => Navigator.pop(dialogCtx, null),
-                child: const Text(
-                  'Annuler',
-                  style: TextStyle(
-                    color: Color(0xFF5C6670),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-    if (picked == null) return;
-    onChanged('$picked');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 14,
-            color: Color(0xFF0E1116),
-          ),
-        ),
-        const SizedBox(height: 5),
-        InkWell(
-          onTap: () => _pickYear(context),
-          borderRadius: BorderRadius.circular(999),
-          child: Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(
-                color: showWarning
-                    ? const Color(0xFFC48429)
-                    : const Color(0xFFB9C0C7),
-                width: showWarning ? 1.5 : 1,
-              ),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    value.trim().isEmpty ? 'Sélectionner' : value.trim(),
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: value.trim().isEmpty
-                          ? const Color(0xFF8A939D)
-                          : const Color(0xFF2B323A),
-                    ),
-                  ),
-                ),
-                if (value.trim().isNotEmpty)
-                  IconButton(
-                    tooltip: 'Effacer',
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(
-                      width: 28,
-                      height: 28,
-                    ),
-                    onPressed: () => onChanged(''),
-                    icon: const Icon(
-                      LucideIcons.x,
-                      size: 16,
-                      color: Color(0xFF8A939D),
-                    ),
-                  )
-                else
-                  Icon(
-                    LucideIcons.calendarDays,
-                    size: 16,
-                    color: showWarning
-                        ? const Color(0xFFF59E0B)
-                        : const Color(0xFF8A939D),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        if (showWarning && warningText != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 4, left: 4),
-            child: Text(
-              warningText!,
-              style: const TextStyle(
-                fontSize: 14,
-                color: Color(0xFFF59E0B),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
 
 class _QuickNavItem {
   final IconData icon;

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'note_legacy_identity.dart';
 import 'dart:convert';
 import 'context_sync_protocol.dart';
 import 'dart:io';
@@ -173,6 +174,24 @@ bool _isTransientNetworkError(Object error) =>
 /// (timeout, socket, http) en [TransientRemoteException]. Les 5xx sont
 /// transformés avant le check de statut, les 4xx restent des Exception
 /// standards.
+String _noteDiagnosticSuffix(http.Response response) {
+  String? requestId;
+  String? code;
+  try {
+    final body = jsonDecode(response.body);
+    if (body is Map) {
+      requestId = body['requestId']?.toString();
+      code = body['error']?.toString();
+    }
+  } catch (_) {}
+  requestId ??= response.headers['x-request-id'];
+  final safeRequest =
+      requestId != null && RegExp(r'^[a-fA-F0-9-]{36}$').hasMatch(requestId);
+  final safeCode =
+      code != null && RegExp(r'^[A-Z][A-Z0-9_]{1,95}$').hasMatch(code);
+  return '${safeCode ? ' code=$code' : ''}${safeRequest ? ' requestId=$requestId' : ''}';
+}
+
 Future<http.Response> _runWithTransientGuard(
   String context,
   Future<http.Response> Function() request,
@@ -181,7 +200,8 @@ Future<http.Response> _runWithTransientGuard(
     final response = await request();
     if (response.statusCode >= 500) {
       throw TransientRemoteException(
-        '$context failed (${response.statusCode})',
+        '$context failed (${response.statusCode})'
+        '${context == 'Remote note sync' ? _noteDiagnosticSuffix(response) : ''}',
         statusCode: response.statusCode,
       );
     }
@@ -1550,12 +1570,173 @@ class NocodbApiClient {
     return document;
   }
 
+  Future<Map<String, dynamic>> backupNoteSnapshot({
+    required String patientId,
+    required String snapshotJson,
+  }) async {
+    if (!AppConfig.hasRemoteConfig) {
+      throw StateError('API de sauvegarde indisponible.');
+    }
+    final body = jsonEncode({
+      'patientId': patientId,
+      'snapshotJson': snapshotJson,
+    });
+    if (utf8.encode(body).length > 30 * 1024 * 1024) {
+      throw StateError('La requête dépasse la capacité de sauvegarde.');
+    }
+    final response = await _client
+        .post(
+          Uri.parse('$_baseUrl/api/note-backups'),
+          headers: _headers,
+          body: body,
+        )
+        .timeout(_uploadTimeout);
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      throw StateError(
+        'Sauvegarde API indisponible (${response.statusCode}). La note locale est conservée.',
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    final data = decoded is Map && decoded['success'] == true
+        ? decoded['data']
+        : null;
+    if (data is! Map || data['receipt'] is! Map) {
+      throw const FormatException('Reçu de sauvegarde invalide.');
+    }
+    return (data['receipt'] as Map).cast<String, dynamic>();
+  }
+
+  Future<Map<String, dynamic>> readNoteBackupContent(String backupId) async {
+    if (!AppConfig.hasRemoteConfig) {
+      throw StateError('API de sauvegarde indisponible.');
+    }
+    final response = await _client
+        .get(
+          Uri.parse(
+            '$_baseUrl/api/note-backups/${Uri.encodeComponent(backupId)}/content',
+          ),
+          headers: _headers,
+        )
+        .timeout(_uploadTimeout);
+    if (response.statusCode != 200) {
+      throw StateError(
+        'Relecture de sauvegarde indisponible (${response.statusCode}).',
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map ||
+        decoded['success'] != true ||
+        decoded['data'] is! Map) {
+      throw const FormatException('Relecture de sauvegarde invalide.');
+    }
+    return (decoded['data'] as Map).cast<String, dynamic>();
+  }
+
+  /// Read-only proof for a narrowly scoped legacy identity repair.
+  Future<Map<String, dynamic>?> findLegacyNoteForRevision({
+    required String patientId,
+    required String dossierId,
+    required String scopeType,
+    required String tabKey,
+    required int pageNumber,
+    required String? expectedRevision,
+    String? writeId,
+  }) async {
+    if (expectedRevision == null ||
+        dossierId.isEmpty ||
+        dossierId == patientId) {
+      return null;
+    }
+    final remote = await fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: scopeType,
+      scopeId: patientId,
+    );
+    if (remote == null ||
+        !matchesLegacyNoteIdentity(
+          remote: remote,
+          patientId: patientId,
+          dossierId: dossierId,
+          scopeType: scopeType,
+          tabKey: tabKey,
+          pageNumber: pageNumber,
+          expectedRevision: expectedRevision,
+          writeId: writeId,
+        )) {
+      return null;
+    }
+    return remote;
+  }
+
+  /// Explicit "keep local" only. Never used by automatic missing-page repair.
+  /// An invalid/ambiguous response throws; it must not become proof of absence.
+  Future<Map<String, dynamic>?> fetchNoteForExplicitLocalChoice({
+    required String patientId,
+    required String dossierId,
+    required String scopeType,
+    required String scopeId,
+    required String tabKey,
+    required int pageNumber,
+    String? subTabKey,
+  }) async {
+    if (subTabKey != null && subTabKey.isNotEmpty) {
+      throw const FormatException('Subtab review is not supported');
+    }
+    final canonical = await fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: scopeType,
+      scopeId: scopeId,
+    );
+    if (canonical != null) {
+      if (canonical['scopeType'] != scopeType ||
+          canonical['scopeId'] != scopeId ||
+          (dossierId.isNotEmpty && canonical['dossierId'] != dossierId) ||
+          (canonical['subTabKey'] != null && canonical['subTabKey'] != '')) {
+        throw const FormatException('Remote note identity mismatch');
+      }
+      return canonical;
+    }
+    if (dossierId.isEmpty ||
+        dossierId == patientId ||
+        scopeId == patientId ||
+        const {'Bénéficiaire-Notes', 'notes_rapides'}.contains(tabKey)) {
+      return null;
+    }
+    if (scopeId != dossierId) {
+      throw const FormatException('Unrecognized note scope');
+    }
+    final legacy = await fetchNotePage(
+      patientId: patientId,
+      tabKey: tabKey,
+      pageNumber: pageNumber,
+      scopeType: scopeType,
+      scopeId: patientId,
+    );
+    if (legacy != null &&
+        !matchesLegacyNoteAddress(
+          remote: legacy,
+          patientId: patientId,
+          dossierId: dossierId,
+          scopeType: scopeType,
+          tabKey: tabKey,
+          pageNumber: pageNumber,
+        )) {
+      throw const FormatException('Legacy note identity mismatch');
+    }
+    return legacy;
+  }
+
   Future<Map<String, dynamic>> upsertNotePage({
     required String notePageId,
     required String patientId,
     required String tabKey,
     required int pageNumber,
     required String drawingJson,
+    String? textContent,
     String scopeType = 'dossier_detail',
     String? scopeId,
     String? subTabKey,
@@ -1586,6 +1767,7 @@ class NocodbApiClient {
               if (subTabKey != null) 'subTabKey': subTabKey,
               'pageNumber': pageNumber,
               'drawingJson': drawingJson,
+              if (textContent != null) 'textContent': textContent,
               'layoutKind': layoutKind,
               // Phase Plans (avant / apres / null). Côté serveur :
               // ignoré si la table NocoDB n'a pas encore la colonne.
@@ -1609,12 +1791,16 @@ class NocodbApiClient {
         remoteData = jsonDecode(response.body) as Map<String, dynamic>;
       } catch (_) {}
       throw ConflictException(
-        'Conflit de note pour $tabKey, page $pageNumber',
+        'Conflit de note pour $tabKey, page $pageNumber '
+        '(${response.statusCode})${_noteDiagnosticSuffix(response)}',
         remoteData: remoteData,
       );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Remote note sync failed (${response.statusCode})');
+      throw Exception(
+        'Remote note sync failed (${response.statusCode})'
+        '${_noteDiagnosticSuffix(response)}',
+      );
     }
 
     final payload = jsonDecode(response.body) as Map<String, dynamic>;
@@ -2739,7 +2925,7 @@ class NocodbApiClient {
     String? scopeType,
     String? scopeId,
   }) async {
-    if (!AppConfig.hasRemoteConfig) return null;
+    if (!AppConfig.hasRemoteConfig) throw StateError('Remote config missing');
 
     final uri = Uri.parse('$_baseUrl/api/note-pages/$patientId').replace(
       queryParameters: {
@@ -2762,13 +2948,24 @@ class NocodbApiClient {
     }
 
     final payload = jsonDecode(response.body) as Map<String, dynamic>;
-    final data = (payload['data'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final notePages = ((data['notePages'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((item) => item.cast<String, dynamic>())
-        .toList();
-    if (notePages.isEmpty) return null;
-    return notePages.first;
+    final data = payload['data'];
+    if (payload['success'] != true ||
+        data is! Map ||
+        data['notePages'] is! List) {
+      throw const FormatException('Unverified remote note response');
+    }
+    final pages = data['notePages'] as List;
+    if (pages.isEmpty) return null;
+    if (pages.length != 1 || pages.single is! Map) {
+      throw const FormatException('Ambiguous remote note response');
+    }
+    final note = (pages.single as Map).cast<String, dynamic>();
+    if (note['patientId'] != patientId ||
+        note['tabKey'] != tabKey ||
+        int.tryParse('${note['pageNumber']}') != pageNumber) {
+      throw const FormatException('Remote note identity mismatch');
+    }
+    return note;
   }
 
   /// Fetches TOUTES les notes d'un patient en UNE seule requête HTTP.
@@ -2939,8 +3136,30 @@ class NocodbApiClient {
 
   DossierStatus _mapStatus(String? status) {
     switch (status) {
+      case 'En attente':
+        return DossierStatus.PENDING;
+      case 'Visite fin de travaux':
+        return DossierStatus.POST_WORKS_VISIT;
+      case 'Visité':
+        return DossierStatus.VISITED;
+      case 'Attente devis':
+        return DossierStatus.WAITING_QUOTES;
+      case 'Devis reçus':
+        return DossierStatus.QUOTES_RECEIVED;
+      case 'Attente subvention':
+        return DossierStatus.WAITING_GRANT;
+      case 'Subvention validée':
       case 'Validé':
         return DossierStatus.GRANT_VALIDATED;
+      case 'Travaux démarrés':
+        return DossierStatus.WORKS_STARTED;
+      case 'Travaux terminés':
+        return DossierStatus.WORKS_COMPLETED;
+      case 'Clôturé':
+      case 'Archivé':
+        return status == 'Archivé'
+            ? DossierStatus.ARCHIVED
+            : DossierStatus.CLOSED;
       case 'En cours':
         return DossierStatus.IN_PROGRESS;
       case 'Clos':

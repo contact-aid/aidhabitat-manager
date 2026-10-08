@@ -210,50 +210,24 @@ void main() {
     ]);
   });
 
-  testWidgets('server choice refreshes dependence without saving stale form', (
-    tester,
-  ) async {
+  testWidgets('removed dependence stays hidden and legacy data survives a health edit', (tester) async {
     final repository = _Repository();
-    Patient patientWithDependence(String value) {
-      final p = _dossier().patient;
-      return Patient(
-        id: p.id,
-        firstName: p.firstName,
-        lastName: p.lastName,
-        birthDate: p.birthDate,
-        phone: p.phone,
-        email: p.email,
-        address: p.address,
-        city: p.city,
-        zipCode: p.zipCode,
-        familySituation: p.familySituation,
-        incomeCategory: p.incomeCategory,
-        trustedPerson: p.trustedPerson,
-        dependenceTxt: value,
-        occupants: [Occupant(dependenceTxt: value)],
-      );
-    }
-
-    final local = _dossier().copyWith(patient: patientWithDependence('Canne'));
-    await _mount(tester, repository, dossier: local, section: 2);
-    FormToggleGroup dependence() => tester.widget<FormToggleGroup>(
-      find.byWidgetPredicate(
-        (widget) => widget is FormToggleGroup && widget.label == 'Dépendance',
-      ),
-    );
-    expect(dependence().selected, 'Canne');
-
-    final server = local.copyWith(patient: patientWithDependence('Aucune'));
-    await _mount(
-      tester,
-      repository,
-      dossier: server,
-      section: 2,
-      conflictRefreshToken: 1,
-    );
-    expect(dependence().selected, 'Aucune');
+    await _mount(tester, repository, section: 2, dossier: _dossier(occupants: const [
+      Occupant(firstName: 'Alice', lastName: 'Exemple', gender: 'Femme',
+        maidenName: 'Martin', dependenceTxt: 'Canne, Aide personnalisée',
+        apa: true),
+    ]));
+    expect(find.text('Dépendance'), findsNothing);
+    tester.widget<FormTextField>(find.byWidgetPredicate(
+      (widget) => widget is FormTextField && widget.label == 'Détails APA',
+    )).onChanged!('Aide quotidienne');
+    await tester.pump();
     await _flush(tester);
-    expect(repository.patientWrites, isEmpty);
+    final saved = (jsonDecode(repository.patientWrites.last['occupants_json']) as List).single;
+    expect(saved['dependenceTxt'], 'Canne, Aide personnalisée');
+    expect(saved['apaDetails'], 'Aide quotidienne');
+    expect(saved['maidenName'], 'Martin');
+    expect(saved['firstName'], 'Alice');
   });
 
   testWidgets('AGGIR notice follows the primary beneficiary age', (

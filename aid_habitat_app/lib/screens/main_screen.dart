@@ -1,7 +1,7 @@
+import '../services/note_backup_service.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import '../components/feedback_tab.dart';
 import '../components/dossier_loading_status.dart';
 import '../models/dossier_refresh_phase.dart';
@@ -19,6 +19,7 @@ import 'settings_screen.dart';
 import 'wiki_screen.dart';
 import '../models/types.dart';
 import '../services/auth_service.dart';
+import '../services/airtable_visibility_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
 import '../services/feedback_activity_service.dart';
@@ -76,6 +77,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _pendingSyncCount = 0;
   bool _isSyncing = false;
   bool _isRefreshingDossiersManually = false;
+  bool _airtableAutoInFlight = false;
+  DateTime? _lastAutomaticAirtableCheck;
+  Timer? _airtableAutoTimer;
   bool _isLoading = true;
   bool _isOffline = false;
   String? _lastSyncError;
@@ -122,6 +126,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         await _refreshDossiers();
         if (!mounted) return;
         unawaited(ReferencesService().ensureLoaded());
+        unawaited(_refreshAirtableAutomatically());
       } else {
         setState(() => _dossierRefreshPhase = phase);
       }
@@ -139,6 +144,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _dossierRecordsSubscription?.cancel();
     _dossierRefreshSubscription?.cancel();
     _connectivitySubscription?.cancel();
+    _airtableAutoTimer?.cancel();
     // SyncEngine is a process-lifetime singleton — do not dispose it with the
     // screen, or later screens will lose the stream and the engine.
     super.dispose();
@@ -154,6 +160,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     // est aussi déclenché côté SyncEngine pour rattraper d'éventuelles
     // modifs distantes manquées (cf. setAppLifecycleState).
     _syncEngine.setAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshAirtableAutomatically());
+    }
   }
 
   /// Dernier `lastSyncAt` observé sur le state du SyncEngine. Sert à
@@ -193,10 +202,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<bool> _refreshDossiers() async {
     final generation = ++_dossierReadGeneration;
     try {
-      final dossiers = _authService.filterDossiersForUser(
-        await _dataService.fetchDossiers(),
-        widget.currentUser,
-      );
+      final dossiers = _authService
+          .filterDossiersForUser(
+            await _dataService.fetchDossiers(),
+            widget.currentUser,
+          )
+          .where(
+            (dossier) => !AirtableVisibilityService.instance.isHidden(
+              widget.currentUser.email,
+              dossier.id,
+            ),
+          )
+          .toList();
       if (!mounted || generation != _dossierReadGeneration) return false;
       // Keep _selectedDossier in sync with the refreshed list so any edit
       // done in the dossier card (ex: numberPeople, firstName, city…) is
@@ -232,6 +249,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadData() async {
+    await AirtableVisibilityService.instance.load(widget.currentUser.email);
     await _refreshDossiers();
     if (!mounted) return;
     final pendingCount = await _dataService
@@ -250,6 +268,69 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     // d'une journée hors ligne, un snapshot serveur incomplet pourrait sinon
     // remplacer les saisies terrain avant leur envoi.
     _syncEngine.start();
+    _airtableAutoTimer = Timer.periodic(
+      const Duration(minutes: 15),
+      (_) => unawaited(_refreshAirtableAutomatically()),
+    );
+  }
+
+  Future<void> _reconcileAirtableVisibility(
+    Map<String, dynamic> preview,
+  ) async {
+    if (preview['activeIds'] is! List) return;
+    final active = ((preview['activeIds'] as List?) ?? const [])
+        .whereType<String>();
+    final local = await _dataService.fetchDossiers();
+    await AirtableVisibilityService.instance.reconcile(
+      email: widget.currentUser.email,
+      localDossierIds: local.map((dossier) => dossier.id),
+      activeDossierIds: active,
+    );
+    if (mounted) await _refreshDossiers();
+  }
+
+  Future<void> _refreshAirtableAutomatically() async {
+    if (_airtableAutoInFlight ||
+        _isRefreshingDossiersManually ||
+        _isOffline ||
+        ConnectivityService().isOffline ||
+        widget.remoteSessionExpired ||
+        _pendingSyncCount > 0) {
+      return;
+    }
+    final last = _lastAutomaticAirtableCheck;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(minutes: 15)) {
+      return;
+    }
+    _airtableAutoInFlight = true;
+    try {
+      if (!await _authService.resumePendingRemoteSession()) return;
+      final preview = await _dataService.previewCurrentDossiersRefresh();
+      if (!mounted) return;
+      await _reconcileAirtableVisibility(preview);
+      final newIds = ((preview['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .where((item) => item['kind'] == 'create')
+          .map((item) => item['id'].toString())
+          .toSet()
+          .toList();
+      if (newIds.isNotEmpty) {
+        await _dataService.applyCurrentDossiersRefresh(
+          preview['previewId'].toString(),
+          newIds,
+        );
+        if (!mounted) return;
+        await _dataService.refreshDossierRecordsFromRemote();
+        await _refreshDossiers();
+      }
+      _lastAutomaticAirtableCheck = DateTime.now();
+    } catch (_) {
+      // Airtable can be unavailable while the normal offline workspace is
+      // usable. Keep the last confirmed visibility and retry later.
+    } finally {
+      _airtableAutoInFlight = false;
+    }
   }
 
   bool _isDossierTreeView(String view) =>
@@ -345,6 +426,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _refreshCurrentUserDossiers() async {
     if (_isRefreshingDossiersManually ||
+        _airtableAutoInFlight ||
         _isOffline ||
         ConnectivityService().isOffline ||
         widget.remoteSessionExpired) {
@@ -366,13 +448,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       final sessionReady = await _authService.resumePendingRemoteSession();
       if (!sessionReady) throw StateError('Session distante indisponible');
       if (!mounted || _isOffline || ConnectivityService().isOffline) return;
-      final shouldImportAirtable = kIsWeb
-          ? widget.currentUser.role == LocalUserRole.admin ||
-                widget.currentUser.role == LocalUserRole.ergo ||
-                widget.currentUser.role == LocalUserRole.technician
-          : widget.currentUser.ergoLabel?.trim().toLowerCase() == 'coralie';
-      if (kIsWeb && shouldImportAirtable) {
+      final shouldImportAirtable =
+          widget.currentUser.role == LocalUserRole.admin ||
+          widget.currentUser.role == LocalUserRole.ergo ||
+          widget.currentUser.role == LocalUserRole.technician;
+      if (shouldImportAirtable) {
         final preview = await _dataService.previewCurrentDossiersRefresh();
+        if (!mounted) return;
+        await _reconcileAirtableVisibility(preview);
         if (!mounted) return;
         final selectedIds = await showDossierRefreshPreviewDialog(
           context,
@@ -385,27 +468,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             selectedIds,
           );
           collectSkipped(result);
-        }
-      } else if (shouldImportAirtable) {
-        var remaining = 1;
-        for (var batch = 0; batch < 100 && remaining > 0; batch++) {
-          final result = await _dataService.syncCurrentCoralieDossiers();
-          collectSkipped(result);
-          remaining = (result['remaining'] as num?)?.toInt() ?? 0;
-        }
-        if (remaining > 0) {
-          throw StateError('Actualisation Airtable incomplète');
-        }
-        if (kIsWeb) {
-          var notesRemaining = 1;
-          for (var batch = 0; batch < 100 && notesRemaining > 0; batch++) {
-            final result = await _dataService.importCurrentCoralieNotes();
-            collectSkipped(result);
-            notesRemaining = (result['remaining'] as num?)?.toInt() ?? 0;
-          }
-          if (notesRemaining > 0) {
-            throw StateError('Import des notes Airtable incomplet');
-          }
         }
       }
       // GET /api/dossiers is scoped by the authenticated server session:
@@ -527,33 +589,48 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final note = await _dataService.noteConflictDetails(operationId);
     if (note != null) {
       if (!mounted) return;
+      final missing = note['errorCode'] == 'NOTE_PAGE_RECORD_MISSING';
       final choice = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Conflit sur une note'),
+          title: Text(
+            missing
+                ? 'Emplacement de la note à vérifier'
+                : 'Conflit sur une note',
+          ),
           content: Text(
-            'La note « ${note['tabKey'] ?? 'sans titre'} », page '
-            '${note['pageNumber'] ?? 0}, existe en deux versions. '
-            'Choisissez celle à conserver.',
+            missing
+                ? 'La note est conservée sur cet appareil, mais le serveur ne la '
+                      'retrouve pas à l’emplacement demandé. Vérifiez son emplacement '
+                      'pour réessayer sans remplacer une autre version.'
+                : 'La note « ${note['tabKey'] ?? 'sans titre'} », page '
+                      '${note['pageNumber'] ?? 0}, existe en deux versions. '
+                      'Choisissez celle à conserver.',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('Annuler'),
             ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop('server'),
-              child: const Text('Prendre la note du serveur'),
-            ),
+            if (!missing)
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop('server'),
+                child: const Text('Prendre la note du serveur'),
+              ),
             FilledButton(
-              onPressed: () => Navigator.of(ctx).pop('local'),
-              child: const Text('Conserver ma note locale'),
+              onPressed: () =>
+                  Navigator.of(ctx).pop(missing ? 'repair' : 'local'),
+              child: Text(
+                missing ? 'Vérifier et réessayer' : 'Conserver ma note locale',
+              ),
             ),
           ],
         ),
       );
       if (choice == null || !mounted) return;
-      final resolved = choice == 'local'
+      final resolved = choice == 'repair'
+          ? await _dataService.repairMissingNoteIdentity(operationId)
+          : choice == 'local'
           ? await _dataService.resolveNoteConflictKeepingLocal(operationId)
           : await _dataService.resolveNoteConflictUsingServer(operationId);
       if (!mounted) return;
@@ -562,7 +639,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              choice == 'local'
+              choice == 'repair'
+                  ? 'Emplacement retrouvé. Note locale remise en synchronisation.'
+                  : choice == 'local'
                   ? 'Note locale conservée et remise en synchronisation.'
                   : 'Note du serveur restaurée sur cet appareil.',
             ),
@@ -1010,6 +1089,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             }
           });
         },
+        onStatusChanged: (id, status) {
+          if (!mounted) return;
+          setState(() {
+            _dossiers = [
+              for (final d in _dossiers)
+                if (d.id == id) d.copyWith(status: status) else d,
+            ];
+            if (_selectedDossier?.id == id) {
+              _selectedDossier = _selectedDossier!.copyWith(status: status);
+            }
+          });
+        },
       );
     }
     if ((_activeView == 'documents' || _activeView == 'visit_report') &&
@@ -1204,6 +1295,43 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
     setState(() => _failures = fresh);
   }
 
+  Future<void> _backup(String opId) async {
+    setState(() => _busyIds.add(opId));
+    try {
+      final receipt = await NoteBackupService().backupOperation(opId);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Copie de secours vérifiée'),
+          content: SelectableText(
+            'La copie de cette note a été sauvegardée et relue intégralement. '
+            'Cette copie ne résout pas la synchronisation.\n\n'
+            'Reçu : ${receipt['backupId']}\nEmpreinte : ${receipt['sha256']}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Sauvegarde non confirmée. Les données locales restent conservées.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(opId));
+    }
+  }
+
   Future<void> _retry(String opId) async {
     setState(() => _busyIds.add(opId));
     final reset = await widget.syncEngine.retrySingleOperation(opId);
@@ -1324,53 +1452,72 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                     final op = _failures[i];
                     final id = op['id'] ?? '';
                     final busy = _busyIds.contains(id);
+                    Widget withBackup(Widget content) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        content,
+                        if (op['entityType'] == 'note_page')
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: busy ? null : () => _backup(id),
+                              icon: const Icon(Icons.cloud_upload_outlined),
+                              label: const Text('Sauvegarder par API'),
+                            ),
+                          ),
+                      ],
+                    );
                     if (op['status'] == 'conflict') {
-                      return ListTile(
-                        leading: const Icon(Icons.compare_arrows),
-                        title: const Text('Conflit de synchronisation'),
-                        subtitle: Text(
-                          '${op['entityType']} · ${op['entityLocalId']}\n${op['lastError'] ?? 'Comparaison des versions nécessaire.'}',
-                        ),
-                        trailing: IconButton(
-                          tooltip: 'Comparer les versions',
-                          icon: const Icon(Icons.chevron_right),
-                          onPressed: busy
-                              ? null
-                              : () async {
-                                  setState(() => _busyIds.add(id));
-                                  try {
-                                    await widget.onReviewConflict(id);
-                                    await _refreshList();
-                                  } catch (_) {
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Comparaison indisponible. Les modifications locales sont conservées.',
+                      return withBackup(
+                        ListTile(
+                          leading: const Icon(Icons.compare_arrows),
+                          title: const Text('Conflit de synchronisation'),
+                          subtitle: Text(
+                            '${op['entityType']} · ${op['entityLocalId']}\n${op['lastError'] ?? 'Comparaison des versions nécessaire.'}',
+                          ),
+                          trailing: IconButton(
+                            tooltip: 'Comparer les versions',
+                            icon: const Icon(Icons.chevron_right),
+                            onPressed: busy
+                                ? null
+                                : () async {
+                                    setState(() => _busyIds.add(id));
+                                    try {
+                                      await widget.onReviewConflict(id);
+                                      await _refreshList();
+                                    } catch (_) {
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Comparaison indisponible. Les modifications locales sont conservées.',
+                                            ),
                                           ),
-                                        ),
-                                      );
+                                        );
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() => _busyIds.remove(id));
+                                      }
                                     }
-                                  } finally {
-                                    if (mounted) {
-                                      setState(() => _busyIds.remove(id));
-                                    }
-                                  }
-                                },
+                                  },
+                          ),
                         ),
                       );
                     }
-                    return _FailingOpCard(
-                      entityType: op['entityType'] ?? '?',
-                      operationType: op['operationType'] ?? '?',
-                      entityLocalId: op['entityLocalId'] ?? '',
-                      lastError: op['lastError'] ?? '(aucune)',
-                      attemptCount: op['attemptCount'] ?? '0',
-                      busy: busy,
-                      onRetry: () => _retry(id),
-                      onDiscard: () => _discard(id),
+                    return withBackup(
+                      _FailingOpCard(
+                        entityType: op['entityType'] ?? '?',
+                        operationType: op['operationType'] ?? '?',
+                        entityLocalId: op['entityLocalId'] ?? '',
+                        lastError: op['lastError'] ?? '(aucune)',
+                        attemptCount: op['attemptCount'] ?? '0',
+                        busy: busy,
+                        onRetry: () => _retry(id),
+                        onDiscard: () => _discard(id),
+                      ),
                     );
                   },
                 ),

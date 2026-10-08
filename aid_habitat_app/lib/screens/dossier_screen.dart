@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -6,10 +7,13 @@ import 'package:intl/intl.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../components/beneficiary_header.dart';
+import '../components/dossier_occupants_fields.dart';
+import '../models/dossier_occupants.dart';
 import '../components/beneficiary_palettes.dart';
 import '../components/brand_colors.dart';
 import '../components/cta_text_style.dart';
 import '../components/commune_field_group.dart';
+import '../components/confirmation_dialog.dart';
 import '../components/form_widgets.dart';
 import '../components/notes_widget.dart';
 import '../components/soft_transitions.dart';
@@ -20,20 +24,9 @@ import '../services/references_service.dart';
 import '../services/save_debounce.dart';
 import '../services/visit_date_time.dart';
 import 'conflict_resolution_screen.dart';
-import 'documents_screen.dart';
-import 'visit_report_screen.dart';
+import 'dossier_workspace_screen.dart';
 
-/// Dossier detail screen — React parity with `DossierDetail` in
-/// `components/DossierView.tsx`. The "Informations Bénéficiaire" card shows
-/// ONLY the fields React displays here:
-///  - Type d'accompagnement (read-only)
-///  - Prénom, Nom (editable)
-///  - Occupants (dropdown), Ville (autocomplete, zip hidden)
-///  - Commentaire projet (read-only, multiline — loaded from observations)
-///
-/// Everything else (phone, email, address, santé, situation familiale,
-/// revenus, trusted person, …) is edited via the Bénéficiaire tab of the
-/// visit report, not here.
+/// Dossier overview and beneficiary identities, saved through the offline repository.
 class DossierScreen extends StatefulWidget {
   final Dossier dossier;
   final VoidCallback onBack;
@@ -65,6 +58,7 @@ class DossierScreen extends StatefulWidget {
   /// Met à jour immédiatement le snapshot conservé par `MainScreen` quand la
   /// date de visite change, sans attendre le prochain pull NocoDB.
   final void Function(String dossierId, String visitDate)? onVisitDateChanged;
+  final void Function(String dossierId, DossierStatus status)? onStatusChanged;
 
   const DossierScreen({
     super.key,
@@ -75,6 +69,7 @@ class DossierScreen extends StatefulWidget {
     this.onOpenDocuments,
     this.onBeneficiaryPreparedChanged,
     this.onVisitDateChanged,
+    this.onStatusChanged,
   });
 
   @override
@@ -97,14 +92,21 @@ class _DossierScreenState extends State<DossierScreen> {
   late bool _beneficiaryPrepared;
 
   // Editable fields shown in the card
-  late String _firstName;
-  late String _lastName;
-  late String _numberPeople; // dropdown value: '1'..'5' or '5+'
+  late List<Occupant> _occupants;
+  late Patient _identityPatient;
+  late Map<String, dynamic> _savedFields;
+  late Map<String, dynamic> _observedFields;
+  Future<void> _saveInFlight = Future.value();
+  int _identityVersion = 0;
+  int _savedIdentityVersion = 0;
+  int _editVersion = 0;
+  int _savedEditVersion = 0;
   late String _address; // rue + n° (modifiable depuis ce bloc)
   late String _city;
   late String _zipCode;
   late String _cityId;
   String? _visitDate;
+  late DossierStatus _status;
 
   // Readonly fields
   late String _incomeCategory;
@@ -121,8 +123,6 @@ class _DossierScreenState extends State<DossierScreen> {
   final ReferencesService _references = ReferencesService();
   StreamSubscription<ReferencesPayload>? _refSub;
   List<CommuneOption> _communeOptions = const [];
-
-  static const List<String> _occupantOptions = ['1', '2', '3', '4', '5', '5+'];
 
   @override
   void initState() {
@@ -195,8 +195,8 @@ class _DossierScreenState extends State<DossierScreen> {
 
   void _loadFromDossier() {
     final p = widget.dossier.patient;
-    _firstName = p.firstName;
-    _lastName = p.lastName;
+    _identityPatient = p;
+    _occupants = dossierOccupants(p);
     _address = p.address;
     _city = p.city;
     _zipCode = p.zipCode;
@@ -205,15 +205,10 @@ class _DossierScreenState extends State<DossierScreen> {
     _fiscalRevenue = _householdFiscalRevenue(p);
     _beneficiaryPrepared = widget.dossier.beneficiaryPrepared;
     _visitDate = widget.dossier.visitDate;
+    _status = widget.dossier.status;
 
-    final n = p.numberPeople ?? 0;
-    if (n <= 0) {
-      _numberPeople = '1';
-    } else if (n >= 5) {
-      _numberPeople = '5';
-    } else {
-      _numberPeople = n.toString();
-    }
+    _savedFields = _cardFields();
+    _observedFields = Map.of(widget.dossier.patientEditBaseline ?? {});
   }
 
   @override
@@ -235,8 +230,7 @@ class _DossierScreenState extends State<DossierScreen> {
   /// Handler pour les champs texte qui n'influencent PAS la catégorie de
   /// revenus (Nom, Prénom, Adresse, …). Pas de `_recomputeIncomeCategory`
   /// ni de `setState(() {})` : seul le state local de mémorisation
-  /// est mis à jour (l'affectation `_lastName = v` est déjà faite par
-  /// l'appelant). On planifie juste le save SQLite débouncé. Le
+  /// est mis à jour par l'appelant. On planifie le save SQLite débouncé. Le
   /// FormTextField conserve sa valeur affichée (controller géré
   /// localement) — pas besoin de rebuild.
   ///
@@ -250,10 +244,10 @@ class _DossierScreenState extends State<DossierScreen> {
   }
 
   /// Handler pour les champs qui influencent la catégorie de revenus
-  /// (Occupants dropdown, RFR du foyer). On recalcule la catégorie
+  /// (Nombre d’occupants, RFR du foyer). On recalcule la catégorie
   /// puis on rebuild pour rafraîchir le badge — le coût rebuild est
   /// acceptable parce que ces 2 champs ne génèrent pas de keystrokes
-  /// rapides (dropdown ou champ numérique).
+  /// rapides (ajout d’un occupant ou champ numérique).
   void _onIncomeAffectingChanged() {
     _recomputeIncomeCategory();
     setState(() {});
@@ -261,7 +255,7 @@ class _DossierScreenState extends State<DossierScreen> {
   }
 
   /// Recalcule la catégorie de revenu (Très modeste / Modeste /
-  /// Intermédiaire / Supérieur) à partir de `_numberPeople` et
+  /// Intermédiaire / Supérieur) à partir de la liste des occupants et
   /// `_fiscalRevenue`, en utilisant les barèmes ANAH chargés via
   /// `ReferencesService` (table NocoDB `baremes_anah`).
   /// - Met à jour `_incomeCategory` localement (badge en haut du dossier
@@ -269,8 +263,7 @@ class _DossierScreenState extends State<DossierScreen> {
   /// - La valeur est persistée côté patient dans `_save` (propagée à
   ///   NocoDB via le sync offline-first).
   void _recomputeIncomeCategory() {
-    final numberPeopleInt =
-        int.tryParse(_numberPeople.replaceAll('+', '')) ?? 1;
+    final numberPeopleInt = _occupants.length;
     final next = ReferencesService().computeIncomeCategory(
       numberPeopleInt,
       _fiscalRevenue,
@@ -284,6 +277,7 @@ class _DossierScreenState extends State<DossierScreen> {
   }
 
   void _scheduleSave() {
+    _editVersion++;
     _saveTimer?.cancel();
     // Debounce uniformisé sur `kSaveDebounceText` (400 ms) — voir
     // `lib/services/save_debounce.dart` pour le rationale détaillé.
@@ -297,42 +291,129 @@ class _DossierScreenState extends State<DossierScreen> {
   /// queue de sync_op AVANT que le code suivant tente de relire les
   /// données.
   Future<void> _flushPendingSave() async {
-    if (_saveTimer?.isActive == true) {
-      _saveTimer!.cancel();
-      await _save();
-    }
+    _saveTimer?.cancel();
+    await _save();
   }
 
-  Future<void> _save() async {
-    if (!mounted) return;
-    // Pas de `setState(_saving = true/false)` : le seul consumer de
-    // `_saving` est `SaveStatusIndicator` qui retourne désormais un
-    // SizedBox.shrink() vide (demande utilisateur — aucun feedback
-    // visuel pendant la sauvegarde). Avec save à 0 ms (chaque
-    // keystroke), un setState ici aurait déclenché un rebuild lourd
-    // par caractère tapé, qui mangeait des keystrokes — exactement
-    // le bug "BAL au lieu de BALS" qu'on a passé du temps à éliminer.
-    final numberPeopleInt =
-        int.tryParse(_numberPeople.replaceAll('+', '')) ?? 1;
-    // Recompute une dernière fois juste avant le save (au cas où les
-    // barèmes viennent d'arriver entre le onChange et le save).
-    _recomputeIncomeCategory();
-    await _repository.updatePatientFields(widget.dossier.patient.id, {
-      'first_name': _firstName,
-      'last_name': _lastName,
-      'number_people': numberPeopleInt,
-      'address': _address,
-      'city': _city,
-      'zip_code': _zipCode,
-      'city_id': _cityId,
-      // RFR du foyer modifiable depuis le bloc Bénéficiaire
-      // (demande utilisateur). Stocké au niveau patient — écrase
-      // la valeur éventuellement calculée à partir des occupants.
-      'fiscal_revenue': _fiscalRevenue,
-      // Catégorie de revenu auto-dérivée des barèmes ANAH NocoDB.
-      'income_category': _incomeCategory,
+  Map<String, dynamic> _cardFields() => {
+    'address': _address,
+    'city': _city,
+    'zip_code': _zipCode,
+    'city_id': _cityId,
+    'fiscal_revenue': _fiscalRevenue,
+    'income_category': _incomeCategory,
+  };
+
+  Future<void> _save() {
+    if (_editVersion == _savedEditVersion) return _saveInFlight;
+    final editVersion = _editVersion;
+    final fields = _cardFields();
+    final identityVersion = _identityVersion;
+    final identity = {
+      'first_name': _occupants.first.firstName,
+      'last_name': _occupants.first.lastName,
+      'second_first_name': _occupants.length > 1 ? _occupants[1].firstName : '',
+      'second_last_name': _occupants.length > 1 ? _occupants[1].lastName : '',
+      'number_people': _occupants.length,
+      'occupants_json': jsonEncode(_occupants.map((o) => o.toJson()).toList()),
+    };
+    // Serialize saves so a slow SQLite write cannot overtake later typing.
+    _saveInFlight = _saveInFlight.then((_) async {
+      final changed = <String, dynamic>{
+        for (final entry in fields.entries)
+          if (_savedFields[entry.key] != entry.value) entry.key: entry.value,
+        if (identityVersion != _savedIdentityVersion) ...identity,
+      };
+      if (changed.isEmpty) {
+        _savedEditVersion = editVersion;
+        return;
+      }
+      try {
+        await _repository.updatePatient(
+          widget.dossier.patient.id,
+          changed,
+          observedFields: Map.of(_observedFields),
+        );
+        _savedFields.addAll(fields);
+        _observedFields.addAll(changed);
+        _savedIdentityVersion = identityVersion;
+        _savedEditVersion = editVersion;
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Enregistrement local impossible. Réessayez en validant la fiche.',
+              ),
+            ),
+          );
+        }
+      }
     });
+    return _saveInFlight;
   }
+
+  Widget _buildOccupantFields() => DossierOccupantsFields(
+    occupants: _occupants,
+    locked: _isBeneficiaryLocked,
+    onChanged: (index, occupant) {
+      final genderChanged = _occupants[index].gender != occupant.gender;
+      _occupants[index] = occupant;
+      _identityVersion++;
+      if (genderChanged) setState(() {});
+      _scheduleSave();
+    },
+    onAdd: () async {
+      final confirmed = await showAppConfirmationDialog<bool>(
+        context: context,
+        title: 'Ajouter un occupant ?',
+        message: 'Une nouvelle ligne sera ajoutée à la fiche du foyer.',
+        tone: AppConfirmationTone.info,
+        icon: Icons.person_add_outlined,
+        actions: const [
+          AppConfirmationAction(label: 'Annuler', value: false),
+          AppConfirmationAction(label: 'Ajouter', value: true, isPrimary: true),
+        ],
+      );
+      if (!mounted || confirmed != true) return;
+      setState(() {
+        _occupants.add(const Occupant());
+        _identityVersion++;
+        _recomputeIncomeCategory();
+      });
+      _scheduleSave();
+    },
+    onRemove: (index) async {
+      if (_occupants.length <= 1 || index >= _occupants.length) return;
+      final occupant = _occupants[index];
+      final displayName = [
+        occupant.firstName,
+        occupant.lastName,
+      ].where((part) => part.trim().isNotEmpty).join(' ');
+      final confirmed = await showAppDestructiveConfirmation(
+        context: context,
+        title: 'Retirer cet occupant ?',
+        message: displayName.isEmpty
+            ? 'Êtes-vous sûr de vouloir retirer l’occupant ${index + 1} ?'
+            : 'Êtes-vous sûr de vouloir retirer $displayName ?',
+        confirmLabel: 'Retirer',
+        icon: Icons.remove_circle_outline,
+      );
+      if (!mounted ||
+          !confirmed ||
+          _occupants.length <= 1 ||
+          index >= _occupants.length ||
+          !identical(_occupants[index], occupant)) {
+        return;
+      }
+      setState(() {
+        _occupants.removeAt(index);
+        _identityVersion++;
+        _recomputeIncomeCategory();
+      });
+      _scheduleSave();
+    },
+  );
 
   /// Mirrors React's `formatAccompanimentType()`:
   ///  - `diagnostic` → "Diag ergo"
@@ -456,9 +537,45 @@ class _DossierScreenState extends State<DossierScreen> {
   Widget _buildHeader(BuildContext context) {
     return BeneficiaryHeader(
       dossier: widget.dossier,
+      occupants: _occupants,
       onBack: widget.onBack,
-      trailing: _buildVisitDateButton(context),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PopupMenuButton<DossierStatus>(
+            tooltip: 'Changer l’état du dossier',
+            initialValue: _status,
+            onSelected: _changeStatus,
+            itemBuilder: (context) => [
+              for (final status in DossierStatus.values)
+                PopupMenuItem(value: status, child: Text(status.label)),
+            ],
+            child: Chip(label: Text(_status.label)),
+          ),
+          const SizedBox(width: 8),
+          _buildVisitDateButton(context),
+        ],
+      ),
     );
+  }
+
+  Future<void> _changeStatus(DossierStatus next) async {
+    if (next == _status) return;
+    final previous = _status;
+    setState(() => _status = next);
+    widget.onStatusChanged?.call(widget.dossier.id, next);
+    try {
+      await _repository.updateDossierFields(widget.dossier.id, {
+        'status': next.label,
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _status = previous);
+      widget.onStatusChanged?.call(widget.dossier.id, previous);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Le statut n’a pas pu être enregistré.')),
+      );
+    }
   }
 
   Widget _buildVisitDateButton(BuildContext context) {
@@ -467,66 +584,82 @@ class _DossierScreenState extends State<DossierScreen> {
       r'[T ]\d{2}:\d{2}',
     ).hasMatch(_visitDate?.trim() ?? '');
     final label = parsed == null
-        ? 'À planifier'
+        ? 'Non définie'
         : DateFormat(
             hasTime ? 'dd/MM/yyyy • HH:mm' : 'dd/MM/yyyy',
             'fr_FR',
           ).format(parsed);
 
-    return Tooltip(
-      message: 'Modifier la date de visite',
-      child: Material(
-        color: const Color(0xFFF2ECF5),
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: _pickVisitDate,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 44),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-            decoration: BoxDecoration(
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: 'Modifier la date de visite',
+          child: Material(
+            color: const Color(0xFFF2ECF5),
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: _pickVisitDate,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE2D8E9)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  LucideIcons.calendarDays,
-                  size: 18,
-                  color: kBrandPurple,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 44),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 7,
                 ),
-                const SizedBox(width: 9),
-                Column(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE2D8E9)),
+                ),
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Date de visite',
-                      style: GoogleFonts.nunito(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFF8A7A95),
-                        height: 1,
-                      ),
+                    const Icon(
+                      LucideIcons.calendarDays,
+                      size: 18,
+                      color: kBrandPurple,
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      label,
-                      style: GoogleFonts.nunito(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFF2B323A),
-                        height: 1,
+                    const SizedBox(width: 9),
+                    Flexible(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Date de visite',
+                            style: GoogleFonts.nunito(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF8A7A95),
+                              height: 1,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            label,
+                            style: GoogleFonts.nunito(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF2B323A),
+                              height: 1,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
-      ),
+        if (parsed != null)
+          IconButton(
+            tooltip: 'Mettre la date de visite sur Non définie',
+            onPressed: _clearVisitDate,
+            icon: const Icon(Icons.event_busy_outlined),
+          ),
+      ],
     );
   }
 
@@ -605,6 +738,26 @@ class _DossierScreenState extends State<DossierScreen> {
     }
   }
 
+  Future<void> _clearVisitDate() async {
+    final previousValue = _visitDate;
+    if (previousValue == null || previousValue.trim().isEmpty) return;
+    setState(() => _visitDate = null);
+    try {
+      await _repository.updateDossierFields(widget.dossier.id, {
+        'visit_date': '',
+      });
+      widget.onVisitDateChanged?.call(widget.dossier.id, '');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _visitDate = previousValue);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La date de visite n’a pas pu être effacée.'),
+        ),
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Quick actions
   // ---------------------------------------------------------------------------
@@ -644,7 +797,8 @@ class _DossierScreenState extends State<DossierScreen> {
                 if (!mounted) return;
                 await navigator.push(
                   MaterialPageRoute(
-                    builder: (_) => DocumentsScreen(
+                    builder: (_) => DossierWorkspaceScreen(
+                      initialDocuments: true,
                       dossier: widget.dossier,
                       onBack: navigator.pop,
                     ),
@@ -681,7 +835,7 @@ class _DossierScreenState extends State<DossierScreen> {
                 await navigator.push(
                   MaterialPageRoute(
                     builder: (_) => Scaffold(
-                      body: VisitReportScreen(
+                      body: DossierWorkspaceScreen(
                         dossier: widget.dossier,
                         onBack: navigator.pop,
                       ),
@@ -700,63 +854,29 @@ class _DossierScreenState extends State<DossierScreen> {
     );
   }
 
-  /// Re-reads the patient row from SQLite and hydrates the local form
-  /// state. Called on return from the visit report so edits made there
-  /// propagate back to the dossier screen without requiring a full
-  /// navigation refresh.
-  ///
-  /// Doubly-guarded contre l'écrasement des saisies en cours :
-  ///   1. Si un `_saveTimer` est actif, l'utilisateur est en train de
-  ///      taper — on skip pour ne PAS overwrite ses keystrokes en
-  ///      vol.
-  ///   2. Si le bénéficiaire local est marqué `pendingSync`, on skip
-  ///      aussi : un push NocoDB est en cours et la valeur fraîche
-  ///      retournée par fetchDossierById pourrait représenter
-  ///      l'ancienne version remote (eventual consistency NocoDB) —
-  ///      on l'écraserait par-dessus la valeur locale qui est en
-  ///      réalité la plus récente.
+  /// Refresh from the local row after returning from the visit report.
   Future<void> _refreshFromRepository() async {
-    if (!mounted) return;
-    if (_saveTimer?.isActive == true) return;
+    await _saveInFlight;
+    if (!mounted || _editVersion != _savedEditVersion) return;
+    final editVersion = _editVersion;
     final fresh = await _repository.fetchDossierById(widget.dossier.id);
-    if (fresh == null || !mounted) return;
-    // Garde supplémentaire : ne pas overwrite si la modification
-    // locale n'est pas encore confirmée par NocoDB. On compare le
-    // payload qu'on vient de fetcher au state local pour les champs
-    // de saisie : si différent, c'est qu'une saisie est en cours
-    // (ou en attente de sync), on garde le local.
-    final hasUnsyncedTextEdits =
-        fresh.patient.firstName != _firstName ||
-        fresh.patient.lastName != _lastName ||
-        fresh.patient.address != _address ||
-        fresh.patient.city != _city ||
-        fresh.patient.zipCode != _zipCode;
-    if (hasUnsyncedTextEdits) {
-      // L'utilisateur a des modifications locales différentes du
-      // payload — on garde son state local, on n'overwrite pas.
-      return;
-    }
+    if (fresh == null || !mounted || editVersion != _editVersion) return;
     setState(() {
-      _firstName = fresh.patient.firstName;
-      _lastName = fresh.patient.lastName;
+      _identityPatient = fresh.patient;
+      _occupants = dossierOccupants(fresh.patient);
+      _address = fresh.patient.address;
       _city = fresh.patient.city;
       _zipCode = fresh.patient.zipCode;
       _cityId = fresh.patient.cityId;
       _incomeCategory = fresh.patient.incomeCategory;
       _fiscalRevenue = _householdFiscalRevenue(fresh.patient);
-      final n = fresh.patient.numberPeople ?? 0;
-      if (n <= 0) {
-        _numberPeople = '1';
-      } else if (n >= 5) {
-        _numberPeople = '5';
-      } else {
-        _numberPeople = n.toString();
-      }
+      _savedFields = _cardFields();
+      _observedFields = Map.of(fresh.patientEditBaseline ?? {});
     });
   }
 
   // ---------------------------------------------------------------------------
-  // Info Card — strict React parity
+  // Beneficiary card
   // ---------------------------------------------------------------------------
   void _ensureInfoFieldVisible(BuildContext fieldContext) {
     void ensureVisible() {
@@ -791,9 +911,9 @@ class _DossierScreenState extends State<DossierScreen> {
     //   - Bandeau violet clair en haut : icône + "Bénéficiaire" + crayon.
     //   - Corps en texte brut : labels violets + valeurs sans fond ni
     //     contour (les champs non modifiables sont du pur texte).
-    //   - Ordre : Nom, Prénom, Occupants, RFR du foyer, Adresse,
+    //   - Ordre : identités des occupants, RFR du foyer, Adresse,
     //     badge communauté de communes, Commentaire du projet.
-    final streetAddress = widget.dossier.patient.address.trim();
+    final streetAddress = _address.trim();
     // Fallback en 3 étapes (parité avec DossiersListScreen._communeFor) :
     //   1. match strict par cityId
     //   2. match par label (nom de ville insensible à la casse)
@@ -866,8 +986,8 @@ class _DossierScreenState extends State<DossierScreen> {
                       fontWeight: FontWeight.bold,
                       color: bannerFg,
                     ),
-                    child: const Text(
-                      'Bénéficiaire',
+                    child: Text(
+                      _occupants.length > 1 ? 'Bénéficiaires' : 'Bénéficiaire',
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -970,45 +1090,23 @@ class _DossierScreenState extends State<DossierScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (_isBeneficiaryLocked) ...[
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: _PlainField(
-                              label: 'Nom',
-                              value: _lastName.trim().isEmpty ? '—' : _lastName,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _PlainField(
-                              label: 'Prénom',
-                              value: _firstName.trim().isEmpty
-                                  ? '—'
-                                  : _firstName,
-                            ),
-                          ),
-                        ],
+                    _buildOccupantFields(),
+                    if (dossierIdentityNeedsReview(_identityPatient)) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Identité à vérifier : ${dossierLegacyIdentityDescription(_identityPatient)}. '
+                        'Les valeurs d’origine sont conservées tant que vous ne les modifiez pas.',
+                        key: const ValueKey('occupant-identity-review'),
+                        style: const TextStyle(
+                          color: Color(0xFF8A5A00),
+                          fontSize: 14,
+                        ),
                       ),
-                      const SizedBox(height: 16),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: _PlainField(
-                              label: 'Occupants',
-                              value: _numberPeople == '1' ? '1' : _numberPeople,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _PlainField(
-                              label: 'RFR du foyer',
-                              value: _formatFiscalRevenue(_fiscalRevenue),
-                            ),
-                          ),
-                        ],
+                    ],
+                    if (_isBeneficiaryLocked) ...[
+                      _PlainField(
+                        label: 'RFR du foyer',
+                        value: _formatFiscalRevenue(_fiscalRevenue),
                       ),
                       const SizedBox(height: 16),
                       _PlainField(
@@ -1031,12 +1129,12 @@ class _DossierScreenState extends State<DossierScreen> {
                         const SizedBox(height: 16),
                         // Libellé + badge communauté de communes. Même style
                         // de label violet que les autres champs du bloc
-                        // Bénéficiaire en preview (`_PlainField` → 14 px,
-                        // w700) — le badge pastel est juste en dessous.
+                        // Bénéficiaire en preview (`_PlainField` → 16 px,
+                        // w600) — le badge pastel est juste en dessous.
                         Text(
                           'Communauté de communes',
                           style: GoogleFonts.nunito(
-                            fontSize: 14,
+                            fontSize: 16,
                             fontWeight: FontWeight.w600,
                             color: kBrandPurple,
                             letterSpacing: 0.2,
@@ -1073,76 +1171,20 @@ class _DossierScreenState extends State<DossierScreen> {
                       // (demande utilisateur) : s'il existe, il est affiché
                       // par défaut dans la note rapide en haut à droite.
                     ] else ...[
-                      // --- Mode édition : libellés violets conservés même
-                      // quand les champs deviennent modifiables (demande
-                      // utilisateur : pas de changement de couleur entre
-                      // lecture et édition).
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: _buildKeyboardAwareInfoField(
-                              (onFocused) => FormTextField(
-                                label: 'Nom',
-                                value: _lastName,
-                                labelColor: kBrandPurple,
-                                labelSize: 16,
-                                valueSize: 16,
-                                onFocused: onFocused,
-                                onChanged: (v) {
-                                  _lastName = v;
-                                  _onTextChanged();
-                                },
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildKeyboardAwareInfoField(
-                              (onFocused) => FormTextField(
-                                label: 'Prénom',
-                                value: _firstName,
-                                labelColor: kBrandPurple,
-                                labelSize: 16,
-                                valueSize: 16,
-                                onFocused: onFocused,
-                                onChanged: (v) {
-                                  _firstName = v;
-                                  _onTextChanged();
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(child: _buildOccupantsDropdown()),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            // RFR du foyer : modifiable en édition (demande
-                            // utilisateur). Écrit vers patient.fiscal_revenue
-                            // via `_save` — écrase l'éventuelle somme
-                            // calculée depuis les occupants.
-                            child: _buildKeyboardAwareInfoField(
-                              (onFocused) => FormNumberField(
-                                label: 'RFR du foyer',
-                                value: _fiscalRevenue,
-                                unit: '€',
-                                labelColor: kBrandPurple,
-                                labelSize: 16,
-                                valueSize: 16,
-                                onFocused: onFocused,
-                                onChanged: (v) {
-                                  _fiscalRevenue = v;
-                                  _onIncomeAffectingChanged();
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
+                      _buildKeyboardAwareInfoField(
+                        (onFocused) => FormNumberField(
+                          label: 'RFR du foyer',
+                          value: _fiscalRevenue,
+                          unit: '€',
+                          labelColor: kBrandPurple,
+                          labelSize: 16,
+                          valueSize: 16,
+                          onFocused: onFocused,
+                          onChanged: (v) {
+                            _fiscalRevenue = v;
+                            _onIncomeAffectingChanged();
+                          },
+                        ),
                       ),
                       const SizedBox(height: 12),
                       // Adresse (rue / n°) — modifiable directement depuis
@@ -1194,13 +1236,12 @@ class _DossierScreenState extends State<DossierScreen> {
                       ),
                       if (_hasCityInfo()) ...[
                         const SizedBox(height: 2),
-                        Text(
+                        const Text(
                           'Communauté de communes',
-                          style: GoogleFonts.nunito(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
                             color: kBrandPurple,
-                            letterSpacing: 0.2,
                           ),
                         ),
                         const SizedBox(height: 10),
@@ -1306,70 +1347,6 @@ class _DossierScreenState extends State<DossierScreen> {
       }
     }
     return '';
-  }
-
-  Widget _buildOccupantsDropdown() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Occupants',
-          // Libellé violet 14px, aligné sur les autres labels du bloc
-          // Bénéficiaire (FormTextField.labelSize = 14, valueSize = 14
-          // pour matcher la preview où libellé violet et valeur noire
-          // ont la même taille).
-          // Bumpé w600 → w700 pour uniformiser avec les labels du
-          // relevé de visite (demande utilisateur 2026-05-13).
-          style: GoogleFonts.nunito(
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
-            color: kBrandPurple,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF7F7FA),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              isExpanded: true,
-              value: _occupantOptions.contains(_numberPeople)
-                  ? _numberPeople
-                  : '1',
-              items: _occupantOptions
-                  .map(
-                    (opt) => DropdownMenuItem<String>(
-                      value: opt,
-                      child: Text(
-                        opt == '1' ? '1 occupant' : '$opt occupants',
-                        // Bumpé w400 (défaut) → w600 pour rester
-                        // aligné sur l'épaisseur des autres valeurs
-                        // du bloc Bénéficiaire (demande user 2026-05-13).
-                        style: GoogleFonts.nunito(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (v) {
-                if (v == null) return;
-                setState(() => _numberPeople = v);
-                // Dropdown selection is a single, deliberate action : no
-                // typing debounce needed, save immediately so the visit
-                // report and the sync engine see the new count at once.
-                _saveTimer?.cancel();
-                _save();
-              },
-            ),
-          ),
-        ),
-      ],
-    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1495,11 +1472,9 @@ class _PlainField extends StatelessWidget {
       children: [
         Text(
           label,
-          // Titre violet à la même taille que la valeur noire dessous
-          // (14 px) pour équilibrer la lecture du bloc Bénéficiaire en
-          // preview — demande utilisateur.
+          // Libellés de la fiche Bénéficiaire uniformisés à 16 px.
           style: GoogleFonts.nunito(
-            fontSize: 14,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
             color: kBrandPurple,
             letterSpacing: 0.2,

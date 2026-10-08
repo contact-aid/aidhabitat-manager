@@ -1,12 +1,14 @@
 import Flutter
+import AVFoundation
 import UIKit
 import VisionKit
 
-class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewControllerDelegate {
+class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewControllerDelegate,
+  UIImagePickerControllerDelegate, UINavigationControllerDelegate {
   private static let channelName = "aidhabitat/document_scanner"
 
   private let channel: FlutterMethodChannel
-  private weak var scannerController: VNDocumentCameraViewController?
+  private weak var captureController: UIViewController?
   private var pendingResult: FlutterResult?
 
   private init(channel: FlutterMethodChannel) {
@@ -27,6 +29,8 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
     switch call.method {
     case "scanDocument":
       presentScanner(result: result)
+    case "capturePhoto":
+      presentPhotoCamera(result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -70,10 +74,118 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
 
     let controller = VNDocumentCameraViewController()
     controller.delegate = self
-    scannerController = controller
+    // A full-screen capture controller participates in UIKit's own rotation
+    // handling instead of inheriting the presenting sheet/context orientation.
+    controller.modalPresentationStyle = .fullScreen
+    captureController = controller
 
     DispatchQueue.main.async {
       presenter.present(controller, animated: true)
+    }
+  }
+
+  private func presentPhotoCamera(result: @escaping FlutterResult) {
+    guard pendingResult == nil else {
+      result(FlutterError(code: "busy", message: "Une capture est déjà en cours.", details: nil))
+      return
+    }
+    guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+      result(FlutterError(code: "unsupported", message: "Caméra indisponible.", details: nil))
+      return
+    }
+    pendingResult = result
+    switch AVCaptureDevice.authorizationStatus(for: .video) {
+    case .authorized:
+      showPhotoCamera()
+    case .notDetermined:
+      AVCaptureDevice.requestAccess(for: .video) { granted in
+        DispatchQueue.main.async {
+          if granted {
+            self.showPhotoCamera()
+          } else {
+            self.completePhotoCapture(FlutterError(
+              code: "camera_access_denied", message: "Accès à la caméra refusé.", details: nil
+            ))
+          }
+        }
+      }
+    case .restricted, .denied:
+      completePhotoCapture(FlutterError(
+        code: "camera_access_denied", message: "Accès à la caméra refusé.", details: nil
+      ))
+    @unknown default:
+      completePhotoCapture(FlutterError(
+        code: "camera_access_restricted", message: "Caméra indisponible.", details: nil
+      ))
+    }
+  }
+
+  private func showPhotoCamera() {
+    guard let presenter = Self.activePresenter(), presenter.viewIfLoaded?.window != nil else {
+      completePhotoCapture(FlutterError(
+        code: "no_presenter", message: "Impossible d'ouvrir l'appareil photo.", details: nil
+      ))
+      return
+    }
+    let controller = UIImagePickerController()
+    controller.sourceType = .camera
+    controller.mediaTypes = ["public.image"]
+    controller.allowsEditing = false
+    controller.delegate = self
+    // image_picker uses currentContext. For Documents, use Apple's recommended
+    // full-screen camera presentation, leaving portrait/landscape to the system.
+    controller.modalPresentationStyle = .fullScreen
+    captureController = controller
+    presenter.present(controller, animated: true)
+  }
+
+  private func completePhotoCapture(_ value: Any?) {
+    let flutterResult = pendingResult
+    finish {
+      self.pendingResult = nil
+      flutterResult?(value)
+    }
+  }
+
+  func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+    completePhotoCapture(nil)
+  }
+
+  func imagePickerController(
+    _ picker: UIImagePickerController,
+    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+  ) {
+    guard let image = info[.originalImage] as? UIImage else {
+      completePhotoCapture(FlutterError(
+        code: "capture_failed", message: "Photo illisible.", details: nil
+      ))
+      return
+    }
+    do {
+      // UIImage.draw applies the camera orientation before saving, so portrait
+      // remains portrait even in viewers that ignore EXIF orientation metadata.
+      let ratio = min(1, 1600 / image.size.width)
+      let bounds = CGRect(origin: .zero, size: CGSize(
+        width: image.size.width * ratio, height: image.size.height * ratio
+      ))
+      let format = UIGraphicsImageRendererFormat()
+      format.scale = 1
+      format.opaque = true
+      let upright = UIGraphicsImageRenderer(size: bounds.size, format: format).image { _ in
+        image.draw(in: bounds)
+      }
+      guard let data = upright.jpegData(compressionQuality: 0.8) else {
+        throw NSError(domain: "DocumentCapture", code: 1,
+          userInfo: [NSLocalizedDescriptionKey: "Impossible d'enregistrer la photo."])
+      }
+      let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("photo-\(UUID().uuidString).jpg")
+      try data.write(to: url, options: [.atomic, .completeFileProtection])
+      completePhotoCapture(url.path)
+    } catch {
+      completePhotoCapture(FlutterError(
+        code: "photo_write_failed", message: error.localizedDescription, details: nil
+      ))
     }
   }
 
@@ -95,8 +207,8 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
   }
 
   private func finish(result: @escaping () -> Void) {
-    let controller = scannerController
-    scannerController = nil
+    let controller = captureController
+    captureController = nil
     if let controller {
       controller.dismiss(animated: true, completion: result)
     } else {

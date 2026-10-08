@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 import 'package:sqflite/sqflite.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
@@ -8,6 +9,7 @@ import 'local_database.dart';
 import 'offline_vault.dart';
 import 'sync_operation_ownership.dart';
 import 'sync_mutation.dart';
+import 'note_legacy_identity.dart';
 
 const Set<String> _kReportPrerequisiteEntityTypes = {
   'dossier',
@@ -1785,62 +1787,343 @@ class SyncRepository {
     return dossiers.length == 1 ? dossiers.single['local_id'] as String : null;
   }
 
-  Future<Map<String, dynamic>?> noteConflictDetails(String operationId) async {
+  /// Explicit, read-only inspection of one owned pending operation. Never
+  /// exports text, strokes, preview bytes, credentials or raw server errors.
+  Future<Map<String, dynamic>?> operationDiagnostic(String operationId) async {
     final db = await _database.database;
-    final rows = await db.query(
-      'sync_operations',
-      columns: const ['entity_type', 'entity_local_id', 'payload_json'],
-      where: 'id = ? AND status = ?',
-      whereArgs: [operationId, 'conflict'],
-      limit: 1,
-    );
-    if (rows.length != 1 || rows.single['entity_type'] != 'note_page') {
-      return null;
-    }
-    try {
+    return db.transaction((txn) async {
+      if (_enforceOwnership) {
+        final owner = await txn.rawQuery(
+          '''
+          SELECT 1 FROM sync_operations AS operation
+          JOIN ${SyncOperationOwnership.tableName} AS ownership ON ownership.operation_id = operation.id
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE operation.id = ? AND ownership.attribution_state IN (?, ?)
+        ''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owner.isEmpty) return null;
+      }
+      final rows = await txn.query(
+        'sync_operations',
+        where: 'id = ? AND status != ?',
+        whereArgs: [operationId, 'completed'],
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      final row = rows.single;
+      final result = <String, dynamic>{
+        'operationId': operationId,
+        'entityType': row['entity_type'],
+        'entityLocalId': row['entity_local_id'],
+        'operationType': row['operation_type'],
+        'status': row['status'],
+        'attemptCount': row['attempt_count'],
+        'createdAt': row['created_at'],
+        'updatedAt': row['updated_at'],
+        'inspectedAt': DateTime.now().toUtc().toIso8601String(),
+      };
+      final error = row['last_error']?.toString() ?? '';
+      result['httpStatus'] = RegExp(
+        r'\b[45]\d\d\b',
+      ).firstMatch(error)?.group(0);
+      result['requestId'] = RegExp(
+        r'requestId=([a-fA-F0-9-]{36})',
+      ).firstMatch(error)?.group(1);
+      result['errorCode'] = RegExp(
+        r'\bNOTE_[A-Z0-9_]+\b',
+      ).firstMatch(error)?.group(0);
+      try {
+        final raw = await OfflineVault.instance.openString(
+          row['payload_json'] as String,
+        );
+        result['payloadBytes'] = utf8.encode(raw).length;
+        result['payloadSha256'] = sha256.convert(utf8.encode(raw)).toString();
+        final payload = jsonDecode(raw) as Map;
+        for (final key in [
+          'writeId',
+          'expectedRevision',
+          'patientLocalId',
+          'dossierId',
+          'scopeType',
+          'scopeId',
+          'tabKey',
+          'subTabKey',
+          'pageNumber',
+        ]) {
+          result[key] = payload[key];
+        }
+        final drawing = payload['drawingJson'];
+        if (drawing is String) {
+          result['drawingBytes'] = utf8.encode(drawing).length;
+          result['drawingCharacters'] = drawing.length;
+          result['drawingSha256'] = sha256
+              .convert(utf8.encode(drawing))
+              .toString();
+        }
+        if (row['entity_type'] == 'note_page') {
+          final notes = await txn.query(
+            'note_pages',
+            columns: ['drawing_json'],
+            where: 'local_id = ?',
+            whereArgs: [row['entity_local_id']],
+            limit: 1,
+          );
+          if (notes.isNotEmpty && notes.single['drawing_json'] is String) {
+            final local = await OfflineVault.instance.openString(
+              notes.single['drawing_json'] as String,
+            );
+            result['localDrawingSha256'] = sha256
+                .convert(utf8.encode(local))
+                .toString();
+            result['queuedMatchesLocal'] = drawing == local;
+          }
+        }
+      } catch (_) {
+        result['inspectionError'] = 'LOCAL_PAYLOAD_UNREADABLE';
+      }
+      return result;
+    });
+  }
+
+  Future<Map<String, dynamic>?> noteConflictDetails(
+    String operationId, {
+    bool forExplicitResolution = false,
+  }) async {
+    final db = await _database.database;
+    return db.transaction((db) async {
+      String? ownerId;
+      if (forExplicitResolution) {
+        final owners = await db.rawQuery(
+          '''SELECT session.user_local_id
+        FROM sync_operation_ownership AS ownership
+        JOIN app_session AS session ON session.id = 1
+          AND session.user_local_id = ownership.owner_user_local_id
+        WHERE ownership.operation_id = ? AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owners.length != 1) return null;
+        ownerId = owners.single['user_local_id'] as String?;
+        if (ownerId == null) return null;
+      }
+      final rows = await db.query(
+        'sync_operations',
+        columns: const ['entity_type', 'entity_local_id', 'payload_json'],
+        where: 'id = ? AND status = ?',
+        whereArgs: [operationId, 'conflict'],
+        limit: 1,
+      );
+      if (rows.length != 1 || rows.single['entity_type'] != 'note_page') {
+        return null;
+      }
+      try {
+        final payload =
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    rows.single['payload_json'] as String,
+                  ),
+                )
+                as Map<String, dynamic>;
+        Map<String, Object?>? local;
+        if (forExplicitResolution) {
+          final notes = await db.query(
+            'note_pages',
+            where: 'local_id = ?',
+            whereArgs: [rows.single['entity_local_id']],
+          );
+          if (notes.length != 1) return null;
+          local = notes.single;
+          // The current wire contract normalizes omitted/null text to empty.
+          // Reject pre-existing divergence, not only edits during the GET.
+          final localText = await OfflineVault.instance.openString(
+            local['text_content'] as String? ?? '',
+          );
+          if (localText != (payload['textContent']?.toString() ?? '')) {
+            return null;
+          }
+          if (local['patient_local_id'] != payload['patientLocalId'] ||
+              await OfflineVault.instance.openString(
+                    local['drawing_json'] as String? ?? '',
+                  ) !=
+                  payload['drawingJson']) {
+            return null;
+          }
+        }
+        final tabKey = payload['tabKey']?.toString() ?? '';
+        const visitReportTabs = {
+          'Bénéficiaire',
+          'Contexte de vie',
+          'Mesures',
+          'Accessibilité',
+          'Salle de bain',
+          'WC',
+          'Préconisations',
+        };
+        final scopeType = payload['scopeType']?.toString().isNotEmpty == true
+            ? payload['scopeType'].toString()
+            : tabKey == 'Plans'
+            ? 'visit_grid'
+            : visitReportTabs.contains(tabKey)
+            ? 'visit_report'
+            : 'dossier_detail';
+        final patientId = payload['patientLocalId']?.toString() ?? '';
+        final scopeId = payload['scopeId']?.toString().isNotEmpty == true
+            ? payload['scopeId'].toString()
+            : payload['dossierId']?.toString().isNotEmpty == true
+            ? payload['dossierId'].toString()
+            : patientId;
+        return {
+          if (forExplicitResolution) ...{
+            'guardOwnerId': ownerId,
+            'guardPayloadHash': sha256
+                .convert(utf8.encode(jsonEncode(payload)))
+                .toString(),
+            'guardLocalHash': sha256
+                .convert(utf8.encode(jsonEncode(local)))
+                .toString(),
+          },
+          'subTabKey': payload['subTabKey'],
+          'operationId': operationId,
+          'writeId': payload['writeId'],
+          'expectedRevision': payload['expectedRevision'],
+          'errorCode':
+              (payload['conflict'] is Map &&
+                  payload['conflict']['remote'] is Map)
+              ? payload['conflict']['remote']['error']
+              : null,
+          'noteLocalId': rows.single['entity_local_id'],
+          'patientId': patientId,
+          'dossierId': payload['dossierId'],
+          'scopeType': scopeType,
+          'scopeId': scopeId,
+          'tabKey': tabKey,
+          'pageNumber': payload['pageNumber'] ?? 0,
+        };
+      } catch (_) {
+        return null;
+      }
+    });
+  }
+
+  /// Repair an address, never a revision or note content. The caller obtained
+  /// [remote] from a fresh authorized GET. Recheck the queue in a transaction
+  /// so edits made during that GET cannot be silently replaced.
+  Future<bool> repairMissingNoteIdentity(
+    String operationId, {
+    required String writeId,
+    required Map<String, dynamic> remote,
+  }) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership) {
+        // mayClaim is deliberately pending-only; this action reads a conflict.
+        final owner = await txn.rawQuery(
+          '''SELECT 1
+          FROM sync_operation_ownership AS ownership
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE ownership.operation_id = ?
+            AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owner.isEmpty) return false;
+      }
+      final rows = await txn.query(
+        'sync_operations',
+        where: 'id = ? AND entity_type = ? AND status = ?',
+        whereArgs: [operationId, 'note_page', 'conflict'],
+      );
+      if (rows.length != 1) return false;
+      final row = rows.single;
       final payload =
           jsonDecode(
                 await OfflineVault.instance.openString(
-                  rows.single['payload_json'] as String,
+                  row['payload_json'] as String,
                 ),
               )
               as Map<String, dynamic>;
-      final tabKey = payload['tabKey']?.toString() ?? '';
-      const visitReportTabs = {
-        'Bénéficiaire',
-        'Contexte de vie',
-        'Mesures',
-        'Accessibilité',
-        'Salle de bain',
-        'WC',
-        'Préconisations',
-      };
-      final scopeType = payload['scopeType']?.toString().isNotEmpty == true
-          ? payload['scopeType'].toString()
-          : tabKey == 'Plans'
-          ? 'visit_grid'
-          : visitReportTabs.contains(tabKey)
-          ? 'visit_report'
-          : 'dossier_detail';
+      final conflict = payload['conflict'];
+      if (payload['writeId'] != writeId ||
+          conflict is! Map ||
+          conflict['remote'] is! Map ||
+          conflict['remote']['error'] != 'NOTE_PAGE_RECORD_MISSING') {
+        return false;
+      }
       final patientId = payload['patientLocalId']?.toString() ?? '';
-      final scopeId = payload['scopeId']?.toString().isNotEmpty == true
-          ? payload['scopeId'].toString()
-          : payload['dossierId']?.toString().isNotEmpty == true
-          ? payload['dossierId'].toString()
-          : patientId;
-      return {
-        'operationId': operationId,
-        'noteLocalId': rows.single['entity_local_id'],
-        'patientId': patientId,
-        'dossierId': payload['dossierId'],
-        'scopeType': scopeType,
-        'scopeId': scopeId,
-        'tabKey': tabKey,
-        'pageNumber': payload['pageNumber'] ?? 0,
-      };
-    } catch (_) {
-      return null;
-    }
+      final dossierId = payload['dossierId']?.toString() ?? '';
+      final queuedScope = payload['scopeId']?.toString();
+      if (queuedScope != null &&
+          queuedScope.isNotEmpty &&
+          queuedScope != dossierId) {
+        return false;
+      }
+      if ((payload['subTabKey']?.toString().isNotEmpty ?? false) ||
+          !matchesLegacyNoteIdentity(
+            remote: remote,
+            patientId: patientId,
+            dossierId: dossierId,
+            scopeType: payload['scopeType']?.toString().isNotEmpty == true
+                ? payload['scopeType'].toString()
+                : defaultNoteScopeType(payload['tabKey']?.toString() ?? ''),
+            tabKey: payload['tabKey']?.toString() ?? '',
+            pageNumber: int.tryParse('${payload['pageNumber']}') ?? -1,
+            expectedRevision: payload['expectedRevision']?.toString(),
+            writeId: writeId,
+          )) {
+        return false;
+      }
+      final local = await txn.query(
+        'note_pages',
+        columns: ['drawing_json'],
+        where: 'local_id = ?',
+        whereArgs: [row['entity_local_id']],
+      );
+      if (local.length != 1 ||
+          await OfflineVault.instance.openString(
+                local.single['drawing_json'] as String? ?? '',
+              ) !=
+              payload['drawingJson']) {
+        return false;
+      }
+      payload
+        ..remove('conflict')
+        ..['scopeType'] = remote['scopeType']
+        ..['scopeId'] = remote['scopeId'];
+      await txn.update(
+        'sync_operations',
+        {
+          'payload_json': await OfflineVault.instance.sealString(
+            jsonEncode(payload),
+          ),
+          'status': 'pending',
+          'attempt_count': 0,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [operationId],
+      );
+      await txn.update(
+        'note_pages',
+        {'sync_state': SyncState.pendingSync.name},
+        where: 'local_id = ?',
+        whereArgs: [row['entity_local_id']],
+      );
+      return true;
+    });
   }
 
   /// Keep the complete local note and retry it against the revision observed
@@ -1850,6 +2133,10 @@ class SyncRepository {
     String operationId, {
     String? revision,
     String? observedRevision,
+    bool verifiedRemoteMissing = false,
+    Map<String, dynamic>? explicitSnapshot,
+    Map<String, dynamic>? observedRemote,
+    void Function()? checkSession,
   }) async {
     final db = await _database.database;
     return db.transaction((txn) async {
@@ -1870,14 +2157,102 @@ class SyncRepository {
                 ),
               )
               as Map<String, dynamic>;
+      if (explicitSnapshot != null) {
+        checkSession?.call();
+        final owners = await txn.rawQuery(
+          '''SELECT session.user_local_id
+          FROM sync_operation_ownership AS ownership
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE ownership.operation_id = ? AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owners.length != 1 ||
+            owners.single['user_local_id'] !=
+                explicitSnapshot['guardOwnerId'] ||
+            sha256.convert(utf8.encode(jsonEncode(payload))).toString() !=
+                explicitSnapshot['guardPayloadHash']) {
+          return false;
+        }
+        final notes = await txn.query(
+          'note_pages',
+          where: 'local_id = ?',
+          whereArgs: [rows.single['entity_local_id']],
+        );
+        if (notes.length != 1 ||
+            sha256.convert(utf8.encode(jsonEncode(notes.single))).toString() !=
+                explicitSnapshot['guardLocalHash']) {
+          return false;
+        }
+        if (observedRemote != null) {
+          final patientId = explicitSnapshot['patientId'] as String;
+          final dossierId = explicitSnapshot['dossierId']?.toString() ?? '';
+          final canonical =
+              observedRemote['patientId'] == patientId &&
+              observedRemote['dossierId'] == explicitSnapshot['dossierId'] &&
+              observedRemote['scopeType'] == explicitSnapshot['scopeType'] &&
+              observedRemote['scopeId'] == explicitSnapshot['scopeId'] &&
+              observedRemote['tabKey'] == explicitSnapshot['tabKey'] &&
+              '${observedRemote['pageNumber']}' ==
+                  '${explicitSnapshot['pageNumber']}' &&
+              (observedRemote['subTabKey'] == null ||
+                  observedRemote['subTabKey'] == '');
+          final legacy =
+              explicitSnapshot['scopeId'] == dossierId &&
+              matchesLegacyNoteAddress(
+                remote: observedRemote,
+                patientId: patientId,
+                dossierId: dossierId,
+                scopeType: explicitSnapshot['scopeType'] as String,
+                tabKey: explicitSnapshot['tabKey'] as String,
+                pageNumber:
+                    int.tryParse('${explicitSnapshot['pageNumber']}') ?? -1,
+              );
+          if ((!canonical && !legacy) ||
+              observedRemote['revision'] != observedRevision ||
+              observedRevision == null ||
+              verifiedRemoteMissing) {
+            return false;
+          }
+          payload['scopeType'] = observedRemote['scopeType'];
+          payload['scopeId'] = observedRemote['scopeId'];
+        } else if (!verifiedRemoteMissing) {
+          return false;
+        }
+        checkSession?.call();
+      }
       final suppliedRevision = observedRevision ?? revision;
       final verifiedRevision = suppliedRevision == null
           ? _noteConflictRevision(payload['conflict'])
           : _noteConflictRevision({'revision': suppliedRevision});
-      if (verifiedRevision == null) return false;
+      final missingRecordConflict =
+          (payload['conflict'] as Map?)?['remote'] is Map &&
+          ((payload['conflict'] as Map)['remote'] as Map)['error'] ==
+              'NOTE_PAGE_RECORD_MISSING';
+      if (verifiedRemoteMissing) {
+        // Only an explicit missing-record conflict and a fresh successful
+        // remote read can convert a stale update into a create. The server
+        // must still reject the create if a writer races us to this key.
+        if (!missingRecordConflict || suppliedRevision != null) return false;
+        final local = await txn.query(
+          'note_pages',
+          columns: const ['local_id'],
+          where: 'local_id = ?',
+          whereArgs: [rows.single['entity_local_id']],
+          limit: 1,
+        );
+        if (local.length != 1) return false;
+      } else if (verifiedRevision == null) {
+        return false;
+      }
+      checkSession?.call();
       payload
         ..remove('conflict')
-        ..['expectedRevision'] = verifiedRevision
+        ..['expectedRevision'] = verifiedRemoteMissing ? null : verifiedRevision
         ..['writeId'] = newSyncWriteId()
         ..['predecessorWriteIds'] = <String>[];
       final updated = await txn.update(
@@ -1895,15 +2270,19 @@ class SyncRepository {
         whereArgs: [operationId, 'conflict'],
       );
       if (updated != 1) return false;
-      await txn.update(
+      final noteUpdated = await txn.update(
         'note_pages',
         {
-          'remote_revision': verifiedRevision,
+          'remote_revision': verifiedRemoteMissing ? null : verifiedRevision,
           'sync_state': SyncState.pendingSync.name,
         },
         where: 'local_id = ?',
         whereArgs: [rows.single['entity_local_id']],
       );
+      if (noteUpdated != 1) {
+        throw StateError('Local note disappeared while resolving conflict');
+      }
+      checkSession?.call();
       return true;
     });
   }

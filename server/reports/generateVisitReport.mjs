@@ -15,6 +15,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { appendSanitaryRoomsAppendix } from './sanitaryRoomsAppendix.mjs';
 import { uniformPhotoHeight } from './photoLayout.mjs';
 import { needsMorbihanEligibleWorks, insertMorbihanEligibleWorks } from './morbihanEligibleWorks.mjs';
 import { fileURLToPath } from 'node:url';
@@ -699,6 +700,7 @@ function normalizeFamilySituation(raw) {
   if (s.startsWith('célib') || s.startsWith('celib')) return 'Célibataire';
   if (s.includes('concubin')) return 'En concubinage';
   if (s.startsWith('mari')) return 'Mariée';
+  if (s.startsWith('pacs')) return 'Pacsée';
   if (s.startsWith('veuf') || s.startsWith('veuv')) return 'Veufve';
   if (s.startsWith('divorc')) return 'Divorcée';
   return '';
@@ -807,34 +809,6 @@ function joinNotePagesText(pages) {
     })
     .join('\n\n')
     .trim();
-}
-
-/**
- * Pour le champ "Dépendance" du PDF, on n'affiche que l'un des 4
- * mots-clés : « Aucune » / « Canne » / « Déambulateur » /
- * « Fauteuil roulant ». Tout ce qui n'est pas l'un de ces 3 derniers
- * (vide, "Non" legacy NocoDB, texte libre non-classifiable…) ⇒
- * « Aucune ».
- *
- * Pourquoi : côté Flutter, sélectionner « Aucune » dans la pill list
- * stocke `dependenceTxt = ''` (cf. beneficiary_tab.dart). Et certaines
- * lignes NocoDB historiques gardent « Non » dans
- * `dependance_particuliere_txt`. Avant ce fix, ces deux cas
- * affichaient soit du vide, soit littéralement « Non » dans le PDF —
- * confusant car « Aucune » est l'option par défaut visible dans l'app.
- */
-function normalizeDependenceForReport(raw) {
-  const text = String(raw || '').trim();
-  const positives = ['Canne', 'Déambulateur', 'Fauteuil roulant'];
-  if (text) {
-    const lc = text.toLowerCase();
-    for (const opt of positives) {
-      if (lc.includes(opt.toLowerCase())) return opt;
-    }
-  }
-  // Vide, "Aucune", "Non", ou texte non-classifiable → on affiche
-  // « Aucune » (canonique, équivalent à la pill par défaut Flutter).
-  return 'Aucune';
 }
 
 // Resolve the two printed birth-date slots by occupant order. The legacy
@@ -1230,13 +1204,6 @@ function buildViewModel({
         : '',
       invalidityDisplay,
       homeHelpDisplay,
-      // Dépendance particulière : on n'affiche QUE le mot-clé (Canne /
-      // Déambulateur / Fauteuil roulant / Aucune) et pas la description
-      // libre saisie en complément. Demande utilisateur : « simplement
-      // un élément ». On match d'abord le texte contre les options
-      // connues, fallback sur le 1er segment avant virgule/point si
-      // aucune correspondance.
-      dependenceTxt: normalizeDependenceForReport(patient.dependenceTxt),
       incomeCategory: String(patient.incomeCategory || '').trim(),
       // Cellule « Caisse de retraite complémentaire » de la page
       // « Descriptif des aides prévisionnelles » — pré-résolu côté
@@ -2805,6 +2772,116 @@ function drawWrappedText(page, text, {
   }
 }
 
+function formatOccupantBirthDate(raw) {
+  const value = String(raw || '').trim();
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) return value;
+  return formatFrenchDate(value);
+}
+
+async function insertOccupantDetailsPages(pdfDoc, patient) {
+  const occupants = Array.isArray(patient?.occupants) ? patient.occupants : [];
+  if (!occupants.length) return 0;
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const pageSize = pdfDoc.getPage(2).getSize();
+  const margin = 44;
+  const width = pageSize.width - margin * 2;
+  let inserted = 0;
+  let page;
+  let y;
+  const newPage = () => {
+    page = pdfDoc.insertPage(3 + inserted, [pageSize.width, pageSize.height]);
+    inserted += 1;
+    y = pageSize.height - margin;
+    page.drawText('Occupants et santé', { x: margin, y, size: 16, font: bold });
+    y -= 32;
+  };
+  const drawParagraph = (text, { strong = false } = {}) => {
+    const selectedFont = strong ? bold : font;
+    const lines = splitTextToLines(
+      sanitizeForPdfFont(String(text || ''), selectedFont), selectedFont, 10, width,
+    );
+    for (const line of lines) {
+      if (y < margin + 18) newPage();
+      if (line) page.drawText(line, { x: margin, y, size: 10, font: selectedFont });
+      y -= 14;
+    }
+  };
+  newPage();
+  const familySituation = String(patient.familySituation || '').trim();
+  if (familySituation) {
+    drawParagraph(`Situation familiale : ${familySituation}`);
+    y -= 10;
+  }
+  occupants.forEach((occupant, index) => {
+    if (y < margin + 90) newPage();
+    const civility = occupant.gender === 'Femme' ? 'Mme' : occupant.gender === 'Homme' ? 'M.' : '';
+    const name = [String(occupant.lastName || '').toUpperCase(), occupant.firstName]
+      .filter(Boolean).join(' ');
+    const birth = formatOccupantBirthDate(occupant.birthDate);
+    const maiden = String(occupant.maidenName || '').trim();
+    drawParagraph(`${civility} ${name}${birth ? ` né(e) le ${birth}` : ''}${maiden ? ` (nom de jeune fille : ${maiden})` : ''}`.trim()
+      || `Occupant ${index + 1}`, { strong: true });
+    const apaDetails = occupant.apa ? String(occupant.apaDetails || '').trim() : '';
+    if (apaDetails) drawParagraph(`Détails APA : ${apaDetails}`);
+    const invalidityDetails = occupant.invalidity
+      ? String(occupant.invalidityDetails || '').trim() : '';
+    if (invalidityDetails) drawParagraph(`Détails invalidité : ${invalidityDetails}`);
+    y -= 12;
+  });
+  return inserted;
+}
+
+function splitReportNoteForField(field, value, font) {
+  const rect = field?.acroField?.getWidgets?.()[0]?.getRectangle?.();
+  if (!rect || !String(value || '').trim()) return { first: value, rest: '' };
+  const lines = splitTextToLines(String(value), font, 11, rect.width - 12);
+  const capacity = Math.max(1, Math.floor((rect.height - 14) / 13));
+  return {
+    first: lines.slice(0, capacity).join('\n'),
+    rest: lines.slice(capacity).join('\n').trim(),
+  };
+}
+
+function splitReportNoteToLineLimit(value, font, maxLines, width) {
+  const lines = splitTextToLines(String(value || ''), font, 11, width);
+  return {
+    first: lines.slice(0, maxLines).join('\n'),
+    rest: lines.slice(maxLines).join('\n').trim(),
+  };
+}
+
+async function appendNoteContinuationPages(pdfDoc, notes) {
+  if (!notes.length) return 0;
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const size = pdfDoc.getPage(0).getSize();
+  const margin = 44;
+  const width = size.width - margin * 2;
+  let count = 0;
+  for (const note of notes) {
+    const lines = splitTextToLines(note.text, font, 11, width);
+    let page;
+    let y = 0;
+    const newPage = () => {
+      page = pdfDoc.addPage([size.width, size.height]);
+      count += 1;
+      y = size.height - margin;
+      page.drawText(sanitizeForPdfFont(`Suite - ${note.title}`), {
+        x: margin, y, size: 15, font: bold,
+      });
+      y -= 32;
+    };
+    newPage();
+    for (const line of lines) {
+      if (y < margin + 14) newPage();
+      if (line) page.drawText(line, { x: margin, y, size: 11, font });
+      y -= 15;
+    }
+  }
+  return count;
+}
+
 function drawFlat2026Table(page, {
   x,
   yTop,
@@ -3551,6 +3628,20 @@ export async function generateVisitReport({
     descriptifMerged: false,
     morbihanWorksPageAdded: false,
   };
+  const noteContinuations = [];
+  if (isFlat2026Template) {
+    for (const [key, title, maxLines] of [
+      ['observationEquipements', 'Observations sanitaires', 29],
+      ['projetSouhaitUsage', 'Projet de l’usager', 15],
+      ['resumePreconisations', 'Résumé des préconisations', 52],
+    ]) {
+      const split = splitReportNoteToLineLimit(
+        view.observations[key], reportTextFont, maxLines, 510,
+      );
+      view.observations[key] = split.first;
+      if (split.rest) noteContinuations.push({ title, text: split.rest });
+    }
+  }
 
   for (const [fieldName, entry] of Object.entries(mapping)) {
     if (fieldName.startsWith('$')) continue; // commentaires/meta dans le JSON
@@ -3563,7 +3654,22 @@ export async function generateVisitReport({
       console.warn(`[generateVisitReport] champ "${fieldName}" absent du template — mapping obsolète ?`);
       continue;
     }
-    const value = getByPath(view, entry.source);
+    let value = getByPath(view, entry.source);
+    if ((['Environnement', 'Habitudes', 'Observations1'].includes(fieldName)
+      || (!isFlat2026Template && ['obs', 'Projet ou souhait de lusager', 'Résumé des préconisations'].includes(fieldName)))
+      && entry.type === 'text') {
+      const split = splitReportNoteForField(field, value, reportTextFont);
+      value = split.first;
+      if (split.rest) noteContinuations.push({
+        title: fieldName === 'Environnement' ? 'Environnement'
+          : fieldName === 'Habitudes' ? 'Habitudes de vie'
+            : fieldName === 'obs' ? 'Observations sanitaires'
+              : fieldName === 'Projet ou souhait de lusager' ? 'Projet de l’usager'
+                : fieldName === 'Résumé des préconisations' ? 'Résumé des préconisations'
+                  : 'Observations',
+        text: split.rest,
+      });
+    }
     if (value === undefined || value === null || value === '') {
       // Pour les TEXT, on laisse vide (n'écrase rien). Pour les
       // CHECK/RADIO, value falsy → uncheck explicite, ce qui est OK.
@@ -4082,6 +4188,11 @@ export async function generateVisitReport({
   }
 
   drawBirthCivilitiesOverlay({ pdfDoc, view, font: reportTextFont });
+  // Ancienne ligne « Dépendance particulière » imprimée dans le gabarit.
+  // Le champ n'est plus renseigné ni présenté dans le rapport.
+  pdfDoc.getPage(2).drawRectangle({
+    x: 41, y: 524, width: 511, height: 30, color: rgb(1, 1, 1),
+  });
 
   if (isFlat2026Template) {
     await drawFlat2026AidSummary({
@@ -4295,6 +4406,9 @@ export async function generateVisitReport({
     await insertMorbihanEligibleWorks(numberedDoc, accessibilityNormsPageIndex);
     stats.morbihanWorksPageAdded = true;
   }
+  stats.sanitaryAppendixPages = await appendSanitaryRoomsAppendix({ pdfDoc: numberedDoc, sanitaires });
+  stats.occupantDetailsPages = await insertOccupantDetailsPages(numberedDoc, dossier?.patient);
+  stats.noteContinuationPages = await appendNoteContinuationPages(numberedDoc, noteContinuations);
   await drawGeneratedPageNumbers(numberedDoc);
 
   const bytes = await numberedDoc.save({

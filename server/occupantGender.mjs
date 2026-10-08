@@ -2,10 +2,16 @@ const hasGender = (occupant) => occupant && Object.hasOwn(occupant, 'gender')
   && ['', 'Homme', 'Femme'].includes(occupant.gender);
 const hasMaidenName = (occupant) => occupant && typeof occupant.maidenName === 'string'
   && occupant.maidenName.trim() !== '';
-const hasProtectedField = (occupant) => hasGender(occupant) || hasMaidenName(occupant);
+const protectedTextFields = ['fiscalRevenueYear', 'apaDetails', 'invalidityDetails'];
+const hasProtectedText = (occupant, key) => occupant && typeof occupant[key] === 'string'
+  && occupant[key].trim() !== '';
+const hasProtectedField = (occupant) => hasGender(occupant) || hasMaidenName(occupant)
+  || protectedTextFields.some((key) => hasProtectedText(occupant, key));
 const needsProtection = (incoming, previous) =>
   (hasGender(previous) && !Object.hasOwn(incoming, 'gender'))
-  || (hasMaidenName(previous) && !Object.hasOwn(incoming, 'maidenName'));
+  || (hasMaidenName(previous) && !Object.hasOwn(incoming, 'maidenName'))
+  || protectedTextFields.some((key) =>
+    hasProtectedText(previous, key) && !Object.hasOwn(incoming, key));
 const normalized = (value) => String(value ?? '').trim().toLocaleLowerCase('fr');
 const sameIdentity = (left, right) => left && right
   && Boolean(normalized(left.firstName) || normalized(left.lastName))
@@ -13,7 +19,7 @@ const sameIdentity = (left, right) => left && right
   && normalized(left.lastName) === normalized(right.lastName)
   && normalized(left.birthDate) === normalized(right.birthDate);
 
-// Build 64 strips unknown fields. Preserve gender and maiden name only when the identity is
+// Older builds strip unknown fields. Preserve newer occupant fields only when the identity is
 // unique (or the client's observed identity identifies an intentional rename).
 // Never infer identity from birth date alone or blindly zip arrays by position.
 export function preserveLegacyOccupantGender(updates, storedOccupantsJson, { strict = true } = {}) {
@@ -39,6 +45,9 @@ export function preserveLegacyOccupantGender(updates, storedOccupantsJson, { str
         ? { gender: previous.gender } : {}),
       ...(hasMaidenName(previous) && !Object.hasOwn(incoming, 'maidenName')
         ? { maidenName: previous.maidenName } : {}),
+      ...Object.fromEntries(protectedTextFields
+        .filter((key) => hasProtectedText(previous, key) && !Object.hasOwn(incoming, key))
+        .map((key) => [key, previous[key]])),
     };
     // A genuinely appended blank/new occupant has no earlier gender to retain.
     if (index >= stored.length || !strict) return incoming;

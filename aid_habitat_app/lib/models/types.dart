@@ -1,6 +1,7 @@
 // ignore_for_file: constant_identifier_names
 
 import 'dart:convert' show jsonDecode, jsonEncode;
+import 'housing_rooms.dart';
 
 enum DossierStatus {
   TO_VISIT,
@@ -14,6 +15,8 @@ enum DossierStatus {
   WORKS_COMPLETED,
   CLOSED,
   ARCHIVED,
+  PENDING,
+  POST_WORKS_VISIT,
 }
 
 enum HousingType { HOUSE, APARTMENT }
@@ -333,12 +336,18 @@ class TrustedPerson {
 class Occupant {
   final String firstName;
   final String lastName;
-  /// Null means absent on legacy records; an empty string clears the choice.
+
+  /// Null means absent on legacy clients; an empty string is an explicit clear.
   final String? gender;
+
+  /// Null means absent on older records; an empty string is an explicit clear.
+  final String? maidenName;
   final String birthDate;
   final bool apa;
   final bool invalidity;
   final String invalidityTxt;
+  final String apaDetails;
+  final String invalidityDetails;
   final bool homeHelp;
   final String homeHelpTxt;
   final String dependenceTxt;
@@ -351,6 +360,9 @@ class Occupant {
   /// derived from the sum divided by the number of occupants.
   final double? fiscalRevenue;
 
+  /// The tax year attached to this occupant's RFR; empty for legacy rows.
+  final String fiscalRevenueYear;
+
   /// GIR APA (6 → 1). Rempli uniquement quand `apa == true`. Séparé de
   /// `invalidityTxt` pour ne pas écraser la donnée MDPH si les deux cases
   /// sont cochées.
@@ -360,10 +372,13 @@ class Occupant {
     this.firstName = '',
     this.lastName = '',
     this.gender,
+    this.maidenName,
     this.birthDate = '',
     this.apa = false,
     this.invalidity = false,
     this.invalidityTxt = '',
+    this.apaDetails = '',
+    this.invalidityDetails = '',
     this.homeHelp = false,
     this.homeHelpTxt = '',
     this.dependenceTxt = '',
@@ -371,6 +386,7 @@ class Occupant {
     this.caisseRetraitePrincipale = '',
     this.caissesRetraiteComplementaires = '',
     this.fiscalRevenue,
+    this.fiscalRevenueYear = '',
     this.apaGir = '',
   });
 
@@ -382,10 +398,13 @@ class Occupant {
         : (const ['Homme', 'Femme'].contains(json['gender'])
               ? json['gender'] as String
               : ''),
+    maidenName: json['maidenName'] as String?,
     birthDate: json['birthDate'] as String? ?? '',
     apa: json['apa'] as bool? ?? false,
     invalidity: json['invalidity'] as bool? ?? false,
     invalidityTxt: json['invalidityTxt'] as String? ?? '',
+    apaDetails: json['apaDetails'] as String? ?? '',
+    invalidityDetails: json['invalidityDetails'] as String? ?? '',
     homeHelp: json['homeHelp'] as bool? ?? false,
     homeHelpTxt: json['homeHelpTxt'] as String? ?? '',
     dependenceTxt: json['dependenceTxt'] as String? ?? '',
@@ -394,6 +413,7 @@ class Occupant {
     caissesRetraiteComplementaires:
         json['caissesRetraiteComplementaires'] as String? ?? '',
     fiscalRevenue: (json['fiscalRevenue'] as num?)?.toDouble(),
+    fiscalRevenueYear: json['fiscalRevenueYear'] as String? ?? '',
     apaGir: json['apaGir'] as String? ?? '',
   );
 
@@ -401,10 +421,13 @@ class Occupant {
     'firstName': firstName,
     'lastName': lastName,
     if (gender != null) 'gender': gender,
+    if (maidenName != null) 'maidenName': maidenName,
     'birthDate': birthDate,
     'apa': apa,
     'invalidity': invalidity,
     'invalidityTxt': invalidityTxt,
+    'apaDetails': apaDetails,
+    'invalidityDetails': invalidityDetails,
     'homeHelp': homeHelp,
     'homeHelpTxt': homeHelpTxt,
     'dependenceTxt': dependenceTxt,
@@ -412,6 +435,7 @@ class Occupant {
     'caisseRetraitePrincipale': caisseRetraitePrincipale,
     'caissesRetraiteComplementaires': caissesRetraiteComplementaires,
     'fiscalRevenue': fiscalRevenue,
+    'fiscalRevenueYear': fiscalRevenueYear,
     'apaGir': apaGir,
   };
 
@@ -419,10 +443,13 @@ class Occupant {
     String? firstName,
     String? lastName,
     String? gender,
+    String? maidenName,
     String? birthDate,
     bool? apa,
     bool? invalidity,
     String? invalidityTxt,
+    String? apaDetails,
+    String? invalidityDetails,
     bool? homeHelp,
     String? homeHelpTxt,
     String? dependenceTxt,
@@ -430,6 +457,7 @@ class Occupant {
     String? caisseRetraitePrincipale,
     String? caissesRetraiteComplementaires,
     double? fiscalRevenue,
+    String? fiscalRevenueYear,
     bool clearFiscalRevenue = false,
     String? apaGir,
   }) {
@@ -437,10 +465,13 @@ class Occupant {
       firstName: firstName ?? this.firstName,
       lastName: lastName ?? this.lastName,
       gender: gender ?? this.gender,
+      maidenName: maidenName ?? this.maidenName,
       birthDate: birthDate ?? this.birthDate,
       apa: apa ?? this.apa,
       invalidity: invalidity ?? this.invalidity,
       invalidityTxt: invalidityTxt ?? this.invalidityTxt,
+      apaDetails: apaDetails ?? this.apaDetails,
+      invalidityDetails: invalidityDetails ?? this.invalidityDetails,
       homeHelp: homeHelp ?? this.homeHelp,
       homeHelpTxt: homeHelpTxt ?? this.homeHelpTxt,
       dependenceTxt: dependenceTxt ?? this.dependenceTxt,
@@ -453,6 +484,7 @@ class Occupant {
       fiscalRevenue: clearFiscalRevenue
           ? null
           : (fiscalRevenue ?? this.fiscalRevenue),
+      fiscalRevenueYear: fiscalRevenueYear ?? this.fiscalRevenueYear,
       apaGir: apaGir ?? this.apaGir,
     );
   }
@@ -552,6 +584,20 @@ class Patient {
 }
 
 class Housing {
+  final Map<String, String> roomIdentityErrors;
+  final Map<String, List<HousingRoom>> _roomsByLevel;
+  Map<String, List<HousingRoom>> get roomsByLevel => {
+    for (final entry in <String, List<String>>{
+      'basement': basementRooms,
+      'rdc': rdcRooms,
+      'floor': floorRooms,
+      'secondFloor': secondFloorRooms,
+      'thirdFloor': thirdFloorRooms,
+    }.entries)
+      entry.key:
+          _roomsByLevel[entry.key] ??
+          parseHousingRooms(jsonEncode(entry.value), entry.key),
+  };
   final HousingType type;
   final int? year;
   final double? surface;
@@ -607,6 +653,8 @@ class Housing {
   final String accessObservation;
 
   Housing({
+    this.roomIdentityErrors = const {},
+    Map<String, List<HousingRoom>> roomsByLevel = const {},
     required this.type,
     this.year,
     this.surface,
@@ -660,7 +708,7 @@ class Housing {
     this.easyAccess = true,
     this.comments = '',
     this.accessObservation = '',
-  });
+  }) : _roomsByLevel = roomsByLevel;
 
   Housing copyWith({
     HousingType? type,
@@ -824,6 +872,7 @@ class AutonomyData {
 
 class BathroomInstance {
   final String id;
+  final String housingRoomId;
   final String levelField;
   final String levelLabel;
   final bool sdbBaignoire;
@@ -858,6 +907,7 @@ class BathroomInstance {
 
   const BathroomInstance({
     required this.id,
+    this.housingRoomId = '',
     this.levelField = '',
     this.levelLabel = '',
     this.sdbBaignoire = false,
@@ -885,6 +935,7 @@ class BathroomInstance {
   factory BathroomInstance.fromJson(Map<String, dynamic> json) =>
       BathroomInstance(
         id: json['id'] as String? ?? '',
+        housingRoomId: json['housingRoomId'] as String? ?? '',
         levelField: json['levelField'] as String? ?? '',
         levelLabel: json['levelLabel'] as String? ?? '',
         sdbBaignoire: json['sdbBaignoire'] as bool? ?? false,
@@ -916,6 +967,7 @@ class BathroomInstance {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    if (housingRoomId.isNotEmpty) 'housingRoomId': housingRoomId,
     'levelField': levelField,
     'levelLabel': levelLabel,
     'sdbBaignoire': sdbBaignoire,
@@ -943,6 +995,7 @@ class BathroomInstance {
 
 class WcInstance {
   final String id;
+  final String housingRoomId;
   final String levelField;
   final String levelLabel;
   // Trois états mutuellement exclusifs pour la hauteur de la cuvette :
@@ -972,6 +1025,7 @@ class WcInstance {
 
   const WcInstance({
     required this.id,
+    this.housingRoomId = '',
     this.levelField = '',
     this.levelLabel = '',
     this.wcCuvetteBonneHauteur = true,
@@ -987,6 +1041,7 @@ class WcInstance {
 
   factory WcInstance.fromJson(Map<String, dynamic> json) => WcInstance(
     id: json['id'] as String? ?? '',
+    housingRoomId: json['housingRoomId'] as String? ?? '',
     levelField: json['levelField'] as String? ?? '',
     levelLabel: json['levelLabel'] as String? ?? '',
     wcCuvetteBonneHauteur: json['wcCuvetteBonneHauteur'] as bool? ?? true,
@@ -1003,6 +1058,7 @@ class WcInstance {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    if (housingRoomId.isNotEmpty) 'housingRoomId': housingRoomId,
     'levelField': levelField,
     'levelLabel': levelLabel,
     'wcCuvetteBonneHauteur': wcCuvetteBonneHauteur,
@@ -1439,6 +1495,10 @@ extension DossierStatusLabel on DossierStatus {
         return 'Clôturé';
       case DossierStatus.ARCHIVED:
         return 'Archivé';
+      case DossierStatus.PENDING:
+        return 'En attente';
+      case DossierStatus.POST_WORKS_VISIT:
+        return 'Visite fin de travaux';
     }
   }
 }

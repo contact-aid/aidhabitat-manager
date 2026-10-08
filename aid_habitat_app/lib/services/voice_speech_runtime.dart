@@ -8,11 +8,9 @@ const webVoiceRuntimeUnsupported = 'unsupported';
 const webVoiceRuntimeInstallFailed = 'install-failed';
 const webVoiceRuntimeLocalError = 'local-error';
 
-/// Prepares the browser speech engine before `speech_to_text` creates its
-/// recognition object. Chromium browsers use their local French model when
-/// available. Arc keeps an explicit microphone track but uses its connected
-/// recognizer because its local engine can detect speech without returning a
-/// transcript.
+/// Selects an already-installed browser language pack when available, otherwise
+/// the browser's default recognition service. The bridge applies this choice
+/// to the retained recognition object on its next start.
 Future<String> prepareWebVoiceSpeechRuntime() {
   return prepareWebVoiceSpeechRuntimeImpl();
 }

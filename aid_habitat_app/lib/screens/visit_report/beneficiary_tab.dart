@@ -18,6 +18,7 @@ import '../../components/confirmation_dialog.dart';
 import '../../components/form_widgets.dart';
 import '../../components/soft_transitions.dart';
 import '../../components/two_threshold_swipe.dart';
+import '../../components/year_picker_field.dart';
 import 'retirement_fund_selection.dart' as retirement_fund_selection;
 
 /// Bénéficiaire tab — parité 1:1 avec la version React (`BeneficiaryForm`).
@@ -221,18 +222,11 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   // Family situation presets
   static const List<String> _familySituationOptions = [
     'Marié(e)',
+    'Pacsé(e)',
     'Célibataire',
     'Divorcé(e)',
     'Veuf(ve)',
     'Concubinage',
-  ];
-
-  // Dependence presets — mirrors NocoDB view `vwje1ceip6mv9bt6`.
-  static const List<String> _dependenceOptions = [
-    'Aucune',
-    'Canne',
-    'Déambulateur',
-    'Fauteuil roulant',
   ];
 
   // GIR (Groupe Iso-Ressources) options 6 → 1 — shown quand "Bénéficiaire
@@ -533,7 +527,9 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   Future<void> _flushPendingSave() async {
     await _save();
     if (_hasPendingSave) {
-      throw StateError('Les informations du bénéficiaire ne sont pas encore enregistrées.');
+      throw StateError(
+        'Les informations du bénéficiaire ne sont pas encore enregistrées.',
+      );
     }
   }
 
@@ -683,7 +679,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
       'invalidity_txt': primary.invalidityTxt,
       'home_help': primary.homeHelp ? 1 : 0,
       'home_help_txt': primary.homeHelpTxt,
-      'dependence_txt': primary.dependenceTxt,
       'trusted_person_json': jsonEncode({
         'name': _trustedName,
         'phone': _trustedPhone,
@@ -734,8 +729,63 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
 
   void _updateOccupant(int index, Occupant updated) {
     if (index < 0 || index >= _occupants.length) return;
+    final revenueChanged =
+        _occupants[index].fiscalRevenue != updated.fiscalRevenue;
     setState(() => _occupants[index] = updated);
+    if (revenueChanged) _recomputeIncomeCategory();
     _scheduleSave();
+  }
+
+  Future<void> _editOccupantName(int index) async {
+    if (index < 0 || index >= _occupants.length) return;
+    final occupant = _occupants[index];
+    final firstName = TextEditingController(text: occupant.firstName);
+    final lastName = TextEditingController(text: occupant.lastName);
+    try {
+      final result = await showDialog<(String, String)>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Nom de l’occupant'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: firstName,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Prénom'),
+              ),
+              TextField(
+                controller: lastName,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Nom'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Annuler'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, (
+                firstName.text.trim(),
+                lastName.text.trim(),
+              )),
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || result == null || index >= _occupants.length) return;
+      _updateOccupant(
+        index,
+        _occupants[index].copyWith(firstName: result.$1, lastName: result.$2),
+      );
+    } finally {
+      firstName.dispose();
+      lastName.dispose();
+    }
   }
 
   // Note: numberPeople is controlled from the dossier screen. When it
@@ -988,6 +1038,17 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             ),
           ),
           const SizedBox(height: 12),
+          if (_occupants[idx].gender == 'Femme') ...[
+            FormTextField(
+              label: 'Nom de jeune fille',
+              value: _occupants[idx].maidenName ?? '',
+              onChanged: (value) => _updateOccupant(
+                idx,
+                _occupants[idx].copyWith(maidenName: value),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           _buildBirthDateRow(idx),
           if (idx == 0 && requiresAggir(_occupants.first.birthDate))
             const Padding(
@@ -1172,7 +1233,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   /// disparaissent (pas de navigation nécessaire).
   Widget _buildOccupantSwipeContainer({
     required Widget perOccupantContent,
-    required Widget sharedContent,
+    Widget? sharedContent,
   }) {
     final hasMultiple = _occupants.length > 1;
     if (!hasMultiple) {
@@ -1184,8 +1245,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             perOccupantContent,
-            const SizedBox(height: 24),
-            sharedContent,
+            if (sharedContent != null) ...[
+              const SizedBox(height: 24),
+              sharedContent,
+            ],
           ],
         ),
       );
@@ -1228,8 +1291,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         perOccupantContent,
-                        const SizedBox(height: 24),
-                        sharedContent,
+                        if (sharedContent != null) ...[
+                          const SizedBox(height: 24),
+                          sharedContent,
+                        ],
                       ],
                     ),
                   ),
@@ -1256,9 +1321,9 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final first = occ.firstName.trim();
     final last = occ.lastName.trim();
     final fallback = "Occupant ${idx + 1}";
-    final display = (first.isEmpty && last.isEmpty)
-        ? fallback
-        : [first, last.toUpperCase()].where((s) => s.isNotEmpty).join(' ');
+    final display = first.isNotEmpty
+        ? first
+        : (last.isNotEmpty ? last : fallback);
     final total = _occupants.length;
     final hasNav = total > 1;
     // `role` (BÉNÉFICIAIRE PRINCIPAL / CONJOINT·E) retiré sur demande user
@@ -1301,19 +1366,22 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           arrow(LucideIcons.chevronLeft, _occupantPrev),
           Expanded(
             child: Center(
-              child: Text(
-                display,
-                style: GoogleFonts.nunito(
-                  fontSize: 17,
-                  // w700 → w600 (demande user 2026-05-13 : nom occupant
-                  // « moins épais »).
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.25,
-                  height: 1.15,
-                  color: const Color(0xFF0E1116),
+              child: GestureDetector(
+                onDoubleTap: () => _editOccupantName(idx),
+                child: Text(
+                  display,
+                  style: GoogleFonts.nunito(
+                    fontSize: 17,
+                    // w700 → w600 (demande user 2026-05-13 : nom occupant
+                    // « moins épais »).
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.25,
+                    height: 1.15,
+                    color: const Color(0xFF0E1116),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
           ),
@@ -1360,6 +1428,8 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   // ---------------------------------------------------------------------------
 
   Widget _buildFinanceSection() {
+    final trustedPhoneInvalid = !isValidFrenchPhone(_trustedPhone);
+    final trustedEmailInvalid = !isValidEmail(_trustedEmail);
     // Foyer n'a aucune donnée "par occupant" (situation familiale et
     // occupation sont partagées pour le ménage). On conserve donc un
     // simple SingleChildScrollView sans header / swipe / dots.
@@ -1415,6 +1485,59 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             },
           ),
           const SizedBox(height: 24),
+          FormTextField(
+            label: 'Personnes présentes à la visite',
+            value: _personnesPresentesVisite,
+            onChanged: (v) {
+              _personnesPresentesVisite = v;
+              _markChanged();
+            },
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: FormTextFieldWithWarning(
+                  label: 'Téléphone de la personne de confiance',
+                  value: _trustedPhone,
+                  keyboardType: TextInputType.phone,
+                  showWarning: trustedPhoneInvalid,
+                  warningText: 'Numéro français invalide',
+                  onChanged: (v) {
+                    _trustedPhone = v;
+                    _markChanged();
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FormTextFieldWithWarning(
+                  label: 'Email de la personne de confiance',
+                  value: _trustedEmail,
+                  keyboardType: TextInputType.emailAddress,
+                  showWarning: trustedEmailInvalid,
+                  warningText: 'Adresse mail invalide',
+                  onChanged: (v) {
+                    _trustedEmail = v;
+                    _markChanged();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          FormMultiToggleGroup(
+            label: 'Envoi du rapport',
+            options: const ['Mail', 'Courrier'],
+            selected: _parseEnvoiRapport(_envoiRapport),
+            columns: 2,
+            onChanged: (next) {
+              _envoiRapport = _serializeEnvoiRapport(next);
+              _markChanged();
+            },
+          ),
+          const SizedBox(height: 24),
         ],
       ),
     );
@@ -1428,21 +1551,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     return _buildOccupantSwipeContainer(
       perOccupantContent: _buildAidesDependenceBlock(idx),
-      sharedContent: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // --- Bloc "Visite" — partagé (une seule fois par dossier).
-          FormTextField(
-            label: 'Personnes présentes à la visite',
-            value: _personnesPresentesVisite,
-            onChanged: (v) {
-              _personnesPresentesVisite = v;
-              _markChanged();
-            },
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
     );
   }
 
@@ -1496,35 +1604,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     );
   }
 
-  /// Dépendance : liste de pills toutes égales (Aucune incluse). On
-  /// stocke directement le libellé cliqué dans `dependenceTxt`. Le tap
-  /// sur la pill déjà sélectionnée la désélectionne (cf. FormToggleGroup
-  /// `allowDeselect=true`) → retour à `''` = non renseigné.
-  ///
-  /// NB : avant 2026-04-30, l'historique stockait `''` quand l'ergo
-  /// cliquait « Aucune » (convention partagée avec NocoDB) — résultat :
-  /// la pill « Aucune » ne pouvait jamais être visiblement highlighted,
-  /// et un tap dessus était un no-op visible. Maintenant on stocke le
-  /// libellé tel quel ("Aucune"). Côté NocoDB, `dependance_particuliere`
-  /// (link) ne matchera pas "Aucune" (pas dans le ref list) et le
-  /// fallback `dependance_particuliere_txt` recevra simplement "Aucune"
-  /// comme texte — ce qui est sémantiquement correct.
-  Widget _buildDependenceSelector(int index) {
-    final occ = _occupants[index];
-    final value = occ.dependenceTxt.trim();
-    return FormToggleGroup(
-      label: 'Dépendance',
-      options: _dependenceOptions,
-      columns: 2,
-      selected: value,
-      onChanged: (v) {
-        // v peut être '' (désélection via FormToggleGroup.allowDeselect)
-        // ou une des options (y compris « Aucune »). On stocke tel quel.
-        _updateOccupant(index, occ.copyWith(dependenceTxt: v));
-      },
-    );
-  }
-
   Widget _buildAidesDependenceBlock(int index) {
     final occ = _occupants[index];
     return Column(
@@ -1560,6 +1639,17 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             _updateOccupant(index, occ.copyWith(apaGir: v));
           },
         ),
+        if (occ.apa) ...[
+          const SizedBox(height: 8),
+          FormTextField(
+            label: 'Détails APA',
+            value: occ.apaDetails,
+            onChanged: (value) => _updateOccupant(
+              index,
+              _occupants[index].copyWith(apaDetails: value),
+            ),
+          ),
+        ],
         _buildCollapsibleOptionCheckbox(
           label: 'Reconnaissance Invalidité',
           checked: occ.invalidity,
@@ -1580,6 +1670,17 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             _updateOccupant(index, occ.copyWith(invalidityTxt: v));
           },
         ),
+        if (occ.invalidity) ...[
+          const SizedBox(height: 8),
+          FormTextField(
+            label: 'Détails invalidité',
+            value: occ.invalidityDetails,
+            onChanged: (value) => _updateOccupant(
+              index,
+              _occupants[index].copyWith(invalidityDetails: value),
+            ),
+          ),
+        ],
         _RoundCheckRow(
           label: 'Aide à domicile',
           checked: occ.homeHelp,
@@ -1603,8 +1704,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             },
           ),
         ],
-        const SizedBox(height: 10),
-        _buildDependenceSelector(index),
       ],
     );
   }
@@ -1996,6 +2095,37 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: FormNumberField(
+                label: 'RFR',
+                value: occ.fiscalRevenue,
+                unit: '€',
+                onChanged: (value) => _updateOccupant(
+                  index,
+                  _occupants[index].copyWith(
+                    fiscalRevenue: value,
+                    clearFiscalRevenue: value == null,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: YearPickerField(
+                label: 'Année du RFR',
+                value: occ.fiscalRevenueYear,
+                onChanged: (value) => _updateOccupant(
+                  index,
+                  _occupants[index].copyWith(fiscalRevenueYear: value),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
         FormTextField(
           label: 'N° Sécu',
           value: occ.numeroSecuriteSociale,
@@ -2081,8 +2211,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   }
 
   Widget _buildAdminSection() {
-    final trustedPhoneInvalid = !isValidFrenchPhone(_trustedPhone);
-    final trustedEmailInvalid = !isValidEmail(_trustedEmail);
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     return _buildOccupantSwipeContainer(
       perOccupantContent: _buildAdminPersonalBlock(idx),
@@ -2099,55 +2227,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               _markChanged();
             },
           ),
-          const SizedBox(height: 14),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: FormTextFieldWithWarning(
-                  label: 'Téléphone',
-                  value: _trustedPhone,
-                  keyboardType: TextInputType.phone,
-                  showWarning: trustedPhoneInvalid,
-                  warningText: 'Numéro français invalide',
-                  onChanged: (v) {
-                    _trustedPhone = v;
-                    _markChanged();
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FormTextFieldWithWarning(
-                  label: 'Email',
-                  value: _trustedEmail,
-                  keyboardType: TextInputType.emailAddress,
-                  showWarning: trustedEmailInvalid,
-                  warningText: 'Adresse mail invalide',
-                  onChanged: (v) {
-                    _trustedEmail = v;
-                    _markChanged();
-                  },
-                ),
-              ),
-            ],
-          ),
           const SizedBox(height: 24),
-
-          // --- Bloc "Renseignements sur la visite" — partagé.
-          // Multi-select : l'ergo peut cocher Mail ET Courrier (demande
-          // utilisateur 2026-05-04). Stocké en CSV "Mail, Courrier" dans
-          // la colonne `envoi_rapport` (texte libre côté NocoDB).
-          FormMultiToggleGroup(
-            label: 'Envoi du rapport',
-            options: const ['Mail', 'Courrier'],
-            selected: _parseEnvoiRapport(_envoiRapport),
-            columns: 2,
-            onChanged: (next) {
-              _envoiRapport = _serializeEnvoiRapport(next);
-              _markChanged();
-            },
-          ),
           // NB : le bloc « Création compte ANAH » a été déplacé dans la
           // section Profil (demande utilisateur 2026-05-04). Voir
           // _buildProfilSection > Bloc Compte ANAH.

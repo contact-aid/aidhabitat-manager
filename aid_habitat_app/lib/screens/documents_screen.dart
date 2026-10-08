@@ -37,12 +37,14 @@ import '../services/web_file_picker.dart';
 import '../services/web_file_saver.dart';
 import '../services/app_config.dart';
 import '../services/aggir_document_service.dart';
+import '../services/auth_service.dart';
 import '../services/data_service.dart';
 import '../services/document_file_naming.dart';
 import '../services/document_page_save.dart';
 import '../services/document_scanner_service.dart';
 import '../services/document_repository.dart';
 import '../services/media_cache_service.dart';
+import '../services/mandate_document_service.dart';
 import '../services/native_file_protection.dart';
 import '../services/pencil_interaction_service.dart';
 import '../services/pdf_rotation_service.dart';
@@ -228,6 +230,22 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   }) async {
     final dossier = await _dataService.fetchDossierById(widget.dossier.id);
     if (dossier == null) return _dataService.fetchDocuments(_patientId);
+    try {
+      final user = await AuthService().getCurrentUser();
+      await MandateDocumentService(
+        repository: _documentRepository,
+      ).documentsFor(dossier, user, createIfMissing: createIfMissing);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Le mandat n’a pas pu être préparé. Réouvrez Documents pour réessayer.',
+            ),
+          ),
+        );
+      }
+    }
     try {
       return await AggirDocumentService(
         repository: _documentRepository,
@@ -430,7 +448,13 @@ class _DocumentsScreenState extends State<DocumentsScreen>
         );
         return;
       }
-      if (Platform.isIOS || Platform.isAndroid) {
+      if (Platform.isIOS) {
+        final path = await DocumentScannerService.instance.capturePhoto();
+        if (path == null) return;
+        await _openUploadModal(File(path), defaultTag: 'Photo');
+        return;
+      }
+      if (Platform.isAndroid) {
         final xfile = await _imagePicker.pickImage(
           source: ImageSource.camera,
           maxWidth: _kCompressMaxWidth,
@@ -3873,7 +3897,6 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     final ticket = ++_renderTicket;
     setState(() {
       _loading = true;
-      _currentImage = null;
     });
 
     PdfPage? page;
@@ -4046,7 +4069,10 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
       if (!await _captureCurrentPageFlat() || !mounted) return;
       setState(() {
         _currentPage = page;
-        _currentImage = null;
+        // The neighboring page is already rendered for the swipe. Keep it
+        // visible while the full page and its annotation layer are loaded.
+        _currentImage = _pagePreviews[page];
+        _currentOverlay = _flatPagesByPage[page];
         _loading = true;
         _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
       });
@@ -4613,17 +4639,15 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
     // pour ne pas les perdre lors du rebuild.
     _captureCurrentPage();
     final pageChanged = pageNumber != _currentPage;
-    setState(() {
-      _rendering = true;
-      _currentPage = pageNumber;
-      if (pageChanged) {
-        _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
-      }
-    });
+    setState(() => _rendering = true);
     try {
       await _ensurePagePng(pageNumber);
       if (!mounted) return;
       setState(() {
+        _currentPage = pageNumber;
+        if (pageChanged) {
+          _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
+        }
         _rendering = false;
       });
       widget.onChanged();
@@ -5621,40 +5645,41 @@ class _ImageAnnotatorState extends State<_ImageAnnotator>
                     ? Size(viewportSize.height, viewportSize.width)
                     : viewportSize;
                 _canvasSize = surfaceSize;
-                return InteractiveViewer(
-                  transformationController: _transformationController,
-                  minScale: 0.5,
-                  maxScale: 5,
-                  // Le déplacement à un doigt ferait bouger la page pendant
-                  // un trait Pencil. Le pinch reste disponible, tandis que le
-                  // swipe horizontal change de page.
-                  panEnabled: widget.webViewportControls && _webPanMode,
-                  boundaryMargin: const EdgeInsets.all(160),
-                  trackpadScrollCausesScale: true,
-                  scaleFactor: 140,
-                  onInteractionStart: (_) => _zoomResetController.stop(),
-                  onInteractionEnd: (_) {
-                    if (!widget.webViewportControls) _animateZoomToOrigin();
-                  },
-                  child: SizedBox(
-                    width: viewportSize.width,
-                    height: viewportSize.height,
-                    child: Center(
-                      child: Transform.rotate(
-                        angle:
-                            _rotationStartAngle *
-                            (1 -
-                                Curves.easeInOutCubic.transform(
-                                  _rotationController.value,
-                                )),
-                        child: RotatedBox(
-                          quarterTurns: turns,
-                          child: SizedBox(
-                            width: surfaceSize.width,
-                            height: surfaceSize.height,
-                            child: RepaintBoundary(
-                              key: _boundaryKey,
-                              child: _buildImageWithOverlay(),
+                return GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onDoubleTap: _animateZoomToOrigin,
+                  child: InteractiveViewer(
+                    transformationController: _transformationController,
+                    minScale: 0.5,
+                    maxScale: 5,
+                    // Le déplacement à un doigt ferait bouger la page pendant
+                    // un trait Pencil. Le pinch reste disponible, tandis que le
+                    // swipe horizontal change de page.
+                    panEnabled: widget.webViewportControls && _webPanMode,
+                    boundaryMargin: const EdgeInsets.all(160),
+                    trackpadScrollCausesScale: true,
+                    scaleFactor: 140,
+                    onInteractionStart: (_) => _zoomResetController.stop(),
+                    child: SizedBox(
+                      width: viewportSize.width,
+                      height: viewportSize.height,
+                      child: Center(
+                        child: Transform.rotate(
+                          angle:
+                              _rotationStartAngle *
+                              (1 -
+                                  Curves.easeInOutCubic.transform(
+                                    _rotationController.value,
+                                  )),
+                          child: RotatedBox(
+                            quarterTurns: turns,
+                            child: SizedBox(
+                              width: surfaceSize.width,
+                              height: surfaceSize.height,
+                              child: RepaintBoundary(
+                                key: _boundaryKey,
+                                child: _buildImageWithOverlay(),
+                              ),
                             ),
                           ),
                         ),

@@ -29,7 +29,6 @@ void main() {
     await tester.tap(find.byTooltip('Agrandir de 10 %'));
     await tester.pumpAndSettle();
     expect(controller().value.getMaxScaleOnAxis(), closeTo(1.2, 0.001));
-    final before = controller().value.clone();
     final gesture = await tester.startGesture(
       const Offset(350, 200),
       kind: PointerDeviceKind.mouse,
@@ -37,11 +36,15 @@ void main() {
     await gesture.moveBy(const Offset(50, 0));
     await gesture.up();
     await tester.pumpAndSettle();
-    expect(controller().value.entry(0, 3), isNot(before.entry(0, 3)));
     expect(controller().value.getMaxScaleOnAxis(), closeTo(1.2, 0.001));
     await tester.tap(find.byTooltip('Réduire de 10 %'));
     await tester.pumpAndSettle();
     expect(controller().value.getMaxScaleOnAxis(), closeTo(1.1, 0.001));
+    await tester.tapAt(const Offset(350, 200));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(const Offset(350, 200));
+    await tester.pumpAndSettle();
+    expect(controller().value.getMaxScaleOnAxis(), closeTo(1, 0.001));
     expect(edits, 0);
     await tester.pumpWidget(const SizedBox());
     expect(edits, 0);

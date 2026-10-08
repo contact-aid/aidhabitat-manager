@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assignedAdaptationFormula, createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
+import { assignedAdaptationFormula, createAirtableAdaptationReader, isAirtableDossierOnHold, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 
 const id = (char) => `rec${char.repeat(14)}`;
 const row = (recordId, fields) => ({ id: recordId, fields });
@@ -79,6 +79,29 @@ test('Airtable rate limiting retries the same page', async () => {
   assert.equal(calls, 2);
 });
 
+test('visibility reads all dossiers and any filled hold status hides a dossier', async () => {
+  const calls = [];
+  const read = createAirtableAdaptationReader({
+    token: 'synthetic-token',
+    fetchImpl: async (url) => {
+      calls.push(new URL(url));
+      return Response.json({ records: [
+        row(id('a'), {}),
+        row(id('b'), { 'En attente': 'OUI' }),
+        row(id('c'), { 'En attente': 'Devis audit signé' }),
+      ] });
+    },
+  });
+  const records = await read.visibility();
+  assert.equal(records.length, 3);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].searchParams.has('filterByFormula'), false);
+  assert.deepEqual(calls[0].searchParams.getAll('fields[]'), ['En attente']);
+  assert.equal(isAirtableDossierOnHold({ dossier: records[0] }), false);
+  assert.equal(isAirtableDossierOnHold({ dossier: records[1] }), true);
+  assert.equal(isAirtableDossierOnHold({ dossier: records[2] }), true);
+});
+
 test('projection only contains authorized dossier identity and scheduling fields', () => {
   const result = projectAirtableDossier({
     dossier: row(id('a'), { 'Dossier ID': 'FICTIF-2026', Commentaires: 'Note fictive',
@@ -117,11 +140,20 @@ test('projection only contains authorized dossier identity and scheduling fields
   });
   assert.equal(result.airtableRecordId, id('a'));
   assert.equal(result.airtableClientRecordId, id('x'));
+  assert.equal(result.beneficiaryGender, 'Femme');
   assert.equal(result.airtableDossierLabel, 'FICTIF-2026');
   assert.equal(result.epciLabel, 'EPCI fictif');
   assert.equal(result.incomeCategoryLabel, 'Très modeste');
   assert.equal(result.hasAirtableReport, true);
   assert(!JSON.stringify(result).includes('must be ignored'));
+});
+
+test('a shared Airtable client name does not assign one title to two people', () => {
+  const result = projectAirtableDossier({
+    dossier: row(id('a'), {}),
+    client: row(id('x'), { Prénom: 'René et Madeleine', Nom: 'Exemple', 'M./Mme': 'Madame' }),
+  });
+  assert.equal(result.beneficiaryGender, '');
 });
 
 test('an absent Airtable record identity cannot be guessed from a patient name', () => {

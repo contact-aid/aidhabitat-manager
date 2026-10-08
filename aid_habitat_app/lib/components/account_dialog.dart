@@ -13,6 +13,7 @@ import '../services/sync_engine.dart';
 import '../services/web_file_picker.dart';
 import '../services/profile_photo_image.dart';
 import 'brand_colors.dart';
+import 'sync_operation_diagnostic_dialog.dart';
 import 'cached_remote_image.dart';
 import 'confirmation_dialog.dart';
 
@@ -177,12 +178,20 @@ class _AccountDialogState extends State<AccountDialog> {
                       };
                       final error = operation.lastError?.trim();
                       return ListTile(
+                        onTap: operation.ownerState == 'current'
+                            ? () => showSyncOperationDiagnostic(
+                                context,
+                                operation.operationId,
+                              )
+                            : null,
                         contentPadding: EdgeInsets.zero,
                         title: Text(
                           '${operation.entityType} · ${operation.operationType}',
                         ),
                         subtitle: Text(
                           '$status · $owner · ${operation.attemptCount} tentative(s)'
+                          '\nOpération : ${operation.operationId}\n${operation.updatedAt}'
+                          '${operation.ownerState == 'current' ? '\nToucher pour le diagnostic' : ''}'
                           '${error == null || error.isEmpty ? '' : '\n$error'}',
                         ),
                         trailing: operation.canResume

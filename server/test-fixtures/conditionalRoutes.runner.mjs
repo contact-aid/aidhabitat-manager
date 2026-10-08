@@ -109,7 +109,7 @@ const login = async (email, role = 'ERGO') => {
 };
 const patch = (token, body) => request(definition.route, { method: 'PATCH', token, body });
 const mutation = (values, baseValues, writeId = randomUUID()) => ({
-  ...values, concurrency: { version: 1, writeId, baseValues },
+  ...values, concurrency: { version: 1, writeId, baseValues, collectionContract: 'collections-v2' },
 });
 const read = async (token) => {
   const dossiers = expectStatus(await request('/api/dossiers', { token }), 200);
@@ -147,7 +147,27 @@ try {
   const admin = await login('contact@aidhabitat.fr', 'ADMIN');
   assert.deepEqual(mock.violations, [], 'Startup and real logins must use only known REST calls');
 
-  await check('wrong password rejected by real login', async () => {
+  if (entity !== 'dossier') {
+    await check('legacy collection projection is retained without any database write', async () => {
+      const key = entity === 'beneficiaire' ? 'occupants' : 'roomsBreakdown';
+      const values = entity === 'beneficiaire' ? [{ firstName: 'Old' }] : { rdc: ['WC'] };
+      const original = structuredClone(mock.row(entity));
+      const body = mutation({ [key]: values }, { [key]: values });
+      delete body.concurrency.collectionContract;
+      const result = expectStatus(await patch(clientA, body), 409);
+      assert.equal(result.error, 'COLLECTION_CLIENT_UPGRADE_REQUIRED');
+      assert.deepEqual(result.fields, [key]);
+      assert.deepEqual(mock.row(entity), original);
+      assert.equal(mock.patches().length, 0);
+    });
+    await check('legacy scalar edit still succeeds without collection capability', async () => {
+      const body = mutation({ [definition.key]: definition.first }, { [definition.key]: mock.row(entity)[definition.dbKey] });
+      delete body.concurrency.collectionContract;
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal(mock.row(entity)[definition.dbKey], definition.first);
+    });
+  }
+  await check('wrong password rejected by real login' , async () => {
     expectStatus(await request('/api/auth/login', {
       method: 'POST', body: { email: ownerEmail, password: 'wrong-synthetic-password' },
     }), 401);
@@ -510,7 +530,7 @@ try {
       assert.equal((await read(clientB)).occupants[0].birthDate, '1948-04-12');
     });
 
-    await check('a real concurrent occupants change yields to the local occupant edit', async () => {
+    await check('a concurrent occupants change conflicts without replacing either version', async () => {
       const baseline = await read(clientA);
       mock.row(entity).occupants_json = JSON.stringify([{ ...baseline.occupants[0], birthDate: '1930-01-01' }]);
       mock.row(entity).app_sync_revision = randomUUID();
@@ -518,9 +538,9 @@ try {
       occupants[0].birthDate = '1948-04-12';
       expectStatus(await patch(clientA, mutation({
         occupant1BirthDate: '1948-04-12', occupants,
-      }, { occupant1BirthDate: baseline.occupant1BirthDate, occupants: baseline.occupants })), 200);
-      assert.equal(JSON.parse(mock.row(entity).occupants_json)[0].birthDate, '1948-04-12');
-      assert.equal(mock.patches().length, 1);
+      }, { occupant1BirthDate: baseline.occupant1BirthDate, occupants: baseline.occupants })), 409);
+      assert.equal(JSON.parse(mock.row(entity).occupants_json)[0].birthDate, '1930-01-01');
+      assert.equal(mock.patches().length, 0);
     });
 
     await check('legacy null beneficiary checkbox accepts the exposed false baseline', async () => {

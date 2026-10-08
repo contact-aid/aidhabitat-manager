@@ -327,10 +327,14 @@ export const parseOccupantsJson = (rawValue) => {
           ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
+        ...(Object.hasOwn(entry, 'fiscalRevenueYear')
+          ? { fiscalRevenueYear: stringValue(entry.fiscalRevenueYear).trim() } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),
+        apaDetails: stringValue(entry.apaDetails).trim(),
+        invalidityDetails: stringValue(entry.invalidityDetails).trim(),
         homeHelp: Boolean(entry.homeHelp),
         homeHelpTxt: stringValue(entry.homeHelpTxt).trim(),
         dependenceTxt: stringValue(entry.dependenceTxt).trim(),
@@ -1662,7 +1666,7 @@ export const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
         invalidityTxt: stringValue(field(beneficiaryRecord, 'reconnaissance_invalidité_mdph_txt')),
         homeHelp: Boolean(field(beneficiaryRecord, 'aide_a_domicile')),
         homeHelpTxt: stringValue(field(beneficiaryRecord, 'aide_a_domicile_txt')),
-        dependenceTxt: refLabel(field(beneficiaryRecord, 'dependance_particuliere')) || stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')),
+        dependenceTxt: stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')).trim() || refLabel(field(beneficiaryRecord, 'dependance_particuliere')),
         numeroSecuriteSociale: stringValue(field(beneficiaryRecord, 'numero_securite_sociale_monsieur')),
         caisseRetraitePrincipale: refLabel(field(beneficiaryRecord, 'caisse_retraite_principale')),
         caissesRetraiteComplementaires: refLabel(field(beneficiaryRecord, 'caisse_retraite_secondaire')),
@@ -1696,7 +1700,7 @@ export const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
   invalidityTxt: stringValue(field(beneficiaryRecord, 'reconnaissance_invalidité_mdph_txt')),
   homeHelp: Boolean(field(beneficiaryRecord, 'aide_a_domicile')),
   homeHelpTxt: stringValue(field(beneficiaryRecord, 'aide_a_domicile_txt')),
-  dependenceTxt: refLabel(field(beneficiaryRecord, 'dependance_particuliere')) || stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')),
+  dependenceTxt: stringValue(field(beneficiaryRecord, 'dependance_particuliere_txt')).trim() || refLabel(field(beneficiaryRecord, 'dependance_particuliere')),
   trustedPerson: {
     name: stringValue(field(beneficiaryRecord, 'personne_confiance')),
     phone: stringValue(field(beneficiaryRecord, 'telephone_personne_confiance')),
@@ -2739,10 +2743,14 @@ export const mapBeneficiaryUpdatesToFields = (updates, references) => {
           ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
+        ...(Object.hasOwn(entry, 'fiscalRevenueYear')
+          ? { fiscalRevenueYear: stringValue(entry.fiscalRevenueYear).trim() } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),
+        apaDetails: stringValue(entry.apaDetails).trim(),
+        invalidityDetails: stringValue(entry.invalidityDetails).trim(),
         homeHelp: Boolean(entry.homeHelp),
         homeHelpTxt: stringValue(entry.homeHelpTxt).trim(),
         dependenceTxt: stringValue(entry.dependenceTxt).trim(),

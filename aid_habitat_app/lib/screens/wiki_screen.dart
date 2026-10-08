@@ -662,6 +662,18 @@ class _WikiItemDialogState extends State<_WikiItemDialog> {
     setState(() => _descCtrls.add(TextEditingController()));
   }
 
+  void _removeDescription(int index) {
+    if (index < 0 || index >= _descCtrls.length) return;
+    if (_descCtrls.length == 1) {
+      _descCtrls.first.clear();
+      setState(() {});
+      return;
+    }
+    final removed = _descCtrls[index];
+    setState(() => _descCtrls.removeAt(index));
+    WidgetsBinding.instance.addPostFrameCallback((_) => removed.dispose());
+  }
+
   void _moveDescription(int fromIndex, int toIndex) {
     if (fromIndex < 0 ||
         fromIndex >= _descCtrls.length ||
@@ -960,6 +972,16 @@ class _WikiItemDialogState extends State<_WikiItemDialog> {
                                                       ),
                                                     ),
                                                   ),
+                                                  IconButton(
+                                                    tooltip:
+                                                        'Supprimer cette description',
+                                                    icon: const Icon(
+                                                      Icons
+                                                          .remove_circle_outline,
+                                                    ),
+                                                    onPressed: () =>
+                                                        _removeDescription(i),
+                                                  ),
                                                 ],
                                               ),
                                             );
@@ -1223,6 +1245,20 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
   void _addDescription() {
     if (_descriptionControllers.length >= WikiItem.maxDescriptions) return;
     setState(() => _descriptionControllers.add(TextEditingController()));
+  }
+
+  void _removeDescription(int index) {
+    if (_submitting || index < 0 || index >= _descriptionControllers.length) {
+      return;
+    }
+    if (_descriptionControllers.length == 1) {
+      _descriptionControllers.first.clear();
+      setState(() {});
+      return;
+    }
+    final removed = _descriptionControllers[index];
+    setState(() => _descriptionControllers.removeAt(index));
+    WidgetsBinding.instance.addPostFrameCallback((_) => removed.dispose());
   }
 
   void _moveDescription(int fromIndex, int toIndex) {
@@ -1577,6 +1613,15 @@ class _WikiCreateDialogState extends State<_WikiCreateDialog> {
                                             ),
                                           ),
                                         ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Supprimer cette description',
+                                        icon: const Icon(
+                                          Icons.remove_circle_outline,
+                                        ),
+                                        onPressed: _submitting
+                                            ? null
+                                            : () => _removeDescription(i),
                                       ),
                                     ],
                                   ),

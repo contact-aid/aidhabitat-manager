@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 import '../models/types.dart';
 import '../models/visit_report_categories.dart';
 import 'local_database.dart';
+import 'independent_notes.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
@@ -56,11 +57,191 @@ class NoteRow {
   });
 }
 
+class LocalNotePageSnapshot {
+  const LocalNotePageSnapshot({
+    required this.pageNumber,
+    required this.drawingJson,
+    required this.textContent,
+    this.planPhase,
+    this.previewDataUrl,
+    this.remoteUrl,
+  });
+  final int pageNumber;
+  final String drawingJson;
+  final String textContent;
+  final PlanPhase? planPhase;
+  final String? previewDataUrl;
+  final String? remoteUrl;
+}
+
 class NoteRepository {
   NoteRepository({LocalDatabase? database})
     : _database = database ?? LocalDatabase.instance;
 
   final LocalDatabase _database;
+
+  Future<List<LocalNotePageSnapshot>> fetchLocalNotePages({
+    required String patientId,
+    required String dossierId,
+    String tabKey = 'Plans',
+  }) async {
+    final db = await _database.database;
+    return _readLocalPages(
+      db,
+      patientId: patientId,
+      dossierId: dossierId,
+      tabKey: tabKey,
+    );
+  }
+
+  Future<List<LocalNotePageSnapshot>> _readLocalPages(
+    DatabaseExecutor db, {
+    required String patientId,
+    required String dossierId,
+    required String tabKey,
+  }) async {
+    final rows = await db.query(
+      'note_pages',
+      where:
+          'patient_local_id = ? AND tab_key = ? AND (dossier_local_id = ? OR dossier_local_id IS NULL)',
+      whereArgs: [patientId, tabKey, dossierId],
+      orderBy: 'page_number',
+    );
+    final pages = <LocalNotePageSnapshot>[];
+    for (final row in rows) {
+      final ops = await db.query(
+        'sync_operations',
+        where: 'entity_type = ? AND entity_local_id = ?',
+        whereArgs: ['note_page', row['local_id']],
+        orderBy: 'updated_at DESC',
+        limit: 1,
+      );
+      Map<String, dynamic>? payload;
+      if (ops.isNotEmpty) {
+        payload =
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    ops.first['payload_json'] as String,
+                  ),
+                )
+                as Map<String, dynamic>;
+      }
+      pages.add(
+        LocalNotePageSnapshot(
+          pageNumber: (row['page_number'] as num).toInt(),
+          drawingJson:
+              await OfflineVault.instance.openNullableString(
+                row['drawing_json'] as String?,
+              ) ??
+              '',
+          textContent:
+              await OfflineVault.instance.openNullableString(
+                row['text_content'] as String?,
+              ) ??
+              '',
+          planPhase: planPhaseFromDb(row['plan_phase'] as String?),
+          previewDataUrl: payload?['previewDataUrl'] as String?,
+          remoteUrl: row['drawing_remote_url'] as String?,
+        ),
+      );
+    }
+    return pages;
+  }
+
+  /// Copies a complete local snapshot to a fresh identity. No source row or
+  /// pending operation is changed. Allocation and both inserts are atomic.
+  Future<int> duplicateLocalNotePage({
+    required String patientId,
+    required String dossierId,
+    String tabKey = 'Plans',
+    required int sourcePageNumber,
+    String? previewDataUrl,
+  }) async {
+    final db = await _database.database;
+    final result = await db.transaction((txn) async {
+      final pages = await _readLocalPages(
+        txn,
+        patientId: patientId,
+        dossierId: dossierId,
+        tabKey: tabKey,
+      );
+      final source = pages
+          .where((page) => page.pageNumber == sourcePageNumber)
+          .single;
+      final preview = previewDataUrl ?? source.previewDataUrl;
+      if ((source.remoteUrl?.isNotEmpty ?? false) &&
+          (preview == null || preview.isEmpty)) {
+        throw StateError(
+          'Ouvrez le plan pour préparer son aperçu avant de le dupliquer.',
+        );
+      }
+      final all = await txn.query(
+        'note_pages',
+        columns: ['page_number'],
+        where: 'patient_local_id = ? AND tab_key = ?',
+        whereArgs: [patientId, tabKey],
+      );
+      final number =
+          all.fold<int>(
+            -1,
+            (max, row) => (row['page_number'] as int) > max
+                ? row['page_number'] as int
+                : max,
+          ) +
+          1;
+      final id = 'note_${patientId}_${tabKey}_$number';
+      final now = DateTime.now().toIso8601String();
+      final payload = <String, dynamic>{
+        'patientLocalId': patientId,
+        'dossierId': dossierId,
+        if (tabKey == 'Plans') 'scopeType': 'visit_grid',
+        'scopeId': dossierId,
+        'tabKey': tabKey,
+        'pageNumber': number,
+        'drawingJson': source.drawingJson,
+        'textContent': source.textContent,
+        'planPhase': planPhaseToDb(source.planPhase),
+        if (preview != null && preview.isNotEmpty) 'previewDataUrl': preview,
+        'expectedRevision': null,
+        'writeId': newSyncWriteId(),
+        'predecessorWriteIds': <String>[],
+        'mutationOrigin': SyncMutationOrigin.userEdit.wireName,
+      };
+      await txn.insert('note_pages', {
+        'local_id': id,
+        'patient_local_id': patientId,
+        'dossier_local_id': dossierId,
+        'tab_key': tabKey,
+        'page_number': number,
+        'text_content': await OfflineVault.instance.sealString(
+          source.textContent,
+        ),
+        'drawing_json': await OfflineVault.instance.sealString(
+          source.drawingJson,
+        ),
+        'plan_phase': planPhaseToDb(source.planPhase),
+        'remote_revision': null,
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      });
+      await txn.insert('sync_operations', {
+        'id': 'sync_$id',
+        'entity_type': 'note_page',
+        'entity_local_id': id,
+        'operation_type': 'upsert',
+        'payload_json': await OfflineVault.instance.sealString(
+          jsonEncode(payload),
+        ),
+        'status': 'pending',
+        'attempt_count': 0,
+        'created_at': now,
+        'updated_at': now,
+      });
+      return number;
+    });
+    SyncEngine().notify();
+    return result;
+  }
 
   Future<String?> fetchDrawingJson({
     required String patientId,
@@ -193,88 +374,131 @@ class NoteRepository {
     String? scopeId,
     required SyncMutationOrigin mutationOrigin,
   }) async {
+    drawingJson = stampNoteTextInitialization(tabKey, pageNumber, drawingJson);
     final db = await _database.database;
     final now = DateTime.now().toIso8601String();
     final noteId = 'note_${patientId}_${tabKey}_$pageNumber';
     final operationId = 'sync_$noteId';
 
-    // Préserve `plan_phase` à travers un save : on n'écrase pas la
-    // catégorie avant/après travaux quand l'ergo continue de dessiner.
-    // (ConflictAlgorithm.replace remet la colonne à NULL par défaut.)
-    final existing = await db.query(
-      'note_pages',
-      columns: ['plan_phase', 'remote_revision'],
-      where: 'patient_local_id = ? AND tab_key = ? AND page_number = ?',
-      whereArgs: [patientId, tabKey, pageNumber],
-      limit: 1,
-    );
-    final preservedPhase = existing.isNotEmpty
-        ? existing.first['plan_phase'] as String?
-        : (tabKey == 'Plans' ? planPhaseToDb(PlanPhase.avant) : null);
-    final mutation = await _nextNoteMutation(
-      db,
-      operationId,
-      existing.isEmpty ? null : existing.first['remote_revision'] as String?,
-    );
+    await db.transaction((txn) async {
+      // Préserve `plan_phase` à travers un save : on n'écrase pas la
+      // catégorie avant/après travaux quand l'ergo continue de dessiner.
+      // (ConflictAlgorithm.replace remet la colonne à NULL par défaut.)
+      final existing = await txn.query(
+        'note_pages',
+        where: 'patient_local_id = ? AND tab_key = ? AND page_number = ?',
+        whereArgs: [patientId, tabKey, pageNumber],
+        limit: 1,
+      );
+      final preservedPhase = existing.isNotEmpty
+          ? existing.first['plan_phase'] as String?
+          : (tabKey == 'Plans' &&
+                    (jsonDecode(drawingJson) as Map)['pageKind'] != 'blank'
+                ? planPhaseToDb(PlanPhase.avant)
+                : null);
+      final previousOperations = await txn.query(
+        'sync_operations',
+        where: 'id = ?',
+        whereArgs: [operationId],
+        limit: 1,
+      );
+      final previousPayload = previousOperations.isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(
+                  await OfflineVault.instance.openString(
+                    previousOperations.first['payload_json'] as String,
+                  ),
+                )
+                as Map<String, dynamic>;
+      previewDataUrl ??= previousPayload['previewDataUrl'] as String?;
+      dossierId ??= existing.isNotEmpty
+          ? existing.first['dossier_local_id'] as String?
+          : null;
+      if (previousPayload['dossierId'] == dossierId) {
+        scopeType ??= previousPayload['scopeType'] as String?;
+        scopeId ??= previousPayload['scopeId'] as String?;
+      }
+      final textContent = existing.isNotEmpty
+          ? await OfflineVault.instance.openNullableString(
+                  existing.first['text_content'] as String?,
+                ) ??
+                ''
+          : '';
+      final mutation = await _nextNoteMutation(
+        txn,
+        operationId,
+        existing.isEmpty ? null : existing.first['remote_revision'] as String?,
+      );
 
-    final drawingJsonAtRest = await OfflineVault.instance.sealString(
-      drawingJson,
-    );
+      final drawingJsonAtRest = await OfflineVault.instance.sealString(
+        drawingJson,
+      );
 
-    await db.insert('note_pages', {
-      'local_id': noteId,
-      'patient_local_id': patientId,
-      'dossier_local_id': dossierId,
-      'tab_key': tabKey,
-      'page_number': pageNumber,
-      'text_content': '',
-      'drawing_json': drawingJsonAtRest,
-      'drawing_local_path': null,
-      'drawing_remote_path': null,
-      'drawing_remote_url': null,
-      'plan_phase': preservedPhase,
-      'remote_revision': existing.isEmpty
-          ? null
-          : existing.first['remote_revision'],
-      'updated_at': now,
-      'sync_state': SyncState.pendingSync.name,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.insert('note_pages', {
+        'local_id': noteId,
+        'patient_local_id': patientId,
+        'dossier_local_id':
+            dossierId ??
+            (existing.isNotEmpty ? existing.first['dossier_local_id'] : null),
+        'tab_key': tabKey,
+        'page_number': pageNumber,
+        'text_content': existing.isNotEmpty
+            ? existing.first['text_content']
+            : '',
+        'drawing_json': drawingJsonAtRest,
+        'drawing_local_path': existing.isNotEmpty
+            ? existing.first['drawing_local_path']
+            : null,
+        'drawing_remote_path': existing.isNotEmpty
+            ? existing.first['drawing_remote_path']
+            : null,
+        'drawing_remote_url': existing.isNotEmpty
+            ? existing.first['drawing_remote_url']
+            : null,
+        'plan_phase': preservedPhase,
+        'remote_revision': existing.isEmpty
+            ? null
+            : existing.first['remote_revision'],
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
 
-    await db.insert('sync_operations', {
-      'id': operationId,
-      'entity_type': 'note_page',
-      'entity_local_id': noteId,
-      'operation_type': 'upsert',
-      'payload_json': await OfflineVault.instance.sealString(
-        jsonEncode({
-          'patientLocalId': patientId,
-          if (dossierId != null && dossierId.isNotEmpty) 'dossierId': dossierId,
-          if (scopeType != null && scopeType.isNotEmpty) 'scopeType': scopeType,
-          if (scopeId != null && scopeId.isNotEmpty) 'scopeId': scopeId,
-          'tabKey': tabKey,
-          'pageNumber': pageNumber,
-          'drawingJson': drawingJson,
-          'expectedRevision': mutation.expectedRevision,
-          'writeId': mutation.writeId,
-          'predecessorWriteIds': mutation.predecessorWriteIds,
-          'mutationOrigin': mutationOrigin.wireName,
-          if (preservedPhase != null) 'planPhase': preservedPhase,
-          // `previewDataUrl` rasterisé côté Flutter (PNG base64). Stocké
-          // uniquement dans le payload de la sync_op (pas en SQLite
-          // local — gros volume) : le serveur le persiste dans
-          // mobile_note_pages.preview_data_url, et le générateur PDF y
-          // pioche pour les pages 9/10 (plans avant/après).
-          if (previewDataUrl != null && previewDataUrl.isNotEmpty)
-            'previewDataUrl': previewDataUrl,
-        }),
-      ),
-      'status': SyncOperationStatus.pending.name,
-      'attempt_count': 0,
-      'last_error': null,
-      'created_at': now,
-      'updated_at': now,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
-
+      await txn.insert('sync_operations', {
+        'id': operationId,
+        'entity_type': 'note_page',
+        'entity_local_id': noteId,
+        'operation_type': 'upsert',
+        'payload_json': await OfflineVault.instance.sealString(
+          jsonEncode({
+            'patientLocalId': patientId,
+            if (dossierId?.isNotEmpty == true) 'dossierId': dossierId,
+            if (scopeType?.isNotEmpty == true) 'scopeType': scopeType,
+            if (scopeId?.isNotEmpty == true) 'scopeId': scopeId,
+            'tabKey': tabKey,
+            'pageNumber': pageNumber,
+            'drawingJson': drawingJson,
+            'textContent': textContent,
+            'expectedRevision': mutation.expectedRevision,
+            'writeId': mutation.writeId,
+            'predecessorWriteIds': mutation.predecessorWriteIds,
+            'mutationOrigin': mutationOrigin.wireName,
+            if (preservedPhase != null) 'planPhase': preservedPhase,
+            // `previewDataUrl` rasterisé côté Flutter (PNG base64). Stocké
+            // uniquement dans le payload de la sync_op (pas en SQLite
+            // local — gros volume) : le serveur le persiste dans
+            // mobile_note_pages.preview_data_url, et le générateur PDF y
+            // pioche pour les pages 9/10 (plans avant/après).
+            if (previewDataUrl?.isNotEmpty == true)
+              'previewDataUrl': previewDataUrl,
+          }),
+        ),
+        'status': SyncOperationStatus.pending.name,
+        'attempt_count': 0,
+        'last_error': null,
+        'created_at': now,
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
     SyncEngine().notify();
   }
 

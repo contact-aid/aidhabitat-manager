@@ -1,0 +1,352 @@
+{
+  "description": "Fictitious payloads captured from real SQLite and DossierRepository. Only random writeId replaced for stable HTTP fixtures.",
+  "source": {
+    "sdbInstances": [
+      {
+        "id": "bath-fiction",
+        "levelField": "rdc",
+        "sdbBaignoireHauteur": 42
+      }
+    ],
+    "wcInstances": [
+      {
+        "id": "wc-fiction",
+        "levelField": "rdc"
+      }
+    ],
+    "updatedAt": "2026-10-01T10:00:00.000Z"
+  },
+  "scenarios": {
+    "edit": {
+      "updates": {
+        "sdbInstances": [
+          {
+            "id": "bath-fiction",
+            "levelField": "rdc",
+            "levelLabel": "",
+            "sdbBaignoire": false,
+            "sdbBaignoireHauteur": 42.0,
+            "sdbBacDouche": true,
+            "sdbBacDoucheHauteur": 7.0,
+            "sdbVasqueSuspendue": false,
+            "sdbVasqueSuspendueHauteur": null,
+            "sdbVasqueColonne": false,
+            "sdbVasqueColonneHauteur": null,
+            "sdbMeubleVasque": false,
+            "sdbMeubleVasqueHauteur": null,
+            "sdbBidet": false,
+            "sdbBidetHauteur": null,
+            "sdbParoiDouche": false,
+            "sdbParoiDoucheHauteur": null,
+            "sdbSolGlissant": false,
+            "sdbMachineALaver": false,
+            "sdbMachineALaverHauteur": null,
+            "porteSdbLargeurSuffisante": null,
+            "porteSdbDimension": null,
+            "porteSdbSensAdapte": null
+          }
+        ],
+        "wcInstances": [
+          {
+            "id": "wc-fiction",
+            "levelField": "rdc",
+            "levelLabel": "",
+            "wcCuvetteBonneHauteur": true,
+            "wcCuvetteTropBasse": false,
+            "wcCuvetteTropHaute": false,
+            "wcCuvetteHauteur": null,
+            "wcBarreRelevement": null,
+            "porteWcLargeurSuffisante": null,
+            "porteWcDimension": null,
+            "porteWcSensAdapte": null,
+            "observationEquipementsUtilisation": "Observation fictive"
+          }
+        ]
+      },
+      "baseValues": {
+        "sdbInstances": [
+          {
+            "id": "bath-fiction",
+            "levelField": "rdc",
+            "sdbBaignoireHauteur": 42
+          }
+        ],
+        "wcInstances": [
+          {
+            "id": "wc-fiction",
+            "levelField": "rdc"
+          }
+        ]
+      },
+      "expectedUpdatedAt": "2026-10-01T10:00:00.000Z",
+      "wireBody": {
+        "sdbInstances": [
+          {
+            "id": "bath-fiction",
+            "levelField": "rdc",
+            "levelLabel": "",
+            "sdbBaignoire": false,
+            "sdbBaignoireHauteur": 42.0,
+            "sdbBacDouche": true,
+            "sdbBacDoucheHauteur": 7.0,
+            "sdbVasqueSuspendue": false,
+            "sdbVasqueSuspendueHauteur": null,
+            "sdbVasqueColonne": false,
+            "sdbVasqueColonneHauteur": null,
+            "sdbMeubleVasque": false,
+            "sdbMeubleVasqueHauteur": null,
+            "sdbBidet": false,
+            "sdbBidetHauteur": null,
+            "sdbParoiDouche": false,
+            "sdbParoiDoucheHauteur": null,
+            "sdbSolGlissant": false,
+            "sdbMachineALaver": false,
+            "sdbMachineALaverHauteur": null,
+            "porteSdbLargeurSuffisante": null,
+            "porteSdbDimension": null,
+            "porteSdbSensAdapte": null
+          }
+        ],
+        "wcInstances": [
+          {
+            "id": "wc-fiction",
+            "levelField": "rdc",
+            "levelLabel": "",
+            "wcCuvetteBonneHauteur": true,
+            "wcCuvetteTropBasse": false,
+            "wcCuvetteTropHaute": false,
+            "wcCuvetteHauteur": null,
+            "wcBarreRelevement": null,
+            "porteWcLargeurSuffisante": null,
+            "porteWcDimension": null,
+            "porteWcSensAdapte": null,
+            "observationEquipementsUtilisation": "Observation fictive"
+          }
+        ],
+        "concurrency": {
+          "version": 1,
+          "writeId": "10000000-0000-4000-8000-000000000001",
+          "baseValues": {
+            "sdbInstances": [
+              {
+                "id": "bath-fiction",
+                "levelField": "rdc",
+                "sdbBaignoireHauteur": 42
+              }
+            ],
+            "wcInstances": [
+              {
+                "id": "wc-fiction",
+                "levelField": "rdc"
+              }
+            ]
+          },
+          "expectedUpdatedAt": "2026-10-01T10:00:00.000Z",
+          "collectionContract": "collections-v2"
+        }
+      }
+    },
+    "clear_direct": {
+      "updates": {
+        "sdbInstances": [],
+        "wcInstances": []
+      },
+      "baseValues": {
+        "sdbInstances": [
+          {
+            "id": "bath-fiction",
+            "levelField": "rdc",
+            "sdbBaignoireHauteur": 42
+          }
+        ],
+        "wcInstances": [
+          {
+            "id": "wc-fiction",
+            "levelField": "rdc"
+          }
+        ]
+      },
+      "expectedUpdatedAt": "2026-10-01T10:00:00.000Z",
+      "wireBody": {
+        "sdbInstances": [],
+        "wcInstances": [],
+        "concurrency": {
+          "version": 1,
+          "writeId": "10000000-0000-4000-8000-000000000001",
+          "baseValues": {
+            "sdbInstances": [
+              {
+                "id": "bath-fiction",
+                "levelField": "rdc",
+                "sdbBaignoireHauteur": 42
+              }
+            ],
+            "wcInstances": [
+              {
+                "id": "wc-fiction",
+                "levelField": "rdc"
+              }
+            ]
+          },
+          "expectedUpdatedAt": "2026-10-01T10:00:00.000Z",
+          "collectionContract": "collections-v2"
+        }
+      }
+    },
+    "clear_coalesced": {
+      "updates": {
+        "sdbInstances": [],
+        "wcInstances": []
+      },
+      "baseValues": {
+        "sdbInstances": [
+          {
+            "id": "bath-fiction",
+            "levelField": "rdc",
+            "sdbBaignoireHauteur": 42
+          }
+        ],
+        "wcInstances": [
+          {
+            "id": "wc-fiction",
+            "levelField": "rdc"
+          }
+        ]
+      },
+      "expectedUpdatedAt": "2026-10-01T10:00:00.000Z",
+      "wireBody": {
+        "sdbInstances": [],
+        "wcInstances": [],
+        "concurrency": {
+          "version": 1,
+          "writeId": "10000000-0000-4000-8000-000000000001",
+          "predecessorWriteIds": [],
+          "baseValues": {
+            "sdbInstances": [
+              {
+                "id": "bath-fiction",
+                "levelField": "rdc",
+                "sdbBaignoireHauteur": 42
+              }
+            ],
+            "wcInstances": [
+              {
+                "id": "wc-fiction",
+                "levelField": "rdc"
+              }
+            ]
+          },
+          "expectedUpdatedAt": "2026-10-01T10:00:00.000Z",
+          "collectionContract": "collections-v2"
+        }
+      }
+    },
+    "clear_after_ack": {
+      "updates": {
+        "sdbInstances": [],
+        "wcInstances": []
+      },
+      "baseValues": {
+        "sdbInstances": [
+          {
+            "id": "bath-fiction",
+            "levelField": "rdc",
+            "levelLabel": "",
+            "sdbBaignoire": false,
+            "sdbBaignoireHauteur": 42.0,
+            "sdbBacDouche": true,
+            "sdbBacDoucheHauteur": 7.0,
+            "sdbVasqueSuspendue": false,
+            "sdbVasqueSuspendueHauteur": null,
+            "sdbVasqueColonne": false,
+            "sdbVasqueColonneHauteur": null,
+            "sdbMeubleVasque": false,
+            "sdbMeubleVasqueHauteur": null,
+            "sdbBidet": false,
+            "sdbBidetHauteur": null,
+            "sdbParoiDouche": false,
+            "sdbParoiDoucheHauteur": null,
+            "sdbSolGlissant": false,
+            "sdbMachineALaver": false,
+            "sdbMachineALaverHauteur": null,
+            "porteSdbLargeurSuffisante": null,
+            "porteSdbDimension": null,
+            "porteSdbSensAdapte": null
+          }
+        ],
+        "wcInstances": [
+          {
+            "id": "wc-fiction",
+            "levelField": "rdc",
+            "levelLabel": "",
+            "wcCuvetteBonneHauteur": true,
+            "wcCuvetteTropBasse": false,
+            "wcCuvetteTropHaute": false,
+            "wcCuvetteHauteur": null,
+            "wcBarreRelevement": null,
+            "porteWcLargeurSuffisante": null,
+            "porteWcDimension": null,
+            "porteWcSensAdapte": null,
+            "observationEquipementsUtilisation": "Observation fictive"
+          }
+        ]
+      },
+      "expectedUpdatedAt": "2026-10-05T11:00:00.000Z",
+      "wireBody": {
+        "sdbInstances": [],
+        "wcInstances": [],
+        "concurrency": {
+          "version": 1,
+          "writeId": "10000000-0000-4000-8000-000000000001",
+          "baseValues": {
+            "sdbInstances": [
+              {
+                "id": "bath-fiction",
+                "levelField": "rdc",
+                "levelLabel": "",
+                "sdbBaignoire": false,
+                "sdbBaignoireHauteur": 42.0,
+                "sdbBacDouche": true,
+                "sdbBacDoucheHauteur": 7.0,
+                "sdbVasqueSuspendue": false,
+                "sdbVasqueSuspendueHauteur": null,
+                "sdbVasqueColonne": false,
+                "sdbVasqueColonneHauteur": null,
+                "sdbMeubleVasque": false,
+                "sdbMeubleVasqueHauteur": null,
+                "sdbBidet": false,
+                "sdbBidetHauteur": null,
+                "sdbParoiDouche": false,
+                "sdbParoiDoucheHauteur": null,
+                "sdbSolGlissant": false,
+                "sdbMachineALaver": false,
+                "sdbMachineALaverHauteur": null,
+                "porteSdbLargeurSuffisante": null,
+                "porteSdbDimension": null,
+                "porteSdbSensAdapte": null
+              }
+            ],
+            "wcInstances": [
+              {
+                "id": "wc-fiction",
+                "levelField": "rdc",
+                "levelLabel": "",
+                "wcCuvetteBonneHauteur": true,
+                "wcCuvetteTropBasse": false,
+                "wcCuvetteTropHaute": false,
+                "wcCuvetteHauteur": null,
+                "wcBarreRelevement": null,
+                "porteWcLargeurSuffisante": null,
+                "porteWcDimension": null,
+                "porteWcSensAdapte": null,
+                "observationEquipementsUtilisation": "Observation fictive"
+              }
+            ]
+          },
+          "expectedUpdatedAt": "2026-10-05T11:00:00.000Z",
+          "collectionContract": "collections-v2"
+        }
+      }
+    }
+  }
+}
