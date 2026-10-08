@@ -3136,8 +3136,30 @@ class NocodbApiClient {
 
   DossierStatus _mapStatus(String? status) {
     switch (status) {
+      case 'En attente':
+        return DossierStatus.PENDING;
+      case 'Visite fin de travaux':
+        return DossierStatus.POST_WORKS_VISIT;
+      case 'Visité':
+        return DossierStatus.VISITED;
+      case 'Attente devis':
+        return DossierStatus.WAITING_QUOTES;
+      case 'Devis reçus':
+        return DossierStatus.QUOTES_RECEIVED;
+      case 'Attente subvention':
+        return DossierStatus.WAITING_GRANT;
+      case 'Subvention validée':
       case 'Validé':
         return DossierStatus.GRANT_VALIDATED;
+      case 'Travaux démarrés':
+        return DossierStatus.WORKS_STARTED;
+      case 'Travaux terminés':
+        return DossierStatus.WORKS_COMPLETED;
+      case 'Clôturé':
+      case 'Archivé':
+        return status == 'Archivé'
+            ? DossierStatus.ARCHIVED
+            : DossierStatus.CLOSED;
       case 'En cours':
         return DossierStatus.IN_PROGRESS;
       case 'Clos':

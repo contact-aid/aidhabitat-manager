@@ -36,6 +36,17 @@ test('only the agreed recent, non-cancelled cohort is imported in bounded batche
   assert.equal(created[1].fields.ergo_id, 'Coralie');
 });
 
+test('a manually held Airtable dossier is excluded from import', async () => {
+  const held = source('recEEEEEEEEEEEEEE', '2026-10-01T08:00:00.000Z');
+  held.dossier.fields['En attente'] = 'OUI';
+  const result = await syncCurrentProfileDossiers({
+    ergoLabel: 'Coralie', sourceRows: [held], dossierRows: [], beneficiaryRows: [],
+    dryRun: true,
+  });
+  assert.equal(result.eligible, 0);
+  assert.deepEqual(result.changes, []);
+});
+
 test('an Airtable reassignment moves the existing dossier without replacing its visit data', async () => {
   const christelle = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
   christelle.dossier.fields['Intervenant couleur'] = ['Christelle'];

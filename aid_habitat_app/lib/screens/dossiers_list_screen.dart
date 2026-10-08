@@ -17,7 +17,13 @@ import '../services/visit_date_time.dart';
 /// Catégories pour les 3 menus déroulants de la page « Mes dossiers »
 /// (demande utilisateur 2026-05-04). Chaque dossier tombe dans
 /// exactement une catégorie selon son `status`.
-enum _DossierBucket { visiteAFaire, rapportAFaire, rapportEnvoye }
+enum _DossierBucket {
+  visiteAFaire,
+  rapportAFaire,
+  rapportEnvoye,
+  enAttente,
+  visiteFinTravaux,
+}
 
 /// État par section : tri courant + drapeau replié/déroulé. Mutable
 /// (les setState côté écran modifient les champs directement).
@@ -37,6 +43,10 @@ String _bucketTitle(_DossierBucket b) {
       return 'Rapport à faire';
     case _DossierBucket.rapportEnvoye:
       return 'Rapport envoyé';
+    case _DossierBucket.enAttente:
+      return 'En attente';
+    case _DossierBucket.visiteFinTravaux:
+      return 'Visite fin de travaux';
   }
 }
 
@@ -59,7 +69,13 @@ bool _matchesBucket(Dossier d, _DossierBucket b) {
       return d.status == DossierStatus.VISITED ||
           (d.status == DossierStatus.TO_VISIT && visitInPast);
     case _DossierBucket.rapportEnvoye:
-      return d.status.index >= DossierStatus.IN_PROGRESS.index;
+      return d.status.index >= DossierStatus.IN_PROGRESS.index &&
+          d.status != DossierStatus.PENDING &&
+          d.status != DossierStatus.POST_WORKS_VISIT;
+    case _DossierBucket.enAttente:
+      return d.status == DossierStatus.PENDING;
+    case _DossierBucket.visiteFinTravaux:
+      return d.status == DossierStatus.POST_WORKS_VISIT;
   }
 }
 
@@ -125,6 +141,8 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
     _DossierBucket.visiteAFaire: _BucketState(),
     _DossierBucket.rapportAFaire: _BucketState(),
     _DossierBucket.rapportEnvoye: _BucketState(),
+    _DossierBucket.enAttente: _BucketState(),
+    _DossierBucket.visiteFinTravaux: _BucketState(),
   };
 
   @override

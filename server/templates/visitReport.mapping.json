@@ -24,7 +24,6 @@
 
   "MDPH": { "source": "patient.invalidityDisplay", "type": "text" },
   "aide.à domicile": { "source": "patient.homeHelpDisplay", "type": "text" },
-  "dépendance": { "source": "patient.dependenceTxt", "type": "text" },
 
   "tel usager": { "source": "patient.phone", "type": "text" },
   "mail usager": { "source": "patient.email", "type": "text" },

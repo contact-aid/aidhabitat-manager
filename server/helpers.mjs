@@ -327,10 +327,14 @@ export const parseOccupantsJson = (rawValue) => {
           ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
+        ...(Object.hasOwn(entry, 'fiscalRevenueYear')
+          ? { fiscalRevenueYear: stringValue(entry.fiscalRevenueYear).trim() } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),
+        apaDetails: stringValue(entry.apaDetails).trim(),
+        invalidityDetails: stringValue(entry.invalidityDetails).trim(),
         homeHelp: Boolean(entry.homeHelp),
         homeHelpTxt: stringValue(entry.homeHelpTxt).trim(),
         dependenceTxt: stringValue(entry.dependenceTxt).trim(),
@@ -2739,10 +2743,14 @@ export const mapBeneficiaryUpdatesToFields = (updates, references) => {
           ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
+        ...(Object.hasOwn(entry, 'fiscalRevenueYear')
+          ? { fiscalRevenueYear: stringValue(entry.fiscalRevenueYear).trim() } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),
+        apaDetails: stringValue(entry.apaDetails).trim(),
+        invalidityDetails: stringValue(entry.invalidityDetails).trim(),
         homeHelp: Boolean(entry.homeHelp),
         homeHelpTxt: stringValue(entry.homeHelpTxt).trim(),
         dependenceTxt: stringValue(entry.dependenceTxt).trim(),

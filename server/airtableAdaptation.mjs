@@ -10,7 +10,7 @@ const dossierFields = [
   'Dossier ID', 'Adaptation ou énergie', 'Intervenant couleur', 'Nom intervenant',
   'No Client', 'Commentaires', 'Date du RDV avec heure',
   'Nature des travaux conca', 'Commune', 'Commune texte', 'Communauté de communes',
-  'Audit ou Eval', 'Annulé ?',
+  'Audit ou Eval', 'Annulé ?', 'En attente',
 ];
 const clientFields = [
   'Prénom', 'Nom', 'Téléphone', 'Adresse mail', 'N° et rue',
@@ -177,8 +177,12 @@ export function isCurrentAdaptationDossier({ dossier }) {
   const visitDate = first(fields['Date du RDV avec heure']);
   return /^\d{4}-\d{2}-\d{2}/.test(visitDate)
     && visitDate.slice(0, 10) >= '2026-08-01'
-    && normalized(first(fields['Annulé ?'])) === 'non';
+    && normalized(first(fields['Annulé ?'])) === 'non'
+    && !isAirtableDossierOnHold({ dossier });
 }
+
+export const isAirtableDossierOnHold = ({ dossier }) =>
+  Boolean(first(dossier?.fields?.['En attente']));
 
 export const isCurrentCoralieDossier = isCurrentAdaptationDossier;
 
@@ -205,7 +209,7 @@ export function createAirtableAdaptationReader({
     for (let page = 0; page < 100; page++) {
       const url = new URL(`https://api.airtable.com/v0/${baseId}/${tableId}`);
       url.searchParams.set('pageSize', '100');
-      url.searchParams.set('filterByFormula', formula);
+      if (formula) url.searchParams.set('filterByFormula', formula);
       for (const fieldName of fields) url.searchParams.append('fields[]', fieldName);
       if (offset) url.searchParams.set('offset', offset);
       let response;
@@ -235,7 +239,7 @@ export function createAirtableAdaptationReader({
     throw new Error('Pagination Airtable trop longue');
   };
 
-  return async (intervenant, { fullName = '' } = {}) => {
+  const read = async (intervenant, { fullName = '' } = {}) => {
     if (fullName && (!/^[\p{L}\p{N} .'-]{1,120}$/u.test(fullName)
       || normalized(fullName).split(' ')[0] !== normalized(intervenant))) {
       throw new TypeError('Nom complet de l’intervenant invalide');
@@ -261,4 +265,10 @@ export function createAirtableAdaptationReader({
       client: byId.get(dossier.fields['No Client']?.[0]) ?? null,
     }));
   };
+  // Visibility must cover every Airtable dossier, including records assigned
+  // to former team members; otherwise an admin refresh could hide valid data.
+  read.visibility = () => list(dossiersTableId, {
+    fields: ['En attente'],
+  });
+  return read;
 }

@@ -167,7 +167,14 @@ class BeneficiaryHeader extends StatelessWidget {
             children: [
               identity,
               const SizedBox(height: 8),
-              Align(alignment: Alignment.centerRight, child: trailing!),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                reverse: true,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: trailing!,
+                ),
+              ),
             ],
           );
         }

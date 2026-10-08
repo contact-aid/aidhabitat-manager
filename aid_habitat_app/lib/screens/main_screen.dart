@@ -2,7 +2,6 @@ import '../services/note_backup_service.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import '../components/feedback_tab.dart';
 import '../components/dossier_loading_status.dart';
 import '../models/dossier_refresh_phase.dart';
@@ -20,6 +19,7 @@ import 'settings_screen.dart';
 import 'wiki_screen.dart';
 import '../models/types.dart';
 import '../services/auth_service.dart';
+import '../services/airtable_visibility_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
 import '../services/feedback_activity_service.dart';
@@ -77,6 +77,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _pendingSyncCount = 0;
   bool _isSyncing = false;
   bool _isRefreshingDossiersManually = false;
+  bool _airtableAutoInFlight = false;
+  DateTime? _lastAutomaticAirtableCheck;
+  Timer? _airtableAutoTimer;
   bool _isLoading = true;
   bool _isOffline = false;
   String? _lastSyncError;
@@ -123,6 +126,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         await _refreshDossiers();
         if (!mounted) return;
         unawaited(ReferencesService().ensureLoaded());
+        unawaited(_refreshAirtableAutomatically());
       } else {
         setState(() => _dossierRefreshPhase = phase);
       }
@@ -140,6 +144,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _dossierRecordsSubscription?.cancel();
     _dossierRefreshSubscription?.cancel();
     _connectivitySubscription?.cancel();
+    _airtableAutoTimer?.cancel();
     // SyncEngine is a process-lifetime singleton — do not dispose it with the
     // screen, or later screens will lose the stream and the engine.
     super.dispose();
@@ -155,6 +160,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     // est aussi déclenché côté SyncEngine pour rattraper d'éventuelles
     // modifs distantes manquées (cf. setAppLifecycleState).
     _syncEngine.setAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshAirtableAutomatically());
+    }
   }
 
   /// Dernier `lastSyncAt` observé sur le state du SyncEngine. Sert à
@@ -194,10 +202,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<bool> _refreshDossiers() async {
     final generation = ++_dossierReadGeneration;
     try {
-      final dossiers = _authService.filterDossiersForUser(
-        await _dataService.fetchDossiers(),
-        widget.currentUser,
-      );
+      final dossiers = _authService
+          .filterDossiersForUser(
+            await _dataService.fetchDossiers(),
+            widget.currentUser,
+          )
+          .where(
+            (dossier) => !AirtableVisibilityService.instance.isHidden(
+              widget.currentUser.email,
+              dossier.id,
+            ),
+          )
+          .toList();
       if (!mounted || generation != _dossierReadGeneration) return false;
       // Keep _selectedDossier in sync with the refreshed list so any edit
       // done in the dossier card (ex: numberPeople, firstName, city…) is
@@ -233,6 +249,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadData() async {
+    await AirtableVisibilityService.instance.load(widget.currentUser.email);
     await _refreshDossiers();
     if (!mounted) return;
     final pendingCount = await _dataService
@@ -251,6 +268,69 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     // d'une journée hors ligne, un snapshot serveur incomplet pourrait sinon
     // remplacer les saisies terrain avant leur envoi.
     _syncEngine.start();
+    _airtableAutoTimer = Timer.periodic(
+      const Duration(minutes: 15),
+      (_) => unawaited(_refreshAirtableAutomatically()),
+    );
+  }
+
+  Future<void> _reconcileAirtableVisibility(
+    Map<String, dynamic> preview,
+  ) async {
+    if (preview['activeIds'] is! List) return;
+    final active = ((preview['activeIds'] as List?) ?? const [])
+        .whereType<String>();
+    final local = await _dataService.fetchDossiers();
+    await AirtableVisibilityService.instance.reconcile(
+      email: widget.currentUser.email,
+      localDossierIds: local.map((dossier) => dossier.id),
+      activeDossierIds: active,
+    );
+    if (mounted) await _refreshDossiers();
+  }
+
+  Future<void> _refreshAirtableAutomatically() async {
+    if (_airtableAutoInFlight ||
+        _isRefreshingDossiersManually ||
+        _isOffline ||
+        ConnectivityService().isOffline ||
+        widget.remoteSessionExpired ||
+        _pendingSyncCount > 0) {
+      return;
+    }
+    final last = _lastAutomaticAirtableCheck;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(minutes: 15)) {
+      return;
+    }
+    _airtableAutoInFlight = true;
+    try {
+      if (!await _authService.resumePendingRemoteSession()) return;
+      final preview = await _dataService.previewCurrentDossiersRefresh();
+      if (!mounted) return;
+      await _reconcileAirtableVisibility(preview);
+      final newIds = ((preview['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .where((item) => item['kind'] == 'create')
+          .map((item) => item['id'].toString())
+          .toSet()
+          .toList();
+      if (newIds.isNotEmpty) {
+        await _dataService.applyCurrentDossiersRefresh(
+          preview['previewId'].toString(),
+          newIds,
+        );
+        if (!mounted) return;
+        await _dataService.refreshDossierRecordsFromRemote();
+        await _refreshDossiers();
+      }
+      _lastAutomaticAirtableCheck = DateTime.now();
+    } catch (_) {
+      // Airtable can be unavailable while the normal offline workspace is
+      // usable. Keep the last confirmed visibility and retry later.
+    } finally {
+      _airtableAutoInFlight = false;
+    }
   }
 
   bool _isDossierTreeView(String view) =>
@@ -346,6 +426,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _refreshCurrentUserDossiers() async {
     if (_isRefreshingDossiersManually ||
+        _airtableAutoInFlight ||
         _isOffline ||
         ConnectivityService().isOffline ||
         widget.remoteSessionExpired) {
@@ -367,13 +448,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       final sessionReady = await _authService.resumePendingRemoteSession();
       if (!sessionReady) throw StateError('Session distante indisponible');
       if (!mounted || _isOffline || ConnectivityService().isOffline) return;
-      final shouldImportAirtable = kIsWeb
-          ? widget.currentUser.role == LocalUserRole.admin ||
-                widget.currentUser.role == LocalUserRole.ergo ||
-                widget.currentUser.role == LocalUserRole.technician
-          : widget.currentUser.ergoLabel?.trim().toLowerCase() == 'coralie';
-      if (kIsWeb && shouldImportAirtable) {
+      final shouldImportAirtable =
+          widget.currentUser.role == LocalUserRole.admin ||
+          widget.currentUser.role == LocalUserRole.ergo ||
+          widget.currentUser.role == LocalUserRole.technician;
+      if (shouldImportAirtable) {
         final preview = await _dataService.previewCurrentDossiersRefresh();
+        if (!mounted) return;
+        await _reconcileAirtableVisibility(preview);
         if (!mounted) return;
         final selectedIds = await showDossierRefreshPreviewDialog(
           context,
@@ -386,27 +468,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             selectedIds,
           );
           collectSkipped(result);
-        }
-      } else if (shouldImportAirtable) {
-        var remaining = 1;
-        for (var batch = 0; batch < 100 && remaining > 0; batch++) {
-          final result = await _dataService.syncCurrentCoralieDossiers();
-          collectSkipped(result);
-          remaining = (result['remaining'] as num?)?.toInt() ?? 0;
-        }
-        if (remaining > 0) {
-          throw StateError('Actualisation Airtable incomplète');
-        }
-        if (kIsWeb) {
-          var notesRemaining = 1;
-          for (var batch = 0; batch < 100 && notesRemaining > 0; batch++) {
-            final result = await _dataService.importCurrentCoralieNotes();
-            collectSkipped(result);
-            notesRemaining = (result['remaining'] as num?)?.toInt() ?? 0;
-          }
-          if (notesRemaining > 0) {
-            throw StateError('Import des notes Airtable incomplet');
-          }
         }
       }
       // GET /api/dossiers is scoped by the authenticated server session:
@@ -1025,6 +1086,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               _selectedDossier = _selectedDossier!.copyWith(
                 visitDate: visitDate,
               );
+            }
+          });
+        },
+        onStatusChanged: (id, status) {
+          if (!mounted) return;
+          setState(() {
+            _dossiers = [
+              for (final d in _dossiers)
+                if (d.id == id) d.copyWith(status: status) else d,
+            ];
+            if (_selectedDossier?.id == id) {
+              _selectedDossier = _selectedDossier!.copyWith(status: status);
             }
           });
         },

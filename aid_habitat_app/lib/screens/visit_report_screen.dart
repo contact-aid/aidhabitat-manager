@@ -167,6 +167,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// 2026-05-11 : « Quand je quitte le relevé de visite et que je retourne
   /// dessus, je n'ai plus le load qui indique la generation en cours ».
   bool _isGeneratingReport = false;
+  bool _isValidatingReport = false;
+  bool _reportValidationPassed = false;
   bool _openingDocuments = false;
 
   /// Subscription au stream du `ReportGenerationService` pour synchroniser
@@ -850,7 +852,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // inside occupants_json, …) reach the Contexte de vie tab so "Aide
     // humaine" checkboxes appear/disappear the moment the user toggles
     // "Aide à domicile" in the Santé tab.
-    setState(() => _dossier = fresh);
+    setState(() {
+      _dossier = fresh;
+      _reportValidationPassed = false;
+    });
     // Note : les flags médicaux sont désormais stockés PAR PAGE dans
     // `drawing_json` (via NotesWidget), et non plus dérivés du dossier.
     // Aucun sync à faire ici — NotesWidget émet les flags de sa page
@@ -1103,7 +1108,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   final liveKey = '${_dossier.patient.id}::$tabKey';
                   final isMedical = tabKey == 'Contexte de vie-Médical';
                   final hasSharedContextText =
-                      isMedical || tabKey == 'Contexte de vie-Autonomie';
+                      isMedical ||
+                      tabKey == 'Contexte de vie-Autonomie' ||
+                      tabKey == _kSharedBeneficiaireNotesTabKey;
                   final isActive = tabKey == activeTabKey;
                   final pdfPlaceholder = _resolvePlaceholderForTabKey(tabKey);
                   // Bannière titre 2026-05-15 : auparavant le libellé PDF
@@ -1319,12 +1326,15 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       initialData: ConnectivityService().isOffline,
       builder: (context, snapshot) {
         final offline = snapshot.data ?? true;
-        final disabled = offline || _isGeneratingReport;
+        final disabled =
+            offline || _isGeneratingReport || !_reportValidationPassed;
         return Tooltip(
           message: offline
               ? 'Connexion Internet requise'
               : _isGeneratingReport
               ? 'Génération en cours…'
+              : !_reportValidationPassed
+              ? 'Validez d’abord le relevé'
               : 'Générer le rapport',
           child: Material(
             color: Colors.transparent,
@@ -1377,6 +1387,381 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     );
   }
 
+  Widget _buildValidateReportButton() => OutlinedButton(
+    onPressed: _isValidatingReport || _isGeneratingReport
+        ? null
+        : _validateReport,
+    child: Text(_isValidatingReport ? 'Vérification…' : 'Valider'),
+  );
+
+  Widget _buildPreviewReportButton() => OutlinedButton(
+    onPressed: _isGeneratingReport || _isValidatingReport
+        ? null
+        : _previewFilledFields,
+    child: const Text('Prévisualiser'),
+  );
+
+  Future<void> _previewFilledFields() async {
+    try {
+      await _beneficiaryController.flushPendingSave();
+      await _accessibilityController.flushPendingSave();
+      await _bathroomController.flushPendingSave();
+      await _wcController.flushPendingSave();
+      await _recommendationsController.flushPendingSave();
+      await _refreshDossier();
+      final fields = <_PreviewField>[];
+      void add(
+        String section,
+        int tab,
+        int? subsection,
+        String label,
+        Object? value, {
+        String? level,
+      }) {
+        if (value == null || value == false) return;
+        final text = value == true ? 'Oui' : value.toString().trim();
+        if (text.isEmpty) return;
+        fields.add(_PreviewField(section, label, text, tab, subsection, level));
+      }
+
+      void addMap(
+        String section,
+        int tab,
+        int? subsection,
+        Map<String, dynamic> values, {
+        String? level,
+        String prefix = '',
+      }) {
+        for (final entry in values.entries) {
+          if (entry.key == 'id' ||
+              entry.key == 'dossierId' ||
+              entry.key == 'housingRoomId' ||
+              entry.key == 'createdAt' ||
+              entry.key == 'updatedAt') {
+            continue;
+          }
+          final name = prefix.isEmpty ? entry.key : '$prefix · ${entry.key}';
+          final value = entry.value;
+          if (value is Map) {
+            addMap(
+              section,
+              tab,
+              subsection,
+              Map<String, dynamic>.from(value),
+              level: level,
+              prefix: name,
+            );
+          } else if (value is List) {
+            for (var index = 0; index < value.length; index++) {
+              final item = value[index];
+              if (item is Map) {
+                addMap(
+                  section,
+                  tab,
+                  subsection,
+                  Map<String, dynamic>.from(item),
+                  level: level,
+                  prefix: '$name ${index + 1}',
+                );
+              } else {
+                add(
+                  section,
+                  tab,
+                  subsection,
+                  '$name ${index + 1}',
+                  item,
+                  level: level,
+                );
+              }
+            }
+          } else {
+            add(section, tab, subsection, name, value, level: level);
+          }
+        }
+      }
+
+      final patient = _dossier.patient;
+      addMap('Bénéficiaire · Profil', 0, 0, {
+        'Prénom': patient.firstName,
+        'Nom': patient.lastName,
+        'Téléphone': patient.phone,
+        'Mail': patient.email,
+        'Adresse': patient.address,
+        'Commune': patient.city,
+        'Code postal': patient.zipCode,
+      });
+      addMap('Bénéficiaire · Foyer', 0, 1, {
+        'Situation familiale': patient.familySituation,
+        'Statut occupation': patient.occupationStatus,
+        'Catégorie de revenu': patient.incomeCategory,
+        'Nombre de personnes': patient.numberPeople,
+      });
+      for (var index = 0; index < patient.occupants.length; index++) {
+        final occupant = patient.occupants[index];
+        addMap(
+          'Bénéficiaire · Occupant ${index + 1}',
+          0,
+          1,
+          occupant.toJson()..remove('dependenceTxt'),
+          prefix: 'Occupant ${index + 1}',
+        );
+      }
+      addMap('Bénéficiaire · Admin', 0, 3, {
+        'Compte Anah': _dossier.compteAnah,
+        'Accompagnement': _dossier.natureAccompagnement,
+        'Envoi du rapport': _dossier.envoiRapport,
+        'Personnes présentes': _dossier.personnesPresentesVisite,
+      });
+      if (_dossier.medicalContext != null) {
+        addMap(
+          'Contexte de vie · Médical',
+          1,
+          0,
+          _dossier.medicalContext!.toJson(),
+        );
+      }
+      if (_dossier.autonomy != null) {
+        addMap(
+          'Contexte de vie · Autonomie',
+          1,
+          1,
+          _dossier.autonomy!.toJson(),
+        );
+      }
+      final housing = _dossier.housing;
+      addMap('Accessibilité · Général', 3, 0, {
+        'Type de logement': housing.typology,
+        'Année de construction': housing.yearConstruction,
+        'Année achat': housing.yearHabitation,
+        'Surface': housing.surface,
+        'Nombre de niveaux': housing.levels,
+        'Accès depuis la rue': housing.easyAccess ? 'Facile' : 'À revoir',
+        'Commentaires': housing.comments,
+        'Observations accessibilité': housing.accessObservation,
+        'Chauffage': housing.heatingDetails,
+      });
+      addMap('Accessibilité · Niveaux', 3, 1, {
+        'Sous-sol': housing.basement,
+        'Description sous-sol': housing.basementDescription,
+        'Rez-de-chaussée': housing.rdc,
+        'Description rez-de-chaussée': housing.rdcDescription,
+        'Étage': housing.floor,
+        'Description étage': housing.floorDescription,
+        'Deuxième étage': housing.secondFloor,
+        'Description deuxième étage': housing.secondFloorDescription,
+        'Troisième étage': housing.thirdFloor,
+        'Description troisième étage': housing.thirdFloorDescription,
+        'Garage': housing.garage,
+        'Véranda': housing.veranda,
+        'Balcon': housing.balcon,
+        'Terrasse': housing.terrasse,
+        'Jardin': housing.jardin,
+      });
+      addMap('Accessibilité · Équipements', 3, 2, {
+        'Volets roulants manuels': housing.voletsRoulantsManuels,
+        'Localisation volets manuels':
+            housing.voletsRoulantsManuelsLocalisation,
+        'Volets manuels entier': housing.voletsRoulantsManuelsEntier,
+        'Volets roulants électriques': housing.voletsRoulantsElectriques,
+        'Localisation volets électriques':
+            housing.voletsRoulantsElectriquesLocalisation,
+        'Volets électriques entier': housing.voletsRoulantsElectriquesEntier,
+        'Persiennes': housing.voletsPersiennes,
+        'Localisation persiennes': housing.voletsPersiennesLocalisation,
+        'Persiennes entier': housing.voletsPersiennesEntier,
+      });
+      addMap('Accessibilité · Extérieur', 3, 3, {
+        'Portail': housing.cheminementPortail,
+        'Porte garage': housing.cheminementPorteGarage,
+        'Marches': housing.cheminementMarches,
+        'Rampe': housing.cheminementRampe,
+        'Main courante': housing.cheminementMainCourante,
+        'Revêtement adapté': housing.cheminementRevetementAdapte,
+        'Éclairage adapté': housing.cheminementEclairageAdapte,
+      });
+      final measures = await _repository.fetchMesures(_dossier.id);
+      if (measures != null) addMap('Mesures', 2, null, measures.toJson());
+      final sanitary = await _repository.fetchDiagnosticSanitaire(_dossier.id);
+      if (sanitary != null) {
+        for (final instance in sanitary.sdbInstances) {
+          addMap(
+            'Salle de bain',
+            4,
+            null,
+            instance.toJson(),
+            level: instance.levelField,
+          );
+        }
+        for (final instance in sanitary.wcInstances) {
+          addMap('WC', 5, null, instance.toJson(), level: instance.levelField);
+        }
+      }
+      final observations = await _repository.fetchObservations(_dossier.id);
+      if (observations != null) {
+        addMap('Résumé', 8, null, observations.toJson());
+      }
+      final recommendations = await _repository.fetchVisitRecommendations(
+        _dossier.id,
+      );
+      for (var index = 0; index < recommendations.length; index++) {
+        addMap(
+          'Préconisations',
+          9,
+          null,
+          recommendations[index].toJson(),
+          prefix: 'Préconisation ${index + 1}',
+        );
+      }
+      final visitedNoteKeys = <String>{};
+      for (final entry in _tabSubsections.entries) {
+        final tab = _tabs.indexOf(entry.key);
+        for (var section = 0; section < entry.value.length; section++) {
+          final tabKey = _resolveNotesTabKey(entry.key, entry.value[section]);
+          if (!visitedNoteKeys.add(tabKey)) continue;
+          final pages = await _dataService.fetchLocalNotePages(
+            patientId: patient.id,
+            dossierId: _dossier.id,
+            tabKey: tabKey,
+          );
+          for (final page in pages) {
+            var text = page.textContent;
+            try {
+              final drawing = jsonDecode(page.drawingJson);
+              if (drawing is Map && drawing['text'] is String) {
+                text = drawing['text'] as String;
+              }
+            } catch (_) {}
+            add(
+              '${entry.key} · ${entry.value[section]}',
+              tab,
+              section,
+              'Note écrite page ${page.pageNumber}',
+              text,
+            );
+          }
+        }
+      }
+      if (!mounted) return;
+      if (fields.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Aucun champ rempli à prévisualiser.')),
+        );
+        return;
+      }
+      final selected = await showDialog<_PreviewField>(
+        context: context,
+        builder: (dialogContext) {
+          var index = 0;
+          return StatefulBuilder(
+            builder: (dialogContext, setDialogState) {
+              final field = fields[index];
+              return AlertDialog(
+                title: Text('Prévisualisation · ${index + 1}/${fields.length}'),
+                content: SizedBox(
+                  width: 480,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        field.section,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(field.label),
+                      const SizedBox(height: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 230),
+                        child: SingleChildScrollView(
+                          child: SelectableText(field.value),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Fermer'),
+                  ),
+                  TextButton(
+                    onPressed: index == 0
+                        ? null
+                        : () => setDialogState(() => index--),
+                    child: const Text('Précédent'),
+                  ),
+                  TextButton(
+                    onPressed: index == fields.length - 1
+                        ? null
+                        : () => setDialogState(() => index++),
+                    child: const Text('Suivant'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(dialogContext, field),
+                    child: const Text('Modifier'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+      if (!mounted || selected == null) return;
+      _scheduleNavigateToMissingField(
+        _MissingField(
+          label: selected.label,
+          tabIndex: selected.tabIndex,
+          subSectionIndex: selected.subsectionIndex,
+          levelField: selected.levelField,
+        ),
+      );
+    } catch (error) {
+      if (mounted) _showReportError('Prévisualisation impossible : $error');
+    }
+  }
+
+  Future<List<_MissingField>?> _checkReportLocally() async {
+    try {
+      await _beneficiaryController.flushPendingSave();
+      await _accessibilityController.flushPendingSave();
+      await _bathroomController.flushPendingSave();
+      await _wcController.flushPendingSave();
+      await _recommendationsController.flushPendingSave();
+      await _refreshDossier();
+      return await _collectMissingFields();
+    } catch (error) {
+      _showReportError('Vérification du relevé impossible : $error');
+      return null;
+    }
+  }
+
+  Future<void> _validateReport() async {
+    if (_isValidatingReport || _isGeneratingReport) return;
+    setState(() => _isValidatingReport = true);
+    try {
+      final missing = await _checkReportLocally();
+      if (!mounted || missing == null) return;
+      setState(() => _reportValidationPassed = missing.isEmpty);
+      if (missing.isNotEmpty) {
+        final fill = await _showMissingFieldsDialog(
+          missing,
+          allowContinue: false,
+        );
+        if (fill == false) _scheduleNavigateToMissingField(missing.first);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Relevé validé. Le rapport peut être généré dès que vous êtes en ligne.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isValidatingReport = false);
+    }
+  }
+
   /// Déclenche la génération du PDF côté serveur, puis l'insère
   /// directement dans l'espace **Documents** du dossier (tag
   /// "Rapport") — la sync engine se charge ensuite de pousser le
@@ -1385,7 +1770,11 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// dossier, accessible depuis l'écran Documents pour preview /
   /// téléchargement / suppression.
   Future<void> _generateReport() async {
-    if (_isGeneratingReport || ConnectivityService().isOffline) return;
+    if (_isGeneratingReport ||
+        ConnectivityService().isOffline ||
+        !_reportValidationPassed) {
+      return;
+    }
     // Bloque aussi si une autre génération tourne (même autre dossier)
     // pour éviter de saturer Vercel avec 2-3 PDFs en parallèle (~30 s
     // CPU chacun). Le bouton reste cliquable mais le user verra le
@@ -1418,28 +1807,18 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // _refreshDossier` après save ; les autres onglets persistent
     // directement en SQLite via leur propre `_save()`. On force ici un
     // re-fetch pour aligner le modèle in-memory avec le disque.
-    try {
-      await _beneficiaryController.flushPendingSave();
-    } catch (error) {
-      _showReportError('Enregistrement du bénéficiaire impossible : $error');
-      return;
-    }
-    await _accessibilityController.flushPendingSave();
-    await _bathroomController.flushPendingSave();
-    await _wcController.flushPendingSave();
-    await _recommendationsController.flushPendingSave();
-    await _refreshDossier();
-    final missing = await _collectMissingFields();
+    final missing = await _checkReportLocally();
+    if (missing == null) return;
     if (missing.isNotEmpty) {
-      final shouldContinue = await _showMissingFieldsDialog(missing);
-      if (shouldContinue == false) {
+      setState(() => _reportValidationPassed = false);
+      final shouldFill = await _showMissingFieldsDialog(
+        missing,
+        allowContinue: false,
+      );
+      if (shouldFill == false) {
         _scheduleNavigateToMissingField(missing.first);
-        return;
       }
-      if (shouldContinue != true) {
-        // L'utilisateur a fermé la popup → pas de génération.
-        return;
-      }
+      return;
     }
 
     // Notifie le service global → indicateur de loading visible depuis
@@ -1951,15 +2330,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
         ),
       );
     }
-    if ((_dossier.visitDate ?? '').trim().isEmpty) {
-      missing.add(
-        _MissingField(
-          label: 'Visite — date de visite (fiche dossier)',
-          tabIndex: tab,
-          subSectionIndex: 0,
-        ),
-      );
-    }
   }
 
   Future<void> _checkBeneficiaryFoyer(List<_MissingField> missing) async {
@@ -2466,7 +2836,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   ///     champ manquant après fermeture de la popup, abort génération
   ///   - `null` si l'ergo ferme la popup (= équivalent annuler, pas
   ///     de génération)
-  Future<bool?> _showMissingFieldsDialog(List<_MissingField> missing) async {
+  Future<bool?> _showMissingFieldsDialog(
+    List<_MissingField> missing, {
+    bool allowContinue = true,
+  }) async {
     if (!mounted) return null;
     return showSoftDialog<bool>(
       context: context,
@@ -2499,11 +2872,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   ),
                 ),
                 const SizedBox(height: 10),
-                const Text(
-                  'Certaines informations importantes ne sont pas '
-                  'remplies. Tu peux générer le rapport quand même '
-                  '(les champs vides seront laissés blancs dans le PDF) '
-                  'ou compléter d\'abord :',
+                Text(
+                  allowContinue
+                      ? 'Certaines informations importantes ne sont pas remplies. Complétez-les avant la génération :'
+                      : 'Complétez ces informations avant de générer le rapport :',
                   style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
                 ),
                 const SizedBox(height: 12),
@@ -2555,13 +2927,14 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                       child: const Text('Remplir les champs'),
                     ),
                     const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(ctx, true),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: kBrandPurple,
+                    if (allowContinue)
+                      FilledButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: kBrandPurple,
+                        ),
+                        child: const Text('Valider'),
                       ),
-                      child: const Text('Valider'),
-                    ),
                   ],
                 ),
               ],
@@ -2952,7 +3325,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
 
     return Scaffold(
       body: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 700 ? 12 : 24),
         child: Column(
           children: [
             // Ligne 1 : header bénéficiaire partagé (refonte 2026-05-15).
@@ -2973,13 +3346,15 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                       onPressed: _openingDocuments ? null : _openDocuments,
                     ),
                   ],
+                  _buildValidateReportButton(),
+                  _buildPreviewReportButton(),
                   _buildGenerateReportButton(),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: MediaQuery.sizeOf(context).width < 700 ? 6 : 12),
             _buildTabBar(),
-            const SizedBox(height: 16),
+            SizedBox(height: MediaQuery.sizeOf(context).width < 700 ? 8 : 16),
             Expanded(child: tabView),
           ],
         ),
@@ -3047,6 +3422,24 @@ class _NotesPanelLayer extends StatelessWidget {
 /// `_collectMissingFields` + `_showMissingFieldsDialog` (popup
 /// pré-génération qui propose à l'ergo de naviguer directement vers
 /// le champ pour le remplir).
+class _PreviewField {
+  final String section;
+  final String label;
+  final String value;
+  final int tabIndex;
+  final int? subsectionIndex;
+  final String? levelField;
+
+  const _PreviewField(
+    this.section,
+    this.label,
+    this.value,
+    this.tabIndex,
+    this.subsectionIndex,
+    this.levelField,
+  );
+}
+
 class _MissingField {
   /// Libellé affiché à l'ergo dans la liste de la popup.
   final String label;

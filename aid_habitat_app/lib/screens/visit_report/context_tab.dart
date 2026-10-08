@@ -699,9 +699,9 @@ class _ContextTabState extends State<ContextTab>
       first = p.occupants[idx].firstName.trim();
       last = p.occupants[idx].lastName.trim();
     }
-    final display = (first.isEmpty && last.isEmpty)
-        ? 'Occupant ${idx + 1}'
-        : [first, last.toUpperCase()].where((s) => s.isNotEmpty).join(' ');
+    final display = first.isNotEmpty
+        ? first
+        : (last.isNotEmpty ? last : 'Occupant ${idx + 1}');
     final total = _contextOccupants.length;
     final hasNav = total > 1;
     // `role` (BÉNÉFICIAIRE PRINCIPAL / CONJOINT·E) retiré sur demande user

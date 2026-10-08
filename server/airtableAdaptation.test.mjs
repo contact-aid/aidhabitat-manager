@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assignedAdaptationFormula, createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
+import { assignedAdaptationFormula, createAirtableAdaptationReader, isAirtableDossierOnHold, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 
 const id = (char) => `rec${char.repeat(14)}`;
 const row = (recordId, fields) => ({ id: recordId, fields });
@@ -77,6 +77,29 @@ test('Airtable rate limiting retries the same page', async () => {
   });
   assert.deepEqual(await read('Coralie'), []);
   assert.equal(calls, 2);
+});
+
+test('visibility reads all dossiers and any filled hold status hides a dossier', async () => {
+  const calls = [];
+  const read = createAirtableAdaptationReader({
+    token: 'synthetic-token',
+    fetchImpl: async (url) => {
+      calls.push(new URL(url));
+      return Response.json({ records: [
+        row(id('a'), {}),
+        row(id('b'), { 'En attente': 'OUI' }),
+        row(id('c'), { 'En attente': 'Devis audit signé' }),
+      ] });
+    },
+  });
+  const records = await read.visibility();
+  assert.equal(records.length, 3);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].searchParams.has('filterByFormula'), false);
+  assert.deepEqual(calls[0].searchParams.getAll('fields[]'), ['En attente']);
+  assert.equal(isAirtableDossierOnHold({ dossier: records[0] }), false);
+  assert.equal(isAirtableDossierOnHold({ dossier: records[1] }), true);
+  assert.equal(isAirtableDossierOnHold({ dossier: records[2] }), true);
 });
 
 test('projection only contains authorized dossier identity and scheduling fields', () => {

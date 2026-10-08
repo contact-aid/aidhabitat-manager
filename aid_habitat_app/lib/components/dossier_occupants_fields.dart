@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../models/types.dart';
 import '../models/dossier_occupants.dart';
@@ -158,9 +159,11 @@ class DossierOccupantsFields extends StatelessWidget {
           child: locked
               ? Text(
                   dossierOccupantDisplayName(occupants[index], index),
-                  style: const TextStyle(
-                    fontSize: 16,
+                  style: GoogleFonts.nunito(
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
+                    color: const Color(0xFF0E1116),
+                    height: 1.2,
                   ),
                 )
               : Column(

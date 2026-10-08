@@ -58,6 +58,7 @@ class DossierScreen extends StatefulWidget {
   /// Met à jour immédiatement le snapshot conservé par `MainScreen` quand la
   /// date de visite change, sans attendre le prochain pull NocoDB.
   final void Function(String dossierId, String visitDate)? onVisitDateChanged;
+  final void Function(String dossierId, DossierStatus status)? onStatusChanged;
 
   const DossierScreen({
     super.key,
@@ -68,6 +69,7 @@ class DossierScreen extends StatefulWidget {
     this.onOpenDocuments,
     this.onBeneficiaryPreparedChanged,
     this.onVisitDateChanged,
+    this.onStatusChanged,
   });
 
   @override
@@ -104,6 +106,7 @@ class _DossierScreenState extends State<DossierScreen> {
   late String _zipCode;
   late String _cityId;
   String? _visitDate;
+  late DossierStatus _status;
 
   // Readonly fields
   late String _incomeCategory;
@@ -202,6 +205,7 @@ class _DossierScreenState extends State<DossierScreen> {
     _fiscalRevenue = _householdFiscalRevenue(p);
     _beneficiaryPrepared = widget.dossier.beneficiaryPrepared;
     _visitDate = widget.dossier.visitDate;
+    _status = widget.dossier.status;
 
     _savedFields = _cardFields();
     _observedFields = Map.of(widget.dossier.patientEditBaseline ?? {});
@@ -535,8 +539,43 @@ class _DossierScreenState extends State<DossierScreen> {
       dossier: widget.dossier,
       occupants: _occupants,
       onBack: widget.onBack,
-      trailing: _buildVisitDateButton(context),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PopupMenuButton<DossierStatus>(
+            tooltip: 'Changer l’état du dossier',
+            initialValue: _status,
+            onSelected: _changeStatus,
+            itemBuilder: (context) => [
+              for (final status in DossierStatus.values)
+                PopupMenuItem(value: status, child: Text(status.label)),
+            ],
+            child: Chip(label: Text(_status.label)),
+          ),
+          const SizedBox(width: 8),
+          _buildVisitDateButton(context),
+        ],
+      ),
     );
+  }
+
+  Future<void> _changeStatus(DossierStatus next) async {
+    if (next == _status) return;
+    final previous = _status;
+    setState(() => _status = next);
+    widget.onStatusChanged?.call(widget.dossier.id, next);
+    try {
+      await _repository.updateDossierFields(widget.dossier.id, {
+        'status': next.label,
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _status = previous);
+      widget.onStatusChanged?.call(widget.dossier.id, previous);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Le statut n’a pas pu être enregistré.')),
+      );
+    }
   }
 
   Widget _buildVisitDateButton(BuildContext context) {
@@ -545,68 +584,82 @@ class _DossierScreenState extends State<DossierScreen> {
       r'[T ]\d{2}:\d{2}',
     ).hasMatch(_visitDate?.trim() ?? '');
     final label = parsed == null
-        ? 'À planifier'
+        ? 'Non définie'
         : DateFormat(
             hasTime ? 'dd/MM/yyyy • HH:mm' : 'dd/MM/yyyy',
             'fr_FR',
           ).format(parsed);
 
-    return Tooltip(
-      message: 'Modifier la date de visite',
-      child: Material(
-        color: const Color(0xFFF2ECF5),
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: _pickVisitDate,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 44),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-            decoration: BoxDecoration(
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: 'Modifier la date de visite',
+          child: Material(
+            color: const Color(0xFFF2ECF5),
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: _pickVisitDate,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE2D8E9)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  LucideIcons.calendarDays,
-                  size: 18,
-                  color: kBrandPurple,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 44),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 7,
                 ),
-                const SizedBox(width: 9),
-                Flexible(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Date de visite',
-                        style: GoogleFonts.nunito(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF8A7A95),
-                          height: 1,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        label,
-                        style: GoogleFonts.nunito(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF2B323A),
-                          height: 1,
-                        ),
-                      ),
-                    ],
-                  ),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE2D8E9)),
                 ),
-              ],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      LucideIcons.calendarDays,
+                      size: 18,
+                      color: kBrandPurple,
+                    ),
+                    const SizedBox(width: 9),
+                    Flexible(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Date de visite',
+                            style: GoogleFonts.nunito(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF8A7A95),
+                              height: 1,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            label,
+                            style: GoogleFonts.nunito(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF2B323A),
+                              height: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
-      ),
+        if (parsed != null)
+          IconButton(
+            tooltip: 'Mettre la date de visite sur Non définie',
+            onPressed: _clearVisitDate,
+            icon: const Icon(Icons.event_busy_outlined),
+          ),
+      ],
     );
   }
 
@@ -680,6 +733,26 @@ class _DossierScreenState extends State<DossierScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("La date de visite n'a pas pu être enregistrée."),
+        ),
+      );
+    }
+  }
+
+  Future<void> _clearVisitDate() async {
+    final previousValue = _visitDate;
+    if (previousValue == null || previousValue.trim().isEmpty) return;
+    setState(() => _visitDate = null);
+    try {
+      await _repository.updateDossierFields(widget.dossier.id, {
+        'visit_date': '',
+      });
+      widget.onVisitDateChanged?.call(widget.dossier.id, '');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _visitDate = previousValue);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La date de visite n’a pas pu être effacée.'),
         ),
       );
     }

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
-import '../../models/mobility_aids.dart';
 import '../../models/aggir_eligibility.dart';
 import '../../services/data_service.dart';
 import '../../services/dossier_repository.dart';
@@ -19,6 +18,7 @@ import '../../components/confirmation_dialog.dart';
 import '../../components/form_widgets.dart';
 import '../../components/soft_transitions.dart';
 import '../../components/two_threshold_swipe.dart';
+import '../../components/year_picker_field.dart';
 import 'retirement_fund_selection.dart' as retirement_fund_selection;
 
 /// Bénéficiaire tab — parité 1:1 avec la version React (`BeneficiaryForm`).
@@ -222,18 +222,11 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   // Family situation presets
   static const List<String> _familySituationOptions = [
     'Marié(e)',
+    'Pacsé(e)',
     'Célibataire',
     'Divorcé(e)',
     'Veuf(ve)',
     'Concubinage',
-  ];
-
-  // Dependence presets — mirrors NocoDB view `vwje1ceip6mv9bt6`.
-  static const List<String> _dependenceOptions = [
-    'Aucune',
-    'Canne',
-    'Déambulateur',
-    'Fauteuil roulant',
   ];
 
   // GIR (Groupe Iso-Ressources) options 6 → 1 — shown quand "Bénéficiaire
@@ -686,7 +679,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
       'invalidity_txt': primary.invalidityTxt,
       'home_help': primary.homeHelp ? 1 : 0,
       'home_help_txt': primary.homeHelpTxt,
-      'dependence_txt': primary.dependenceTxt,
       'trusted_person_json': jsonEncode({
         'name': _trustedName,
         'phone': _trustedPhone,
@@ -737,8 +729,63 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
 
   void _updateOccupant(int index, Occupant updated) {
     if (index < 0 || index >= _occupants.length) return;
+    final revenueChanged =
+        _occupants[index].fiscalRevenue != updated.fiscalRevenue;
     setState(() => _occupants[index] = updated);
+    if (revenueChanged) _recomputeIncomeCategory();
     _scheduleSave();
+  }
+
+  Future<void> _editOccupantName(int index) async {
+    if (index < 0 || index >= _occupants.length) return;
+    final occupant = _occupants[index];
+    final firstName = TextEditingController(text: occupant.firstName);
+    final lastName = TextEditingController(text: occupant.lastName);
+    try {
+      final result = await showDialog<(String, String)>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Nom de l’occupant'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: firstName,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Prénom'),
+              ),
+              TextField(
+                controller: lastName,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Nom'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Annuler'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, (
+                firstName.text.trim(),
+                lastName.text.trim(),
+              )),
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || result == null || index >= _occupants.length) return;
+      _updateOccupant(
+        index,
+        _occupants[index].copyWith(firstName: result.$1, lastName: result.$2),
+      );
+    } finally {
+      firstName.dispose();
+      lastName.dispose();
+    }
   }
 
   // Note: numberPeople is controlled from the dossier screen. When it
@@ -1274,9 +1321,9 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final first = occ.firstName.trim();
     final last = occ.lastName.trim();
     final fallback = "Occupant ${idx + 1}";
-    final display = (first.isEmpty && last.isEmpty)
-        ? fallback
-        : [first, last.toUpperCase()].where((s) => s.isNotEmpty).join(' ');
+    final display = first.isNotEmpty
+        ? first
+        : (last.isNotEmpty ? last : fallback);
     final total = _occupants.length;
     final hasNav = total > 1;
     // `role` (BÉNÉFICIAIRE PRINCIPAL / CONJOINT·E) retiré sur demande user
@@ -1319,19 +1366,22 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           arrow(LucideIcons.chevronLeft, _occupantPrev),
           Expanded(
             child: Center(
-              child: Text(
-                display,
-                style: GoogleFonts.nunito(
-                  fontSize: 17,
-                  // w700 → w600 (demande user 2026-05-13 : nom occupant
-                  // « moins épais »).
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.25,
-                  height: 1.15,
-                  color: const Color(0xFF0E1116),
+              child: GestureDetector(
+                onDoubleTap: () => _editOccupantName(idx),
+                child: Text(
+                  display,
+                  style: GoogleFonts.nunito(
+                    fontSize: 17,
+                    // w700 → w600 (demande user 2026-05-13 : nom occupant
+                    // « moins épais »).
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.25,
+                    height: 1.15,
+                    color: const Color(0xFF0E1116),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
           ),
@@ -1554,68 +1604,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     );
   }
 
-  /// Plusieurs aides peuvent être utilisées par un même occupant. On garde
-  /// le champ texte existant et sépare les choix par une virgule pour rester
-  /// compatible avec les dossiers déjà enregistrés. « Aucune » est exclusive.
-  Widget _buildDependenceSelector(int index) {
-    final occ = _occupants[index];
-    final selected = parseMobilityAids(occ.dependenceTxt);
-
-    void toggle(String option) {
-      final next = [...selected];
-      if (option == 'Aucune') {
-        if (next.contains(option)) {
-          next.clear();
-        } else {
-          next
-            ..clear()
-            ..add(option);
-        }
-      } else {
-        next.remove('Aucune');
-        if (next.contains(option)) {
-          next.remove(option);
-        } else {
-          next.add(option);
-        }
-      }
-      _updateOccupant(index, occ.copyWith(dependenceTxt: encodeMobilityAids(next)));
-    }
-
-    Widget option(String value) => FormToggleGroup(
-      label: '',
-      options: [value],
-      expand: true,
-      selected: selected.contains(value) ? value : '',
-      onChanged: (_) => toggle(value),
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Dépendance',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 14,
-            color: Color(0xFF0E1116),
-          ),
-        ),
-        const SizedBox(height: 6),
-        for (var row = 0; row < _dependenceOptions.length; row += 2) ...[
-          if (row > 0) const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(child: option(_dependenceOptions[row])),
-              const SizedBox(width: 8),
-              Expanded(child: option(_dependenceOptions[row + 1])),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-
   Widget _buildAidesDependenceBlock(int index) {
     final occ = _occupants[index];
     return Column(
@@ -1651,6 +1639,17 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             _updateOccupant(index, occ.copyWith(apaGir: v));
           },
         ),
+        if (occ.apa) ...[
+          const SizedBox(height: 8),
+          FormTextField(
+            label: 'Détails APA',
+            value: occ.apaDetails,
+            onChanged: (value) => _updateOccupant(
+              index,
+              _occupants[index].copyWith(apaDetails: value),
+            ),
+          ),
+        ],
         _buildCollapsibleOptionCheckbox(
           label: 'Reconnaissance Invalidité',
           checked: occ.invalidity,
@@ -1671,6 +1670,17 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             _updateOccupant(index, occ.copyWith(invalidityTxt: v));
           },
         ),
+        if (occ.invalidity) ...[
+          const SizedBox(height: 8),
+          FormTextField(
+            label: 'Détails invalidité',
+            value: occ.invalidityDetails,
+            onChanged: (value) => _updateOccupant(
+              index,
+              _occupants[index].copyWith(invalidityDetails: value),
+            ),
+          ),
+        ],
         _RoundCheckRow(
           label: 'Aide à domicile',
           checked: occ.homeHelp,
@@ -1694,8 +1704,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             },
           ),
         ],
-        const SizedBox(height: 10),
-        _buildDependenceSelector(index),
       ],
     );
   }
@@ -2087,6 +2095,37 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: FormNumberField(
+                label: 'RFR',
+                value: occ.fiscalRevenue,
+                unit: '€',
+                onChanged: (value) => _updateOccupant(
+                  index,
+                  _occupants[index].copyWith(
+                    fiscalRevenue: value,
+                    clearFiscalRevenue: value == null,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: YearPickerField(
+                label: 'Année du RFR',
+                value: occ.fiscalRevenueYear,
+                onChanged: (value) => _updateOccupant(
+                  index,
+                  _occupants[index].copyWith(fiscalRevenueYear: value),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
         FormTextField(
           label: 'N° Sécu',
           value: occ.numeroSecuriteSociale,

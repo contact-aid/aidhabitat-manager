@@ -1975,8 +1975,29 @@ class DossierRepository {
 
   String _asDossierStatusName(dynamic status) {
     switch (status?.toString()) {
+      case 'En attente':
+        return DossierStatus.PENDING.name;
+      case 'Visite fin de travaux':
+        return DossierStatus.POST_WORKS_VISIT.name;
+      case 'Visité':
+        return DossierStatus.VISITED.name;
+      case 'Attente devis':
+        return DossierStatus.WAITING_QUOTES.name;
+      case 'Devis reçus':
+        return DossierStatus.QUOTES_RECEIVED.name;
+      case 'Attente subvention':
+        return DossierStatus.WAITING_GRANT.name;
+      case 'Subvention validée':
       case 'Validé':
         return DossierStatus.GRANT_VALIDATED.name;
+      case 'Travaux démarrés':
+        return DossierStatus.WORKS_STARTED.name;
+      case 'Travaux terminés':
+        return DossierStatus.WORKS_COMPLETED.name;
+      case 'Clôturé':
+        return DossierStatus.CLOSED.name;
+      case 'Archivé':
+        return DossierStatus.ARCHIVED.name;
       case 'En cours':
         return DossierStatus.IN_PROGRESS.name;
       case 'Clos':

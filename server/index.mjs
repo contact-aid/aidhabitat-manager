@@ -25,7 +25,7 @@ import { contextServerReference, contextRecordToSections } from './contextGuarde
 import { createMobileSyncStore, NotePageMutationError } from './mobileSyncStore.mjs';
 import { noteSyncDiagnostics, safeNoteErrorCode } from './noteSyncDiagnostic.mjs';
 import { registerNoteBackupRoutes, captureSubmittedNoteBackup } from './noteBackupRoutes.mjs';
-import { createAirtableAdaptationReader, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
+import { createAirtableAdaptationReader, isAirtableDossierOnHold, projectAirtableDossier, resolveAirtableLinks } from './airtableAdaptation.mjs';
 import { syncCurrentProfileDossiers } from './airtableDossierSync.mjs';
 import { preserveLegacyOccupantGender } from './occupantGender.mjs';
 import { importCurrentProfileNotes } from './airtableNoteImport.mjs';
@@ -836,6 +836,8 @@ const parseOccupantsJson = (rawValue) => {
           ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
+        ...(Object.hasOwn(entry, 'fiscalRevenueYear')
+          ? { fiscalRevenueYear: stringValue(entry.fiscalRevenueYear).trim() } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         // GIR (Groupe Iso-Ressources) — sélectionné dans l'onglet
@@ -844,6 +846,8 @@ const parseOccupantsJson = (rawValue) => {
         apaGir: stringValue(entry.apaGir).trim(),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),
+        apaDetails: stringValue(entry.apaDetails).trim(),
+        invalidityDetails: stringValue(entry.invalidityDetails).trim(),
         homeHelp: Boolean(entry.homeHelp),
         homeHelpTxt: stringValue(entry.homeHelpTxt).trim(),
         dependenceTxt: stringValue(entry.dependenceTxt).trim(),
@@ -4268,6 +4272,8 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
           ? { maidenName: stringValue(entry.maidenName).trim() } : {}),
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
+        ...(Object.hasOwn(entry, 'fiscalRevenueYear')
+          ? { fiscalRevenueYear: stringValue(entry.fiscalRevenueYear).trim() } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
         apa: Boolean(entry.apa),
         // GIR (Groupe Iso-Ressources) — préservé pour le rapport PDF.
@@ -4277,6 +4283,8 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
         apaGir: stringValue(entry.apaGir).trim(),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),
+        apaDetails: stringValue(entry.apaDetails).trim(),
+        invalidityDetails: stringValue(entry.invalidityDetails).trim(),
         homeHelp: Boolean(entry.homeHelp),
         homeHelpTxt: stringValue(entry.homeHelpTxt).trim(),
         dependenceTxt: stringValue(entry.dependenceTxt).trim(),
@@ -5806,13 +5814,21 @@ const currentAirtableSnapshot = async (profiles) => {
   for (const profile of profiles) {
     sourceRowsByProfile.push({ profile, sourceRows: await readAssignedAirtableDossiers(read, profile) });
   }
+  const visibilityRows = await read.visibility();
   return { dossierRows, beneficiaryRows, baremeRows, housingRows,
-    housingTypes, occupationTypes, sourceRowsByProfile };
+    housingTypes, occupationTypes, sourceRowsByProfile, visibilityRows };
 };
 const currentAirtableRefreshPreview = async (snapshot) => {
   const dossierChanges = [];
   const noteChanges = [];
   const skipped = [];
+  const activeIds = new Set();
+  for (const dossier of snapshot.visibilityRows) {
+    const id = String(dossier?.id || '');
+    if (/^rec[A-Za-z0-9]{14}$/.test(id) && !isAirtableDossierOnHold({ dossier })) {
+      activeIds.add(`airtable:${id}`);
+    }
+  }
   for (const { profile, sourceRows } of snapshot.sourceRowsByProfile) {
     const dossierPlan = await syncCurrentProfileDossiers({
       ergoLabel: profile, sourceRows, ...snapshot, dryRun: true, enhancedWeb: true,
@@ -5844,6 +5860,7 @@ const currentAirtableRefreshPreview = async (snapshot) => {
   return {
     items: [...byId.values()].sort((a, b) =>
       a.profile.localeCompare(b.profile, 'fr') || a.id.localeCompare(b.id)),
+    activeIds: [...activeIds].sort(),
     skipped: skipped.sort((a, b) =>
       a.profile.localeCompare(b.profile, 'fr') || a.id.localeCompare(b.id)),
   };

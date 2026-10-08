@@ -15,6 +15,8 @@ enum DossierStatus {
   WORKS_COMPLETED,
   CLOSED,
   ARCHIVED,
+  PENDING,
+  POST_WORKS_VISIT,
 }
 
 enum HousingType { HOUSE, APARTMENT }
@@ -344,6 +346,8 @@ class Occupant {
   final bool apa;
   final bool invalidity;
   final String invalidityTxt;
+  final String apaDetails;
+  final String invalidityDetails;
   final bool homeHelp;
   final String homeHelpTxt;
   final String dependenceTxt;
@@ -355,6 +359,9 @@ class Occupant {
   /// occupants, each one has their own RFR value; the household category is
   /// derived from the sum divided by the number of occupants.
   final double? fiscalRevenue;
+
+  /// The tax year attached to this occupant's RFR; empty for legacy rows.
+  final String fiscalRevenueYear;
 
   /// GIR APA (6 → 1). Rempli uniquement quand `apa == true`. Séparé de
   /// `invalidityTxt` pour ne pas écraser la donnée MDPH si les deux cases
@@ -370,6 +377,8 @@ class Occupant {
     this.apa = false,
     this.invalidity = false,
     this.invalidityTxt = '',
+    this.apaDetails = '',
+    this.invalidityDetails = '',
     this.homeHelp = false,
     this.homeHelpTxt = '',
     this.dependenceTxt = '',
@@ -377,6 +386,7 @@ class Occupant {
     this.caisseRetraitePrincipale = '',
     this.caissesRetraiteComplementaires = '',
     this.fiscalRevenue,
+    this.fiscalRevenueYear = '',
     this.apaGir = '',
   });
 
@@ -393,6 +403,8 @@ class Occupant {
     apa: json['apa'] as bool? ?? false,
     invalidity: json['invalidity'] as bool? ?? false,
     invalidityTxt: json['invalidityTxt'] as String? ?? '',
+    apaDetails: json['apaDetails'] as String? ?? '',
+    invalidityDetails: json['invalidityDetails'] as String? ?? '',
     homeHelp: json['homeHelp'] as bool? ?? false,
     homeHelpTxt: json['homeHelpTxt'] as String? ?? '',
     dependenceTxt: json['dependenceTxt'] as String? ?? '',
@@ -401,6 +413,7 @@ class Occupant {
     caissesRetraiteComplementaires:
         json['caissesRetraiteComplementaires'] as String? ?? '',
     fiscalRevenue: (json['fiscalRevenue'] as num?)?.toDouble(),
+    fiscalRevenueYear: json['fiscalRevenueYear'] as String? ?? '',
     apaGir: json['apaGir'] as String? ?? '',
   );
 
@@ -413,6 +426,8 @@ class Occupant {
     'apa': apa,
     'invalidity': invalidity,
     'invalidityTxt': invalidityTxt,
+    'apaDetails': apaDetails,
+    'invalidityDetails': invalidityDetails,
     'homeHelp': homeHelp,
     'homeHelpTxt': homeHelpTxt,
     'dependenceTxt': dependenceTxt,
@@ -420,6 +435,7 @@ class Occupant {
     'caisseRetraitePrincipale': caisseRetraitePrincipale,
     'caissesRetraiteComplementaires': caissesRetraiteComplementaires,
     'fiscalRevenue': fiscalRevenue,
+    'fiscalRevenueYear': fiscalRevenueYear,
     'apaGir': apaGir,
   };
 
@@ -432,6 +448,8 @@ class Occupant {
     bool? apa,
     bool? invalidity,
     String? invalidityTxt,
+    String? apaDetails,
+    String? invalidityDetails,
     bool? homeHelp,
     String? homeHelpTxt,
     String? dependenceTxt,
@@ -439,6 +457,7 @@ class Occupant {
     String? caisseRetraitePrincipale,
     String? caissesRetraiteComplementaires,
     double? fiscalRevenue,
+    String? fiscalRevenueYear,
     bool clearFiscalRevenue = false,
     String? apaGir,
   }) {
@@ -451,6 +470,8 @@ class Occupant {
       apa: apa ?? this.apa,
       invalidity: invalidity ?? this.invalidity,
       invalidityTxt: invalidityTxt ?? this.invalidityTxt,
+      apaDetails: apaDetails ?? this.apaDetails,
+      invalidityDetails: invalidityDetails ?? this.invalidityDetails,
       homeHelp: homeHelp ?? this.homeHelp,
       homeHelpTxt: homeHelpTxt ?? this.homeHelpTxt,
       dependenceTxt: dependenceTxt ?? this.dependenceTxt,
@@ -463,6 +484,7 @@ class Occupant {
       fiscalRevenue: clearFiscalRevenue
           ? null
           : (fiscalRevenue ?? this.fiscalRevenue),
+      fiscalRevenueYear: fiscalRevenueYear ?? this.fiscalRevenueYear,
       apaGir: apaGir ?? this.apaGir,
     );
   }
@@ -1473,6 +1495,10 @@ extension DossierStatusLabel on DossierStatus {
         return 'Clôturé';
       case DossierStatus.ARCHIVED:
         return 'Archivé';
+      case DossierStatus.PENDING:
+        return 'En attente';
+      case DossierStatus.POST_WORKS_VISIT:
+        return 'Visite fin de travaux';
     }
   }
 }

@@ -139,6 +139,23 @@ void main() {
       await tester.pump();
       await tester.runAsync(controller.flushPendingSave);
       expect(repository.writes, isEmpty);
+      if (!legacyBuild64) {
+        expect(find.text('Dépendance'), findsNothing);
+        final detail = tester.widget<FormTextField>(
+          find.byWidgetPredicate(
+            (w) => w is FormTextField && w.label == 'Détails',
+          ),
+        );
+        detail.onChanged!('Après');
+        await tester.pump();
+        await tester.runAsync(controller.flushPendingSave);
+        expect(repository.writes, hasLength(1));
+        final write = repository.writes.single;
+        expect(write.containsKey('dependence_txt'), isFalse);
+        expect((jsonDecode(write['occupants_json'] as String) as List)
+            .first['dependenceTxt'], aids);
+        return;
+      }
       final selector = tester.widget<FormToggleGroup>(
         find.byWidgetPredicate(
           (w) =>
@@ -195,6 +212,11 @@ void main() {
         ),
       );
       await tester.pump();
+      if (!legacyBuild64) {
+        expect(find.text('Dépendance'), findsNothing);
+        expect(repository.writes, isEmpty);
+        return;
+      }
       final selector = tester.widget<FormToggleGroup>(
         find.byWidgetPredicate(
           (w) =>
