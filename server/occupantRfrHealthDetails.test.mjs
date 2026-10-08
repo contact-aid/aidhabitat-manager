@@ -20,3 +20,17 @@ test('per-occupant RFR year and health details survive the API mapper', () => {
   assert.equal(read.occupants[0].apaDetails, 'Détail fictif APA');
   assert.equal(read.occupants[0].invalidityDetails, 'Détail fictif invalidité');
 });
+
+test('Pacsé(e) persists only when the NocoDB reference exists', () => {
+  const missing = mapBeneficiaryUpdatesToFields({ familySituation: 'Pacsé(e)' }, refs);
+  assert.equal(missing.situation_proprietaire_id1, undefined);
+  const available = mapBeneficiaryUpdatesToFields({ familySituation: 'Pacsé(e)' }, {
+    ...refs,
+    situations: [{ id: 7, fields: { libelle: 'Pacsé(e)' } }],
+  });
+  assert.equal(available.situation_proprietaire_id1, 7);
+  const patient = mapPatient({ fields: {
+    situation_proprietaire: [{ fields: { libelle: 'Pacsé(e)' } }],
+  } }, 'synthetic-pacse');
+  assert.equal(patient.familySituation, 'Pacsé(e)');
+});

@@ -1,0 +1,46 @@
+# Préparation de la mise à jour App’Ergo 1.0.0+74
+
+Date : 8 octobre 2026. Source : branche `codex/appergo-next-update-20261008`.
+
+## Vérifications effectuées
+
+- La suite serveur passe sur données fictives : 408 tests. Elle couvre notamment le statut Airtable « En attente », la conservation des occupants et RFR, la suppression de « dépendance » du PDF, les détails APA/invalidité, la référence « Pacsé(e) » et les pages de continuation des notes.
+- La suite Flutter passe : 1 184 tests. L'analyse Flutter ne signale aucune erreur. Les tests couvrent entre autres le masquage réversible des dossiers Airtable, les enregistrements des occupants, le zoom des documents et la mise en page étroite.
+- La chaîne locale `aid_habitat_app/tool/build_web.sh` a produit un bundle `1.0.0+74` avec l'API `https://api.aidhabitat.fr`. `tools/check-web-release.mjs` a validé ses 17 contrôles. Ce bundle est local et n'a pas été publié.
+- Les PDF de test ont été générés à partir de données fictives ; l'identité des occupants, leurs détails santé et les suites de notes y sont présents. La note écrite du panneau Bénéficiaire en est absente.
+
+Ces vérifications ne remplacent pas une recette sur iPad physique ni une synchronisation entre deux appareils réels.
+
+## Référentiel NocoDB à compléter avant diffusion
+
+Lecture seule du 8 octobre : la table `situation_proprietaire` contient « Célibataire », « En concubinage », « Marié(e) », « Veuf(ve) » et « Divorcé(e) ». Elle ne contient pas « Pacsé(e) ». Le code sait utiliser ce libellé, mais ne peut pas le conserver côté serveur tant que la référence manque. L'ajout est une modification de données de production ; aucune écriture n'a été effectuée.
+
+Opération à préparer séparément : sauvegarder et vérifier la table, ajouter une seule ligne `libelle = Pacsé(e)`, relire la table et vérifier sur un dossier fictif que la sélection résiste à une synchronisation complète et à un rechargement sur un second appareil. Ne pas choisir « Marié(e) » comme substitut.
+
+L'ancienne colonne de dépendance reste présente dans NocoDB pour préserver les données historiques et les anciens clients. Sa suppression physique doit attendre l'inventaire des versions iPad, la sauvegarde vérifiée, l'épuisement des files de synchronisation et une migration distincte. Elle est déjà masquée dans le relevé et le PDF.
+
+## Préparation iPad
+
+Le contrôle `release_preflight.sh --ios-only` a échoué sur deux points : 4,7 Gio libres pour un minimum requis de 20 Gio, et aucun certificat Apple Distribution accessible dans le trousseau. Flutter 3.38.4, Xcode 26.6, le SDK iOS 26.5, la cible iPad et les fichiers de confidentialité sont valides. Aucune archive iOS ni aucun envoi TestFlight n'a été lancé.
+
+Le numéro candidat est `1.0.0+74`. Avant un build, confirmer dans App Store Connect qu'il est libre et que les iPad cibles peuvent installer la version iOS minimale configurée. Conserver les symboles d'obfuscation du build natif avec l'archive.
+
+## Recette à faire avant diffusion
+
+Utiliser uniquement des dossiers et documents fictifs :
+
+1. Créer, modifier puis supprimer un occupant ; vérifier RFR, année et catégorie de revenu après fermeture et réouverture.
+2. Sélectionner « Pacsé(e) » après ajout de la référence NocoDB, synchroniser, recharger sur web et iPad, puis vérifier le PDF.
+3. Mettre un dossier Airtable en attente, actualiser web et iPad, vérifier son masquage sans suppression de données ; enlever l'attente et vérifier sa réapparition. Répéter après suppression d'un dossier Airtable fictif.
+4. Sur iPad hors ligne, remplir un relevé fictif, utiliser « Valider » puis « Prévisualiser », corriger les champs signalés, revenir en ligne et vérifier que « Générer » produit le PDF attendu.
+5. Sur un PDF ou une image de plusieurs pages, zoomer, changer de page et revenir, puis double-taper pour recentrer. Vérifier l'absence de scintillement visible.
+6. Comparer les notes longues, les occupants et les cases d'occupation du PDF généré avec le relevé. Vérifier que la note Bénéficiaire reste hors du rapport.
+
+## Ordre de livraison proposé
+
+1. Recevoir le post-it et la feuille blanche, puis intégrer et vérifier leurs demandes sur les rapports.
+2. Compléter la référence « Pacsé(e) » et effectuer la recette fictive sans modifier de dossier réel.
+3. Résoudre les deux blocages du contrôle iPad et terminer la recette sur appareil physique.
+4. Diffuser l'API compatible avec les anciens clients, puis la webapp, puis le build iPad après vérification des versions et des sauvegardes.
+
+Aucune publication web/API, migration, modification de dossier réel ou opération TestFlight n'a été effectuée dans cette préparation.
