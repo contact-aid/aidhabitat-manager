@@ -15,9 +15,9 @@ Ces vérifications ne remplacent pas une recette sur iPad physique ni une synchr
 
 ## Référentiel NocoDB à compléter avant diffusion
 
-Lecture seule du 8 octobre : la table `situation_proprietaire` contient « Célibataire », « En concubinage », « Marié(e) », « Veuf(ve) » et « Divorcé(e) ». Elle ne contient pas « Pacsé(e) ». Le code sait utiliser ce libellé, mais ne peut pas le conserver côté serveur tant que la référence manque. L'ajout est une modification de données de production ; aucune écriture n'a été effectuée.
+Après autorisation explicite de l'utilisateur le 8 octobre, la table `situation_proprietaire` a été relue puis sauvegardée localement avant l'ajout. Elle contenait cinq valeurs et aucune correspondance « Pacsé(e) ». Une seule ligne `libelle = Pacsé(e)` a été créée, identifiant NocoDB `6`. La relecture donne six valeurs et exactement une correspondance. Le mapper serveur résout le libellé vers l'identifiant `6`. Aucun dossier bénéficiaire n'a été modifié. La sauvegarde préalable des cinq lignes et de leurs champs d'identification est conservée dans `/tmp/appergo-situations-before-pacse-20261008.json` (permissions `0600`).
 
-Opération à préparer séparément : sauvegarder et vérifier la table, ajouter une seule ligne `libelle = Pacsé(e)`, relire la table et vérifier sur un dossier fictif que la sélection résiste à une synchronisation complète et à un rechargement sur un second appareil. Ne pas choisir « Marié(e) » comme substitut.
+La validation sur un dossier fictif après synchronisation complète et rechargement sur un second appareil reste à effectuer avant diffusion. Ne pas choisir « Marié(e) » comme substitut.
 
 L'ancienne colonne de dépendance reste présente dans NocoDB pour préserver les données historiques et les anciens clients. Sa suppression physique doit attendre l'inventaire des versions iPad, la sauvegarde vérifiée, l'épuisement des files de synchronisation et une migration distincte. Elle est déjà masquée dans le relevé et le PDF.
 
@@ -41,7 +41,7 @@ Utiliser uniquement des dossiers et documents fictifs :
 ## Ordre de livraison proposé
 
 1. Recevoir le post-it et la feuille blanche, puis intégrer et vérifier leurs demandes sur les rapports.
-2. Compléter la référence « Pacsé(e) » et effectuer la recette fictive sans modifier de dossier réel.
+2. Effectuer la recette fictive de la référence « Pacsé(e) » sans modifier de dossier réel.
 3. Résoudre les deux blocages du contrôle iPad et terminer la recette sur appareil physique.
 4. Diffuser l'API compatible avec les anciens clients, puis la webapp, puis le build iPad après vérification des versions et des sauvegardes.
 
