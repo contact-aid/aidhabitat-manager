@@ -13,7 +13,7 @@ Lecture seule des services actifs le même jour : la webapp annonce `1.0.0+73` ;
 
 Ces vérifications ne remplacent pas une recette sur iPad physique ni une synchronisation entre deux appareils réels.
 
-## Référentiel NocoDB à compléter avant diffusion
+## Référentiel NocoDB
 
 Après autorisation explicite de l'utilisateur le 8 octobre, la table `situation_proprietaire` a été relue puis sauvegardée localement avant l'ajout. Elle contenait cinq valeurs et aucune correspondance « Pacsé(e) ». Une seule ligne `libelle = Pacsé(e)` a été créée, identifiant NocoDB `6`. La relecture donne six valeurs et exactement une correspondance. Le mapper serveur résout le libellé vers l'identifiant `6`. Aucun dossier bénéficiaire n'a été modifié. La sauvegarde préalable des cinq lignes et de leurs champs d'identification est conservée dans `/tmp/appergo-situations-before-pacse-20261008.json` (permissions `0600`).
 
@@ -32,7 +32,7 @@ Le numéro candidat est `1.0.0+74`. Avant un build, confirmer dans App Store Con
 Utiliser uniquement des dossiers et documents fictifs :
 
 1. Créer, modifier puis supprimer un occupant ; vérifier RFR, année et catégorie de revenu après fermeture et réouverture.
-2. Sélectionner « Pacsé(e) » après ajout de la référence NocoDB, synchroniser, recharger sur web et iPad, puis vérifier le PDF.
+2. Sélectionner « Pacsé(e) », synchroniser, recharger sur web et iPad, puis vérifier le PDF.
 3. Mettre un dossier Airtable en attente, actualiser web et iPad, vérifier son masquage sans suppression de données ; enlever l'attente et vérifier sa réapparition. Répéter après suppression d'un dossier Airtable fictif.
 4. Sur iPad hors ligne, remplir un relevé fictif, utiliser « Valider » puis « Prévisualiser », corriger les champs signalés, revenir en ligne et vérifier que « Générer » produit le PDF attendu.
 5. Sur un PDF ou une image de plusieurs pages, zoomer, changer de page et revenir, puis double-taper pour recentrer. Vérifier l'absence de scintillement visible.
@@ -40,9 +40,9 @@ Utiliser uniquement des dossiers et documents fictifs :
 
 ## Ordre de livraison proposé
 
-1. Recevoir le post-it et la feuille blanche, puis intégrer et vérifier leurs demandes sur les rapports.
-2. Effectuer la recette fictive de la référence « Pacsé(e) » sans modifier de dossier réel.
-3. Résoudre les deux blocages du contrôle iPad et terminer la recette sur appareil physique.
-4. Diffuser l'API compatible avec les anciens clients, puis la webapp, puis le build iPad après vérification des versions et des sauvegardes.
+1. Effectuer la recette fictive, notamment du changement manuel d'état et de la référence « Pacsé(e) », sans modifier de dossier réel.
+2. Résoudre les deux blocages du contrôle iPad et terminer la recette sur appareil physique.
+3. Diffuser l'API compatible avec les anciens clients, puis la webapp, puis le build iPad après vérification des versions et des sauvegardes.
+4. Après diffusion, l'utilisateur remettra lui-même à leur bonne place, ajoutera ou supprimera les dossiers notés sur son post-it et sa feuille blanche, en utilisant notamment le changement manuel d'état. Ces documents ne sont pas une entrée attendue pour le développement de la version `+74`.
 
 Aucune publication web/API, migration, modification de dossier réel ou opération TestFlight n'a été effectuée dans cette préparation.
