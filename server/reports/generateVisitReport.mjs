@@ -1,3 +1,4 @@
+import { drawReportFrame, drawPaginatedReportText, drawBeneficiaryOccupants } from './adaptiveReportLayout.mjs';
 import { formatMobilityAidsForReport, printableMobilityAidsForReport, applyMobilityAidsToReport } from './mobilityAids.mjs';
 // Génère un rapport de visite PDF depuis le template
 // `server/templates/visitReport.template.pdf` avec les données du
@@ -840,6 +841,7 @@ function buildViewModel({
   caisseComplementaireResolved = null,
   epciResolved = null,
   ergoProfile = null,
+  pigPloermelResolved = null,
 }) {
   const patient = dossier?.patient || {};
   const ergoView = buildErgoView(ergoProfile, dossier);
@@ -1238,7 +1240,7 @@ function buildViewModel({
       //   • MPR ergo     → 800 €
       //   • 'diagnostic' → '/' (pas d'AMO sur un dossier diagnostic seul)
       //   • autre/vide   → '/' (sécurité — on n'invente pas un montant)
-      amoLabel: amoLabelForNature(dossier?.natureAccompagnement),
+      amoLabel: (pigPloermelResolved ?? dossier?.pigPloermel) === true ? '0 €' : amoLabelForNature(dossier?.natureAccompagnement),
     },
     contexte: (() => {
       // Source UNIQUE : les NOTES écrites par l'ergo dans
@@ -2505,16 +2507,19 @@ async function drawVisitPhotosWithFlow({
     const titleSpace = row.showTitle && row.isFirstOfCategory ? TITLE_HEIGHT : 0;
 
     // Pagination : la rangée + son titre tiennent-ils dans la zone ?
+    let categoryInFrame = false;
     if (cursorY - titleSpace - rowH < bottomLimit) {
       const insertAt = page8Index + 1 + bonusPagesInserted;
       currentPage = pdfDoc.insertPage(insertAt, [pageWidth, pageHeight]);
-      cursorY = pageHeight - bonusMarginTop;
+      drawReportFrame(currentPage, row.label === 'Sanitaires' ? 'Sanitaires' : 'Photos du logement', helveticaTitle, { bottom: 42.4, top: 793 });
+      categoryInFrame = row.label === 'Sanitaires';
+      cursorY = Math.min(pageHeight - bonusMarginTop, 768);
       bottomLimit = bonusMarginBottom;
       bonusPagesInserted += 1;
     }
 
     // Titre custom au-dessus de la 1ère rangée de la catégorie.
-    if (TITLE_ENABLED && row.showTitle && row.isFirstOfCategory) {
+    if (TITLE_ENABLED && row.showTitle && row.isFirstOfCategory && !categoryInFrame) {
       currentPage.drawText(row.label, {
         x: flowXStart,
         y: cursorY - TITLE_FONT_SIZE - 2,
@@ -3030,18 +3035,7 @@ async function drawFlat2026Sanitaires({ pdfDoc, view }) {
     });
   }
 
-  const page8 = pages[7];
-  if (page8) {
-    drawWrappedText(page8, view?.observations?.resumePreconisations || '', {
-      x: 42,
-      yTop: 780,
-      width: 510,
-      font: regular,
-      fontSize: 11,
-      lineHeight: 13.5,
-      maxLines: 52,
-    });
-  }
+
 }
 
 async function drawFlat2026Logement({ pdfDoc, view }) {
@@ -3067,18 +3061,7 @@ async function drawFlat2026Logement({ pdfDoc, view }) {
     font: regular,
     color: rgb(0xED / 255, 0x98 / 255, 0x44 / 255),
   });
-  const accessObservation = String(view?.housing?.accessObservation || '').trim();
-  if (accessObservation) {
-    drawWrappedText(page, accessObservation, {
-      x: 46,
-      yTop: 432,
-      width: 506,
-      font: regular,
-      fontSize: 11,
-      lineHeight: 13.5,
-      maxLines: 18,
-    });
-  }
+
 }
 
 async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
@@ -3186,10 +3169,10 @@ async function drawGeneratedPageNumbers(pdfDoc) {
     // On les masque puis on redessine le numéro réel après les
     // insertions/suppressions de pages.
     page.drawRectangle({
-      x: width - 45,
-      y: 9,
-      width: 30,
-      height: 21,
+      x: width - 65,
+      y: 7,
+      width: 55,
+      height: 25,
       color: rgb(1, 1, 1),
     });
     page.drawText(label, {
@@ -3471,6 +3454,7 @@ export async function generateVisitReport({
   caisseComplementaireResolved = null,
   epciResolved = null,
   ergoProfile = null,
+  pigPloermelResolved = null,
   fetchImageBytes,
   flatten = true,
 }) {
@@ -3486,6 +3470,7 @@ export async function generateVisitReport({
     caisseComplementaireResolved,
     epciResolved,
     ergoProfile,
+    pigPloermelResolved,
   });
 
   // pdf-lib ne supporte pas un updateFieldAppearances "léger" sur un
@@ -3502,6 +3487,14 @@ export async function generateVisitReport({
   const flat2026ExtraStaticRecoPageRef = isFlat2026Template
     ? pdfDoc.getPage(FLAT_2026_EXTRA_STATIC_RECO_PAGE_INDEX).ref
     : null;
+
+  const adaptivePageRefs = isFlat2026Template ? {
+    beneficiary: pdfDoc.getPage(2).ref,
+    habits: pdfDoc.getPage(3).ref,
+    accessibility: pdfDoc.getPage(4).ref,
+    summary: pdfDoc.getPage(7).ref,
+  } : null;
+  const emptyPlanPageRefs = [];
 
   // Index par nom pour éviter le for-each * field-by-name.
   const fieldsByName = new Map();
@@ -3527,6 +3520,7 @@ export async function generateVisitReport({
   };
 
   for (const [fieldName, entry] of Object.entries(mapping)) {
+    if (isFlat2026Template && fieldName === 'Habitudes') continue;
     if (fieldName.startsWith('$')) continue; // commentaires/meta dans le JSON
     if (isFlat2026Template && FLAT_2026_CUSTOM_FIELDS.has(fieldName)) {
       continue;
@@ -3557,6 +3551,7 @@ export async function generateVisitReport({
   // Le dropdown du template n'accepte que les 3 options figées
   // ('Oui'/'Non'/'En cours') — on ne peut pas y mettre "Oui (GIR 4)".
   // On dessine donc le GIR en texte libre juste à droite de la pill.
+  if (isFlat2026Template) fieldsByName.get('Habitudes')?.setText('');
   await applyApaGirOverlay({ pdfDoc, fieldsByName, view });
 
   // Descend de quelques points le rectangle des champs « aide à
@@ -3765,6 +3760,10 @@ export async function generateVisitReport({
     const allPhotos = [];
     for (const photos of sections.values()) allPhotos.push(...photos);
 
+    if (allPhotos.length === 0) {
+      const emptySlot = getFieldFirstWidgetInfo(pdfDoc, form, PLAN_SLOTS.avant[0]);
+      if (emptySlot) emptyPlanPageRefs.push(emptySlot.page.ref);
+    }
     const slotFields = PLAN_SLOTS.avant; // ['plan avt_af_image', 'plan avt1_af_image']
     // Remplit la page 9 (slots du template) avec les 2 premières —
     // parallélisé 2026-05-07 (cf. page 8). Les overflow pages bonus
@@ -3825,6 +3824,10 @@ export async function generateVisitReport({
     const sectionEntries = [...sections.entries()]; // [[idx, photos], …]
     const showProjectLabels = sectionEntries.length > 1;
     const slotFields = PLAN_SLOTS.apres;
+    if (!sectionEntries.some(([, photos]) => photos.length > 0)) {
+      const emptySlot = getFieldFirstWidgetInfo(pdfDoc, form, slotFields[0]);
+      if (emptySlot) emptyPlanPageRefs.push(emptySlot.page.ref);
+    }
 
     if (sectionEntries.length > 0) {
       // Section [0] = section base → page 10 du template
@@ -4260,7 +4263,8 @@ export async function generateVisitReport({
   // l'ordre décroissant, on s'assure de viser à chaque fois la même
   // page logique qu'au moment de la capture.
   // ---------------------------------------------------------------
-  const allRemovals = [...emptyPageIndices];
+  const allRemovals = [...emptyPageIndices, ...emptyPlanPageRefs.map(ref => findCurrentPageIndexByRef(pdfDoc, ref)).filter(index => index >= 0)];
+  stats.emptyPlanPagesRemoved = emptyPlanPageRefs.length;
   if (isFlat2026Template && flat2026ExtraStaticRecoPageRef) {
     // Le template 2026 contient une page préconisation statique
     // supplémentaire juste avant "Descriptif des aides prévisionnelles".
@@ -4297,6 +4301,12 @@ export async function generateVisitReport({
   // pdf-lib garde parfois un cache de pages après removePage(). On
   // sauvegarde/recharge avant numérotation pour repartir d'un page tree
   // canonique, sinon les anciennes pages 16/18/21 peuvent réapparaître.
+  const adaptiveIndices = adaptivePageRefs ? Object.fromEntries(
+    Object.entries(adaptivePageRefs).map(([key, ref]) => {
+      const index = findCurrentPageIndexByRef(pdfDoc, ref);
+      return [key, index];
+    }),
+  ) : null;
   const unnumberedBytes = await pdfDoc.save({
     useObjectStreams: true,
   });
@@ -4308,6 +4318,21 @@ export async function generateVisitReport({
     stats.morbihanWorksPageAdded = true;
   }
   stats.sanitaryAppendixPages = await appendSanitaryRoomsAppendix({ pdfDoc: numberedDoc, sanitaires });
+  if (adaptiveIndices) {
+    // Capture all page objects before inserting any continuation.
+    const pages = Object.fromEntries(Object.entries(adaptiveIndices).map(([key, index]) => [key, numberedDoc.getPage(index)]));
+    const details = await drawBeneficiaryOccupants(numberedDoc, pages.beneficiary, dossier.patient, view.patient, { primaryMobilityAppendix: stats.mobilityAppendixPages > 0 });
+    if (details) {
+      const index = numberedDoc.getPages().findIndex(p => p.ref === pages.beneficiary.ref);
+      const detailPage = numberedDoc.insertPage(index + 1, [pages.beneficiary.getWidth(), pages.beneficiary.getHeight()]);
+      const bold = await numberedDoc.embedFont(StandardFonts.HelveticaBold);
+      drawReportFrame(detailPage, 'Renseignements sur les occupants (suite)', bold);
+      await drawPaginatedReportText(numberedDoc, { page: detailPage, text: details, title: 'Renseignements sur les occupants', yTop: 775 });
+    }
+    stats.habitsFlow = await drawPaginatedReportText(numberedDoc, { page: pages.habits, text: sanitizeForPdfFont(view.contexte.habitudes), title: 'Habitudes de vie', yTop: 556, x: 40, width: 510 });
+    stats.accessibilityFlow = await drawPaginatedReportText(numberedDoc, { page: pages.accessibility, text: sanitizeForPdfFont(view.housing.accessObservation), title: 'Observations sur l’accessibilité', yTop: 432, x: 46, width: 506 });
+    stats.summaryFlow = await drawPaginatedReportText(numberedDoc, { page: pages.summary, text: sanitizeForPdfFont(view.observations.resumePreconisations), title: 'Résumé des préconisations', yTop: 780 });
+  }
   await drawGeneratedPageNumbers(numberedDoc);
 
   const bytes = await numberedDoc.save({
