@@ -8,6 +8,8 @@
   let generation = 0;
   const pending = new Map();
   let preparing = false;
+  let statusPending;
+  let warming;
   let phase = '';
   let lastError = '';
   const messages = {
@@ -75,7 +77,8 @@
       worker.postMessage({id, method, ...payload});
     });
   }
-  window.aidHabitatLocalAiStatus = async () => {
+  async function readStatus() {
+    const attempt = generation;
     if (!window.isSecureContext || !navigator.gpu || !navigator.serviceWorker) {
       return JSON.stringify({supported: false, installed: false});
     }
@@ -84,7 +87,16 @@
     const registration = await navigator.serviceWorker.getRegistration();
     result.installed = result.installed && localStorage.getItem('appergo-local-ai-qwen3-v1') === 'complete';
     result.offlineReady = !!registration?.active?.scriptURL.endsWith('/ai_offline_worker.js');
+    // Warm only an explicitly installed model, without note or network access.
+    // Clicks join this load so mounting several editors cannot load twice.
+    if (attempt === generation && result.installed && !result.ready && !preparing && !warming) {
+      warming = request('warmup').catch(() => {}).finally(() => { warming = undefined; });
+    }
     return JSON.stringify(result);
+  }
+  window.aidHabitatLocalAiStatus = () => {
+    if (!statusPending) statusPending = readStatus().finally(() => { statusPending = undefined; });
+    return statusPending;
   };
   window.aidHabitatLocalAiProgress = () => progress;
   window.aidHabitatLocalAiCancel = stop;
@@ -157,7 +169,13 @@
     }
   };
   window.aidHabitatLocalAiRewrite = async (text, mode) => {
-    try { return await request('rewrite', {text, mode}); }
+    const attempt = generation;
+    try {
+      if (warming) await warming;
+      if (attempt !== generation) throw new Error('Reformulation annulée.');
+      phase = 'Préparation de la reformulation…';
+      return await request('rewrite', {text, mode});
+    }
     catch (error) {
       if (error.code === 'model_unavailable') localStorage.removeItem('appergo-local-ai-qwen3-v1');
       throw error;

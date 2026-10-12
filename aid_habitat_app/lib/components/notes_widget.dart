@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' show PointerDeviceKind;
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -15,6 +15,7 @@ import '../services/pencil_interaction_service.dart';
 import '../services/sync_engine.dart';
 import '../services/save_debounce.dart';
 import 'brand_colors.dart';
+import 'ai_rewrite_preview_dialog.dart';
 import 'confirmation_dialog.dart';
 import 'notes_canvas_painters.dart';
 import 'soft_transitions.dart';
@@ -4122,8 +4123,6 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
     with WidgetsBindingObserver {
   bool _available = false;
   bool _loading = false;
-  String _rewritePhase = '';
-  Timer? _rewritePhaseTimer;
 
   @override
   void initState() {
@@ -4134,7 +4133,6 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
 
   @override
   void dispose() {
-    _rewritePhaseTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -4177,45 +4175,42 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
     setState(() => _loading = true);
 
     try {
-      if (await AiRewriteService.instance.needsPreparation()) {
-        if (!mounted) return;
-        final prepared = await showSoftDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => const _LocalAiSetupDialog(),
-        );
-        if (prepared != true || !mounted) return;
-      }
-      if (kIsWeb) {
-        _rewritePhase = 'Préparation de la reformulation…';
-        _rewritePhaseTimer = Timer.periodic(const Duration(milliseconds: 500), (
-          _,
-        ) {
-          if (mounted) {
-            setState(
-              () => _rewritePhase = AiRewriteService.instance.preparationPhase,
-            );
-          }
-        });
-      }
-      final rewrittenText = await AiRewriteService.instance.rewrite(
-        text: originalText,
-      );
-      if (!mounted) return;
-      if (widget.controller.text != originalText) {
-        _showMessage(
-          'La note a été modifiée pendant la reformulation. '
-          'La proposition a été ignorée.',
-        );
-        return;
-      }
-
       final acceptedText = await showSoftDialog<String>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => _AiRewritePreviewDialog(
+        builder: (dialogContext) => AiRewritePreviewDialog(
           originalText: originalText,
-          rewrittenText: rewrittenText,
+          phase: () => AiRewriteService.instance.preparationPhase,
+          onCancel: AiRewriteService.instance.cancelPreparation,
+          generate: (previewContext) async {
+            if (await AiRewriteService.instance.needsPreparation()) {
+              if (!previewContext.mounted) {
+                throw Exception('Reformulation annulée.');
+              }
+              final prepared = await showSoftDialog<bool>(
+                context: previewContext,
+                barrierDismissible: false,
+                builder: (_) => const _LocalAiSetupDialog(),
+              );
+              if (prepared != true) {
+                throw Exception(
+                  'Installation annulée. La note originale est conservée.',
+                );
+              }
+            }
+            if (!previewContext.mounted) {
+              throw Exception('Reformulation annulée.');
+            }
+            final result = await AiRewriteService.instance.rewrite(
+              text: originalText,
+            );
+            if (widget.controller.text != originalText) {
+              throw Exception(
+                'La note a été modifiée pendant la reformulation. La proposition a été ignorée.',
+              );
+            }
+            return result;
+          },
         ),
       );
       if (!mounted || acceptedText == null) return;
@@ -4234,8 +4229,6 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
     } catch (error) {
       if (mounted) _showMessage(_errorMessage(error));
     } finally {
-      _rewritePhaseTimer?.cancel();
-      _rewritePhaseTimer = null;
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -4245,13 +4238,9 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
     if (!_available) return const SizedBox.shrink();
 
     return Tooltip(
-      message: _loading && kIsWeb
-          ? '${_rewritePhase.isEmpty ? 'Reformulation en cours' : _rewritePhase} Cliquez pour annuler.'
-          : 'Reformuler avec l’IA',
+      message: 'Reformuler avec l’IA',
       child: IconButton(
-        onPressed: _loading
-            ? (kIsWeb ? AiRewriteService.instance.cancelPreparation : null)
-            : _rewrite,
+        onPressed: _loading ? null : _rewrite,
         icon: _loading
             ? const SizedBox.square(
                 dimension: 15,
@@ -4365,228 +4354,6 @@ class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
       ),
     ],
   );
-}
-
-class _AiRewritePreviewDialog extends StatefulWidget {
-  const _AiRewritePreviewDialog({
-    required this.originalText,
-    required this.rewrittenText,
-  });
-
-  final String originalText;
-  final String rewrittenText;
-
-  @override
-  State<_AiRewritePreviewDialog> createState() =>
-      _AiRewritePreviewDialogState();
-}
-
-class _AiRewritePreviewDialogState extends State<_AiRewritePreviewDialog> {
-  late final TextEditingController _proposalController;
-
-  @override
-  void initState() {
-    super.initState();
-    _proposalController = TextEditingController(text: widget.rewrittenText);
-  }
-
-  @override
-  void dispose() {
-    _proposalController.dispose();
-    super.dispose();
-  }
-
-  Widget _buildTextPanel({
-    required String label,
-    required String text,
-    required bool highlighted,
-    TextEditingController? controller,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Icon(
-              highlighted ? LucideIcons.sparkles : LucideIcons.fileText,
-              size: 16,
-              color: highlighted ? _kActiveText : const Color(0xFF5C6670),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF374151),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: highlighted
-                  ? const Color(0xFFFAF7FC)
-                  : const Color(0xFFF8F9FA),
-              border: Border.all(
-                color: highlighted
-                    ? const Color(0xFFD9CCE2)
-                    : const Color(0xFFE4E7EB),
-              ),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: controller == null
-                ? SingleChildScrollView(
-                    child: SelectableText(
-                      text,
-                      style: const TextStyle(
-                        height: 1.45,
-                        fontSize: 14,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                  )
-                : TextField(
-                    controller: controller,
-                    expands: true,
-                    minLines: null,
-                    maxLines: null,
-                    textAlignVertical: TextAlignVertical.top,
-                    keyboardType: TextInputType.multiline,
-                    decoration: const InputDecoration.collapsed(
-                      hintText: 'Modifier la proposition…',
-                    ),
-                    style: const TextStyle(
-                      height: 1.45,
-                      fontSize: 14,
-                      color: Color(0xFF111827),
-                    ),
-                  ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final screen = MediaQuery.sizeOf(context);
-    final keyboardHeight = MediaQuery.viewInsetsOf(context).bottom;
-    final dialogWidth = math.min(860.0, screen.width - 32);
-    final availableHeight = screen.height - keyboardHeight - 48;
-    final dialogHeight = math.min(620.0, math.max(280.0, availableHeight));
-
-    return Dialog(
-      backgroundColor: Colors.white,
-      insetPadding: const EdgeInsets.all(16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: SizedBox(
-        width: dialogWidth,
-        height: dialogHeight,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    LucideIcons.sparkles,
-                    size: 20,
-                    color: _kActiveText,
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Vérifier la reformulation',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Fermer',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(LucideIcons.x, size: 19),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Relisez et ajustez la proposition avant de remplacer votre note.',
-                style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
-              ),
-              const SizedBox(height: 18),
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final original = _buildTextPanel(
-                      label: 'Note originale',
-                      text: widget.originalText,
-                      highlighted: false,
-                    );
-                    final rewritten = _buildTextPanel(
-                      label: 'Proposition modifiable',
-                      text: widget.rewrittenText,
-                      highlighted: true,
-                      controller: _proposalController,
-                    );
-                    if (constraints.maxWidth < 620) {
-                      return Column(
-                        children: [
-                          Expanded(child: original),
-                          const SizedBox(height: 16),
-                          Expanded(child: rewritten),
-                        ],
-                      );
-                    }
-                    return Row(
-                      children: [
-                        Expanded(child: original),
-                        const SizedBox(width: 18),
-                        Expanded(child: rewritten),
-                      ],
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 18),
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: 10,
-                runSpacing: 8,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Conserver l’original'),
-                  ),
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: _proposalController,
-                    builder: (context, value, _) => FilledButton.icon(
-                      onPressed: value.text.trim().isEmpty
-                          ? null
-                          : () => Navigator.of(context).pop(value.text.trim()),
-                      icon: const Icon(LucideIcons.check, size: 17),
-                      label: const Text('Utiliser la proposition'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _kActiveText,
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _FloatingTextModal extends StatefulWidget {
