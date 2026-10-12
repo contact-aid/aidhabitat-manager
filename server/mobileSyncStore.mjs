@@ -1,3 +1,4 @@
+import { selectLegacyNoteAlias } from './noteLegacyAlias.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import process from 'node:process';
@@ -930,7 +931,9 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
   },
 });
 
-const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId, notePagesTableId, preferLocal = false }) => {
+export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId, notePagesTableId, preferLocal = false,
+  io = { queryAll, createRecord, updateRecord, deleteRecord, callNocoTool, requestConditionalNocodbRest } }) => {
+  const { queryAll, createRecord, updateRecord, deleteRecord, callNocoTool, requestConditionalNocodbRest } = io;
   let notePageFieldNamesPromise = null;
 
   const getNotePageFieldNames = async () => {
@@ -1691,6 +1694,18 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       }));
     }
 
+    // Older clients hydrate dossier scope although the note lives under patient scope.
+    // Route only an exact, unique legacy identity; never create a missing update.
+    if (!existing && expectedRevision !== null && scopeId === dossierId && scopeId !== patientId
+      && !['Bénéficiaire-Notes', 'notes_rapides'].includes(tabKey)) {
+      const candidates = await queryAll(notePagesTableId, {
+        fields: notePageFields,
+        where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})~and(scope_type,eq,${JSON.stringify(String(scopeType || 'legacy'))})~and(scope_id,eq,${JSON.stringify(String(patientId))})~and(tab_key,eq,${JSON.stringify(String(tabKey))})~and(sub_tab_key,eq,${JSON.stringify(String(subTabKey || ''))})~and(page_number,eq,${Number(pageNumber)})`,
+      });
+      existing = selectLegacyNoteAlias(candidates, { patientId, dossierId, scopeType, tabKey, subTabKey, pageNumber });
+      if (existing) scopeId = patientId;
+    }
+
     const now = new Date().toISOString();
     const beneficiary = normalizeBeneficiaryMetadata({ patientFirstName, patientLastName, patientDisplayName, dossierLabel, dossierId });
     const resolvedPreviewUrl = absoluteUrl(`/public/note-pages/${encodeURIComponent(stringValue(notePageId) || stringValue(field(existing, 'uuid_source')) || crypto.randomUUID())}/preview`);
@@ -1730,14 +1745,14 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
           throw new NotePageMutationError(409, 'NOTE_PAGE_WRITE_ID_REUSED', existing);
         }
       } else {
-        if (!preferLocal && observedRevision !== expectedRevision) {
+        if (observedRevision !== expectedRevision) {
           throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT', existing);
         }
         if (preferLocal && !uuidPattern.test(observedRevision)) {
           throw new NotePageMutationError(503, 'NOTE_PAGE_REVISION_NOT_PREPARED', existing);
         }
         const params = new URLSearchParams({
-          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${preferLocal ? observedRevision : expectedRevision})`,
+          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${expectedRevision})`,
         });
         await requestConditionalNocodbRest({
           method: 'PATCH',
