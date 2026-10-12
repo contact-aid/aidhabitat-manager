@@ -8,8 +8,8 @@
     busy = true; install.disabled = true; cancel.hidden = false; progress.hidden = false; progress.removeAttribute('value');
     status.textContent = 'Démarrage du téléchargement…'; result.textContent = '';
     timer = setInterval(() => {
-      status.textContent = aidHabitatLocalAiPhase() || 'Préparation du modèle…';
-      const value = aidHabitatLocalAiProgress();
+      status.textContent = window.aidHabitatLocalAiPhase?.() || 'Préparation du modèle…';
+      const value = window.aidHabitatLocalAiProgress?.() || 0;
       if (value > 0 && value < 1) progress.value = value; else progress.removeAttribute('value');
     }, 500);
     try {
@@ -18,7 +18,7 @@
       status.textContent = 'Installation terminée. Vous pouvez revenir à votre rapport.';
     } catch (_) {
       finish(); progress.hidden = true; status.textContent = 'Installation interrompue';
-      result.textContent = aidHabitatLocalAiLastError() || 'Réessayez. Les notes de votre dossier sont conservées.';
+      result.textContent = window.aidHabitatLocalAiLastError?.() || 'Le moteur d’installation ne répond pas. Rouvrez cette page dans un nouvel onglet. Les notes de votre dossier sont conservées. [INSTALLER_UNAVAILABLE]';
     }
   });
   cancel.addEventListener('click', () => aidHabitatLocalAiCancel());

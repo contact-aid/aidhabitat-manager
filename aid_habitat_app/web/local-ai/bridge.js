@@ -14,6 +14,10 @@
     unsupported: 'L’IA locale nécessite WebGPU. Vérifiez que l’accélération graphique est activée dans Chrome.',
     download: 'Le téléchargement ne répond pas. Vérifiez la connexion puis réessayez. Les notes sont conservées.',
     offline: 'Le modèle est prêt, mais la préparation hors ligne a échoué. Réessayez sans effacer les données du navigateur.',
+    model_network: 'Chrome n’a pas pu récupérer un fichier du modèle. Vérifiez la connexion et l’accès à Hugging Face, puis réessayez. [MODEL_NETWORK]',
+    model_storage: 'Chrome n’a pas pu enregistrer le modèle dans son stockage local. Vérifiez l’espace libre et les autorisations de stockage du site. [MODEL_STORAGE]',
+    model_gpu: 'Le moteur graphique du Mac n’a pas pu charger le modèle. Vérifiez la version de Chrome et l’accélération graphique. [MODEL_GPU]',
+    model_runtime: 'Le moteur local n’a pas pu charger le modèle. Le téléchargement peut être partiel. Réessayez sans effacer les données du navigateur. [MODEL_RUNTIME]',
   };
   function deadline(promise, ms, code) {
     let timer;
@@ -41,7 +45,7 @@
   function request(method, payload = {}) {
     clearTimeout(idle);
     if (!worker) {
-      worker = new Worker(new URL('local-ai/worker.js', document.baseURI));
+      worker = new Worker(new URL('local-ai/worker.js?v=76', document.baseURI));
       worker.onmessage = ({data}) => {
         if (data.progress !== undefined) { progress = data.progress; return; }
         const item = pending.get(data.id);
@@ -51,6 +55,7 @@
         if (data.error) {
           const error = new Error(data.error);
           error.code = data.code;
+          if (messages[data.code]) error.setupCode = data.code;
           item.reject(error);
         }
         else item.resolve(data.result);
@@ -110,7 +115,7 @@
     await deadline(registration.update(), 30000, 'offline');
     const installing = registration.installing || registration.waiting;
     if (installing && installing.state !== 'activated') {
-      await new Promise((resolve, reject) => {
+      await deadline(new Promise((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Preparation hors ligne incomplete.')), 180000);
         const checkState = () => {
           if (installing.state === 'activated') { clearTimeout(timeout); resolve(); }
@@ -118,7 +123,7 @@
         };
         installing.addEventListener('statechange', checkState);
         checkState();
-      });
+      }), 180000, 'offline');
     }
     checkCancelled();
     localStorage.setItem('appergo-local-ai-qwen3-v1', 'complete');

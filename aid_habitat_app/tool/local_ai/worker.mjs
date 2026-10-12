@@ -4,12 +4,17 @@ import { MODEL_ID, MODEL_BYTES, appConfig, canDownload, instructions, cleanOutpu
 const config = appConfig(self.location.href);
 const originalFetch = self.fetch.bind(self);
 let allowDownloads = false;
+let downloadFailure;
 // No network transport is available to the model while handling a note.
 self.fetch = (input, options) => {
   if (!allowDownloads || !canDownload(input, options, self.location.href)) {
     throw new Error('Model resource missing from local cache');
   }
-  return originalFetch(input, {...options, credentials: 'omit', referrerPolicy: 'no-referrer'});
+  return originalFetch(input, {...options, credentials: 'omit', referrerPolicy: 'no-referrer'})
+    .then(response => {
+      if (!response.ok) downloadFailure = 'model_network';
+      return response;
+    }, error => { downloadFailure = 'model_network'; throw error; });
 };
 let engine;
 let loaded = false;
@@ -26,6 +31,7 @@ async function status() {
 async function load(downloads, id) {
   if (loaded) return;
   allowDownloads = downloads;
+  downloadFailure = undefined;
   engine = new MLCEngine({ appConfig: config, logLevel: 'SILENT',
     initProgressCallback: ({progress}) => self.postMessage({id, progress}) });
   try { await engine.reload(MODEL_ID); loaded = true; }
@@ -63,9 +69,18 @@ self.onmessage = async ({data}) => {
         self.postMessage({id, result: output});
       } finally { await engine.resetChat(); }
     } else throw new Error('unknown');
-  } catch (_) {
+  } catch (error) {
     // Never forward model/runtime errors which could contain patient text.
-    self.postMessage({id, code: phase === 'load' ? 'model_unavailable' : 'generation_failed', error: method === 'prepare'
+    // During preparation no report text enters the worker. Only a fixed
+    // category leaves it, never an exception, URL, device name or stack.
+    let code = phase === 'load' ? 'model_unavailable' : 'generation_failed';
+    if (method === 'prepare') {
+      const detail = String(error?.message || '');
+      code = downloadFailure || (error?.name === 'QuotaExceededError' || /indexeddb|quota|storage/i.test(detail)
+        ? 'model_storage' : /webgpu|gpu|shader|device.{0,20}lost|out of memory|allocate.*buffer/i.test(detail)
+        ? 'model_gpu' : 'model_runtime');
+    }
+    self.postMessage({id, code, error: method === 'prepare'
       ? 'Installation locale impossible. Verifiez connexion, stockage et compatibilite WebGPU.'
       : 'Reformulation locale indisponible ou note trop longue. Le texte original est conserve.'});
   } finally { busy = false; }

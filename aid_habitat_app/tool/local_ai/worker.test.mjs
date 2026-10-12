@@ -4,15 +4,15 @@ import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import * as config from './config.mjs';
 const source=(await readFile(new URL('worker.mjs',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
-function harness({cached=true,fail=false}={}) {
+function harness({cached=true,fail=false,prepareError,networkFails=false}={}) {
   const messages=[],requests=[];
   let resets=0;
   const self={location:{href:'https://app.example/local-ai/worker.js'},
     navigator:{gpu:{requestAdapter:async()=>({features:new Set(['shader-f16'])})}},
-    fetch:async(url)=>{requests.push(url);return new Response('{}');},
+    fetch:async(url)=>{requests.push(url);if(networkFails)throw Error('synthetic network failure');return new Response('{}');},
     postMessage:message=>messages.push(message)};
   class MLCEngine {
-    async reload(){if(!cached)await self.fetch(`${config.MODEL_URL}tokenizer.json`);}
+    async reload(){if(!cached)await self.fetch(`${config.MODEL_URL}tokenizer.json`);if(prepareError)throw prepareError;}
     async unload(){}
     async resetChat(){resets++;}
     chat={completions:{create:async(request)=>{
@@ -46,4 +46,13 @@ test('multiple mounted note editors can query availability concurrently',async()
   const h=harness();await Promise.all([h.send('status'),h.send('status')]);
   assert.equal(h.messages.length,2);
   assert.ok(h.messages.every(message=>message.result.supported));
+});
+test('preparation failures expose a fixed category without runtime details',async()=>{
+  for(const [error,code] of [[new Error('GPU device lost PRIVATE DETAIL'),'model_gpu'],[Object.assign(new Error('PRIVATE DETAIL'),{name:'QuotaExceededError'}),'model_storage'],[new Error('PRIVATE DETAIL'),'model_runtime']]){
+    const h=harness({prepareError:error});await h.send('prepare');
+    assert.equal(h.messages.at(-1).code,code);
+    assert.doesNotMatch(JSON.stringify(h.messages),/PRIVATE DETAIL/);
+  }
+  const h=harness({cached:false,networkFails:true});await h.send('prepare');
+  assert.equal(h.messages.at(-1).code,'model_network');
 });
