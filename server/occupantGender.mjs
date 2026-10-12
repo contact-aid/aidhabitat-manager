@@ -2,10 +2,13 @@ const hasGender = (occupant) => occupant && Object.hasOwn(occupant, 'gender')
   && ['', 'Homme', 'Femme'].includes(occupant.gender);
 const hasMaidenName = (occupant) => occupant && typeof occupant.maidenName === 'string'
   && occupant.maidenName.trim() !== '';
-const hasProtectedField = (occupant) => hasGender(occupant) || hasMaidenName(occupant);
+const detailFields = ['apaGir', 'apaDetails', 'invalidityDetails', 'fiscalReferenceYear'];
+const hasDetail = occupant => detailFields.some(key => typeof occupant?.[key] === 'string' && occupant[key].trim() !== '');
+const hasProtectedField = (occupant) => hasGender(occupant) || hasMaidenName(occupant) || hasDetail(occupant);
 const needsProtection = (incoming, previous) =>
   (hasGender(previous) && !Object.hasOwn(incoming, 'gender'))
-  || (hasMaidenName(previous) && !Object.hasOwn(incoming, 'maidenName'));
+  || (hasMaidenName(previous) && !Object.hasOwn(incoming, 'maidenName'))
+  || detailFields.some(key => previous?.[key] && !Object.hasOwn(incoming, key));
 const normalized = (value) => String(value ?? '').trim().toLocaleLowerCase('fr');
 const sameIdentity = (left, right) => left && right
   && Boolean(normalized(left.firstName) || normalized(left.lastName))
@@ -35,6 +38,7 @@ export function preserveLegacyOccupantGender(updates, storedOccupantsJson, { str
       && baseline.length === updates.occupants.length) previous = uniqueMatch(baseline[index]);
     if (previous) return {
       ...incoming,
+      ...Object.fromEntries(detailFields.filter(key => Object.hasOwn(previous, key) && !Object.hasOwn(incoming, key)).map(key => [key, previous[key]])),
       ...(hasGender(previous) && !Object.hasOwn(incoming, 'gender')
         ? { gender: previous.gender } : {}),
       ...(hasMaidenName(previous) && !Object.hasOwn(incoming, 'maidenName')

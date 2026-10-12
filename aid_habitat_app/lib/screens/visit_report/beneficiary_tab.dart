@@ -226,6 +226,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     'Divorcé(e)',
     'Veuf(ve)',
     'Concubinage',
+    'Pacsé',
   ];
 
   // Dependence presets — mirrors NocoDB view `vwje1ceip6mv9bt6`.
@@ -1579,7 +1580,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           next.add(option);
         }
       }
-      _updateOccupant(index, occ.copyWith(dependenceTxt: encodeMobilityAids(next)));
+      _updateOccupant(
+        index,
+        occ.copyWith(dependenceTxt: encodeMobilityAids(next)),
+      );
     }
 
     Widget option(String value) => FormToggleGroup(
@@ -1651,6 +1655,18 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             _updateOccupant(index, occ.copyWith(apaGir: v));
           },
         ),
+        if (occ.apa) ...[
+          const SizedBox(height: 6),
+          FormTextField(
+            label: 'Détails GIR',
+            value: occ.apaDetails,
+            maxLines: null,
+            minLines: 2,
+            onChanged: (v) =>
+                _updateOccupant(index, occ.copyWith(apaDetails: v)),
+          ),
+          const SizedBox(height: 10),
+        ],
         _buildCollapsibleOptionCheckbox(
           label: 'Reconnaissance Invalidité',
           checked: occ.invalidity,
@@ -1671,6 +1687,18 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             _updateOccupant(index, occ.copyWith(invalidityTxt: v));
           },
         ),
+        if (occ.invalidity) ...[
+          const SizedBox(height: 6),
+          FormTextField(
+            label: 'Détails invalidité',
+            value: occ.invalidityDetails,
+            maxLines: null,
+            minLines: 2,
+            onChanged: (v) =>
+                _updateOccupant(index, occ.copyWith(invalidityDetails: v)),
+          ),
+          const SizedBox(height: 10),
+        ],
         _RoundCheckRow(
           label: 'Aide à domicile',
           checked: occ.homeHelp,

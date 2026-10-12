@@ -755,4 +755,23 @@ void main() {
     expect(notifications, 0);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('health details save without replacing GIR, percentage or fiscal year', (tester) async {
+    final repository = _Repository();
+    await _mount(tester, repository, section: 2, dossier: _dossier(occupants: const [
+      Occupant(firstName: 'Alice', apa: true, apaGir: '4', invalidity: true,
+        invalidityTxt: 'Entre 50 et 79%', fiscalReferenceYear: '2025'),
+    ]));
+    for (final entry in {'Détails GIR': 'Évaluation APA', 'Détails invalidité': 'Décision MDPH'}.entries) {
+      tester.widget<FormTextField>(find.byWidgetPredicate((widget) => widget is FormTextField && widget.label == entry.key)).onChanged!(entry.value);
+      await tester.pump();
+    }
+    await _flush(tester);
+    final saved = (jsonDecode(repository.patientWrites.last['occupants_json']) as List).single;
+    expect(saved['apaGir'], '4');
+    expect(saved['apaDetails'], 'Évaluation APA');
+    expect(saved['invalidityTxt'], 'Entre 50 et 79%');
+    expect(saved['invalidityDetails'], 'Décision MDPH');
+    expect(saved['fiscalReferenceYear'], '2025');
+  });
+
 }

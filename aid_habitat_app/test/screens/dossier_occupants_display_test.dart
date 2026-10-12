@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:aid_habitat_app/components/year_picker_field.dart';
 import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/screens/dossier_screen.dart';
 import 'package:aid_habitat_app/services/dossier_repository.dart';
@@ -164,4 +166,31 @@ void main() {
       expect(repository.writes, isEmpty);
     }
   });
+  testWidgets('fiscal year saves on the beneficiary page and retains health details', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _Repository();
+    await tester.pumpWidget(MaterialApp(home: DossierScreen(
+      dossier: dossier(occupants: const [Occupant(firstName: 'Anne', apa: true, apaGir: '4', apaDetails: 'Évaluation')]),
+      repository: repository, onBack: () {},
+    )));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Modifier'));
+    await tester.pump();
+    final field = tester.widget<YearPickerField>(find.byType(YearPickerField));
+    expect(field.label, 'Année de référence');
+    field.onChanged('2025');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    final saved = (jsonDecode(repository.writes.last['occupants_json']) as List).first;
+    expect(saved['fiscalReferenceYear'], '2025');
+    expect(saved['apaGir'], '4');
+    expect(saved['apaDetails'], 'Évaluation');
+    tester.widget<YearPickerField>(find.byType(YearPickerField)).onChanged('');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect((jsonDecode(repository.writes.last['occupants_json']) as List).first['fiscalReferenceYear'], '');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
 }

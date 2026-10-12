@@ -97,3 +97,30 @@ test('PDF displays occupant-specific APA and MDPH instead of household values',a
  assert.match(page,/Reconnaissance d.invalidité MDPH : Occupant 1 Entre 50 et 79%, Occupant 3 80%/);
  assert(!page.includes('Occupant 2 GIR'));
 });
+
+test('health details follow each occupant GIR and disability percentage only when enabled', () => {
+  const p = {numberPeople: 3, occupants: [
+    {apa:true, apaGir:'4', apaDetails:'Évaluation du 12 octobre', invalidity:true, invalidityTxt:'80%', invalidityDetails:'Décision MDPH'},
+    {apa:true, apaGir:'6', apaDetails:'   ', invalidity:true, invalidityTxt:'50%', invalidityDetails:''},
+    {apa:false, apaDetails:'DÉTAIL_PÉRIMÉ_APA', invalidity:false, invalidityDetails:'DÉTAIL_PÉRIMÉ_MDPH'},
+  ]};
+  assert.deepEqual(reportOccupantStatuses(p), {
+    apa:'Occupant 1 GIR 4 : Évaluation du 12 octobre, Occupant 2 GIR 6',
+    mdph:'Occupant 1 80% : Décision MDPH, Occupant 2 50%',
+  });
+});
+
+test('PDF preserves long health details in continuation without displaying unchecked details', async () => {
+  const {bytes} = await generateVisitReport({dossier:{patient:{...patient, familySituation:'Pacsé', occupants:[
+    {...patient.occupants[0], apa:true, apaGir:'4', apaDetails:'Évaluation GIR détaillée. '.repeat(90)+'FIN_GIR_DETAIL', invalidity:true, invalidityTxt:'80%', invalidityDetails:'Décision MDPH détaillée. '.repeat(90)+'FIN_MDPH_DETAIL'},
+    {...patient.occupants[1], apa:false, apaDetails:'STALE_APA_DETAIL', invalidity:false, invalidityDetails:'STALE_MDPH_DETAIL'},
+  ]}},fetchImageBytes:async()=>null});
+  const text = await extract(bytes);
+  assert(text.includes('Pacsé'));
+  assert(text.includes('Occupant 1 GIR 4 : Évaluation GIR'));
+  assert(text.includes('Occupant 1 80% : Décision MDPH'));
+  assert(text.includes('FIN_GIR_DETAIL'));
+  assert(text.includes('FIN_MDPH_DETAIL'));
+  assert(!text.includes('STALE_APA_DETAIL'));
+  assert(!text.includes('STALE_MDPH_DETAIL'));
+});
