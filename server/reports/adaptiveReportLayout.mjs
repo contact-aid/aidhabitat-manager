@@ -87,6 +87,8 @@ export function reportOccupants(patient = {}) {
       firstName: patient.firstName, lastName: patient.lastName,
       birthDate: patient.birthDate ?? patient.birthDateMr,
       dependenceTxt: patient.dependenceTxt,
+      apa: patient.apa, apaGir: patient.apaGir ?? patient.gir,
+      invalidity: patient.invalidity, invalidityTxt: patient.invalidityTxt,
     } : index === 1 ? {
       firstName: patient.secondFirstName, lastName: patient.secondLastName,
       birthDate: patient.birthDateMme,
@@ -94,6 +96,20 @@ export function reportOccupants(patient = {}) {
     // An explicitly empty occupant field is authoritative.
     return { ...fallback, ...(stored[index] ?? {}) };
   });
+}
+
+// Only affirmative occupant statuses contribute; stale details after unchecking
+// a box must not reappear. The primary legacy fields remain a fallback.
+export function reportOccupantStatuses(patient = {}) {
+  const enabled = value => [true, 1, '1', 'true'].includes(value);
+  const apa = [], mdph = [];
+  for (const [index, occupant] of reportOccupants(patient).entries()) {
+    const label = `Occupant ${index + 1}`;
+    const gir = String(occupant.apaGir ?? occupant.gir ?? '').trim().replace(/^GIR\s*/i, '');
+    if (enabled(occupant.apa)) apa.push(`${label} ${gir && gir.toLowerCase() !== 'non' ? `GIR ${gir}` : 'Oui'}`);
+    if (enabled(occupant.invalidity)) mdph.push(`${label} ${String(occupant.invalidityTxt ?? '').trim() || 'Oui'}`);
+  }
+  return { apa: apa.join(', '), mdph: mdph.join(', ') };
 }
 
 export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { primaryMobilityAppendix = false } = {}) {
@@ -110,7 +126,7 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
     { x: 335, width: 91, label: 'Date de naissance' },
     { x: 431, width: 124, label: 'Dépendance' },
   ];
-  for (const col of columns) if (col.label) page.drawText(col.label, { x: col.x, y: 765, size: 9, font: bold });
+  for (const col of columns) if (col.label) page.drawText(col.label, { x: col.x + (col.width - bold.widthOfTextAtSize(col.label, 9)) / 2, y: 765, size: 9, font: bold });
   let y = 744;
   const details = [];
   for (const [index, occupant] of occupants.entries()) {
@@ -123,7 +139,7 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
     if (cells.some((cell, col) => cell.length > 2 && !(index === 0 && col === 4 && primaryMobilityAppendix))) details.push(values.join(' | '));
     for (const [i, lines] of cells.entries()) {
       for (const [line, value] of (lines.length > 2 ? [lines[0], index === 0 && i === 4 && primaryMobilityAppendix ? 'Voir annexe mobilité' : 'Voir suite'] : lines).entries()) if (value) page.drawText(value, {
-        x: columns[i].x, y: y - line * 11, size: 9, font: i === 0 ? bold : regular,
+        x: columns[i].x + (i === 0 ? 0 : (columns[i].width - regular.widthOfTextAtSize(value, 9)) / 2), y: y - line * 11, size: 9, font: i === 0 ? bold : regular,
       });
     }
     y -= rowLines * 11 + 8;
@@ -151,8 +167,18 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
   options([['Célibataire', 'Célibataire'], ['En concubinage', 'En concubinage'], ['Marié(e)', 'Mariée'], ['Veuf(ve)', 'Veufve'], ['Divorcé(e)', 'Divorcée']], view.familySituationNormalized);
   y -= 22; text('Statut d’occupation :');
   y -= 20; options([['Propriétaire', 'Propriétaire'], ['Locataire', 'Locataire'], ['Usufruitier(e)', 'Usufruitiere']], view.occupationStatusNormalized);
-  y -= 22; text(`Bénéficiaire APA : ${view.apaLabel}${view.apaLabel === 'Oui' && view.apaGirRaw ? ` (GIR ${view.apaGirRaw})` : ''}`);
-  y -= 22; text(`Reconnaissance d’invalidité MDPH : ${view.invalidityDisplay}`);
+  const statuses = reportOccupantStatuses(patient);
+  function statusText(label, value) {
+    if (!value) return;
+    const full = `${label} : ${value}`;
+    const lines = wrapReportLines(full, regular, 9, 510);
+    if (lines.length > 2) details.push(full);
+    for (const [i, line] of (lines.length > 2 ? [lines[0], 'Voir suite'] : lines).entries()) {
+      page.drawText(line, { x: 42, y: y - i * 11, size: 9, font: regular });
+    }
+  }
+  y -= 22; statusText('Bénéficiaire APA', statuses.apa);
+  y -= 22; statusText('Reconnaissance d’invalidité MDPH', statuses.mdph);
   y -= 22;
   const helpLines = wrapReportLines(`Aide à domicile : ${view.homeHelpDisplay}`, regular, 10, 510);
   if (helpLines.length > 2) details.push(`Aide à domicile : ${view.homeHelpDisplay}`);
