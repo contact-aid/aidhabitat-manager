@@ -11,6 +11,7 @@ mkdir -p "$tmp_dir"
 rsync -a \
   --exclude '.dart_tool' \
   --exclude 'build' \
+  --exclude 'node_modules' \
   --exclude '.flutter-plugins-dependencies' \
   "$app_dir/" \
   "$tmp_dir/"

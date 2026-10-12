@@ -5,8 +5,9 @@ import { runInNewContext } from 'node:vm';
 
 const source = readFileSync(new URL('../aid_habitat_app/web/voice_speech_bridge.js', import.meta.url), 'utf8');
 
-function createBrowser({ availability = 'available', prefixedOnly = false, unprefixedOnly = false, unsupported = false, legacy = false } = {}) {
+function createBrowser({ availability = 'available', prefixedOnly = false, unprefixedOnly = false, unsupported = false, legacy = false, localFallback = false } = {}) {
   const starts = [];
+  const instances = [];
   const timers = new Map();
   let timerId = 0;
   let aborted = 0;
@@ -17,7 +18,7 @@ function createBrowser({ availability = 'available', prefixedOnly = false, unpre
       if (available === 'pending') return new Promise(() => {});
       return available;
     }
-    constructor() { super(); this.processLocally = false; }
+    constructor() { super(); this.processLocally = false; instances.push(this); }
     dispatchEvent(event) {
       const result = super.dispatchEvent(event);
       this['on' + event.type]?.(event);
@@ -33,14 +34,19 @@ function createBrowser({ availability = 'available', prefixedOnly = false, unpre
     if (!prefixedOnly) window.SpeechRecognition = Recognition;
     if (!unprefixedOnly) window.webkitSpeechRecognition = Recognition;
   }
+  if (localFallback) {
+    window.AidHabitatLocalSpeechRecognition = class extends Recognition {
+      start() { starts.push({ localModel: true }); }
+    };
+  }
   runInNewContext(source, {
-    window, Event,
+    window, Event, EventTarget,
     // No mediaDevices provided: speech must open its own input.
     setTimeout: (callback, delay) => { timers.set(++timerId, {callback, delay}); return timerId; },
     clearTimeout: id => timers.delete(id),
   });
   return {
-    window, starts, timers,
+    window, starts, timers, instances,
     get aborted() { return aborted; },
     setAvailability: value => { available = value; },
     fireTimers: delay => {
@@ -61,7 +67,7 @@ for (const config of [{}, {prefixedOnly:true, legacy:true}, {unprefixedOnly:true
   test(`direct microphone startup supports constructor variants ${JSON.stringify(config)}`, async () => {
     const browser = createBrowser(config);
     const mode = await browser.window.aidHabitatPrepareSpeechRecognition('fr-FR');
-    assert.equal(mode, config.legacy ? 'remote' : 'local');
+    assert.equal(mode, 'remote');
     const recognition = new browser.window.webkitSpeechRecognition();
     recognition.start();
     assert.equal(browser.starts.length, 1, 'Start is synchronous and takes no external audio track');
@@ -86,9 +92,10 @@ test('a stalled local availability check falls back without hanging the button',
   const preparation = browser.window.aidHabitatPrepareSpeechRecognition('fr-FR');
   browser.fireTimers(1500);
   assert.equal(await preparation, 'remote');
+  assert.equal(browser.timers.size, 0);
 });
 
-test('retained plugin instance changes mode on the NEXT user start after a local failure', async () => {
+test('retained plugin instance stays on stable browser speech when local fallback is unavailable', async () => {
   const browser = createBrowser();
   await browser.window.aidHabitatPrepareSpeechRecognition('fr-FR');
   const recognition = new browser.window.webkitSpeechRecognition();
@@ -135,4 +142,62 @@ test('startup timeout reports the cause and releases recognition', async () => {
 test('unsupported browser is identified before microphone startup', async () => {
   const browser = createBrowser({unsupported:true});
   assert.equal(await browser.window.aidHabitatPrepareSpeechRecognition('fr-FR'), 'unsupported');
+});
+
+
+test('Firefox selects the local model without native SpeechRecognition', async () => {
+  const browser = createBrowser({ unsupported: true, localFallback: true });
+  assert.equal(await browser.window.aidHabitatPrepareSpeechRecognition('fr-FR'), 'local-model');
+  new browser.window.webkitSpeechRecognition().start();
+  assert.equal(browser.starts[0].localModel, true);
+  assert.equal(browser.timers.size, 0, 'Native startup timeout must not interrupt the model download');
+});
+
+for (const code of ['network', 'service-not-allowed', 'language-not-supported']) {
+  test(`Chrome keeps selecting the local model after ${code}`, async () => {
+    const browser = createBrowser({ localFallback: true });
+    await browser.window.aidHabitatPrepareSpeechRecognition();
+    const recognition = new browser.window.webkitSpeechRecognition();
+    recognition.start();
+    emit(recognition, 'error', code);
+    emit(recognition, 'end');
+    assert.equal(browser.starts.length, 1);
+    assert.equal(await browser.window.aidHabitatPrepareSpeechRecognition(), 'local-model');
+    recognition.start();
+    assert.equal(browser.starts[1].localModel, true);
+    recognition.abort();
+    assert.equal(browser.timers.size, 0);
+  });
+}
+
+
+test('direct web callbacks deliver text before completion without plugin final timers', async () => {
+  const b = createBrowser({ localFallback: true });
+  await b.window.aidHabitatPrepareSpeechRecognition();
+  const events = [];
+  b.window.aidHabitatStartSpeechRecognition(text => events.push(text), status => events.push(status), error => events.push(error));
+  const engine = b.instances.at(-1);
+  emit(engine, 'start');
+  emit(engine, 'speechend');
+  const result = new Event('result');
+  Object.defineProperty(result, 'results', {value: [[{transcript: 'marche avec une canne'}]]});
+  engine.dispatchEvent(result);
+  emit(engine, 'end');
+  assert.deepEqual(events, ['listening', 'processing', 'marche avec une canne', 'done']);
+});
+
+test('cancelled web callbacks cannot insert text into a new editor', async () => {
+  const b = createBrowser({ localFallback: true });
+  await b.window.aidHabitatPrepareSpeechRecognition();
+  const old = [], current = [];
+  b.window.aidHabitatStartSpeechRecognition(value => old.push(value), status => old.push(status), error => old.push(error));
+  const previous = b.instances.at(-1);
+  b.window.aidHabitatCancelSpeechRecognition();
+  b.window.aidHabitatStartSpeechRecognition(value => current.push(value), status => current.push(status), error => current.push(error));
+  const result = new Event('result');
+  Object.defineProperty(result, 'results', {value: [[{transcript: 'ancien texte'}]]});
+  previous.dispatchEvent(result);
+  emit(previous, 'end');
+  assert.deepEqual(old, []);
+  assert.deepEqual(current, []);
 });

@@ -1,14 +1,74 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:aid_habitat_app/components/voice_dictation_button.dart';
 
 void main() {
+  testWidgets('conserve le résultat final après l’arrêt du micro sur iPad', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('plugin.csdcorp.com/speech_to_text');
+    const codec = StandardMethodCodec();
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      if (call.method == 'initialize') return true;
+      if (call.method == 'locales') return ['fr_FR:Français'];
+      if (call.method == 'listen') return true;
+      return null;
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    Future<void> notify(String method, Object value) async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        channel.name,
+        codec.encodeMethodCall(MethodCall(method, value)),
+        (_) {},
+      );
+      await tester.pump();
+    }
+
+    final controller = TextEditingController(text: 'Observation :');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: VoiceDictationButton(controller: controller)),
+      ),
+    );
+    await tester.tap(find.byType(IconButton));
+    await tester.pump();
+    await notify('notifyStatus', 'listening');
+    await tester.tap(find.byType(IconButton));
+    await notify('notifyStatus', 'notListening');
+    await notify(
+      'textRecognition',
+      jsonEncode({
+        'alternates': [
+          {'recognizedWords': 'marche avec une canne', 'confidence': 1.0},
+        ],
+        'resultType': 2,
+      }),
+    );
+    await notify('notifyStatus', 'done');
+    expect(controller.text, 'Observation : marche avec une canne');
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+    debugDefaultTargetPlatformOverride = null;
+  });
   group('voiceDictationMessageForError', () {
     test('explains that web speech can be blocked after mic permission', () {
       expect(
         voiceDictationMessageForError('service-not-allowed', isWeb: true),
-        contains('Google Chrome ou Safari'),
+        contains('modèle vocal local'),
       );
       expect(
         voiceDictationMessageForError('not-allowed', isWeb: true),
