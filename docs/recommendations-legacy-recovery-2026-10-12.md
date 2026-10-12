@@ -26,6 +26,7 @@ Les données locales doivent rester disponibles pendant la reprise. Ce correctif
 
 - 101 tests ciblés passent : publication, remappage wiki, conflits secondaires, récupération historique, comparaisons à 390 et 1024 pixels.
 - Analyse Dart des fichiers concernés : aucune anomalie.
+- Compilation Flutter web de production : réussie (avertissements Wasm de dépendances déjà présentes).
 - Deux goldens historiques échouent sur 4 et 8 pixels dans cet environnement. Le même écart est reproduit avec le fichier d’écran original, avant ce correctif. Les images de référence restent inchangées.
 
 Le candidat est basé sur `codex/fix-voice-dictation` pour conserver les corrections du candidat web 79. Aucune donnée de production ni aucune saisie du navigateur concerné n’a été modifiée pendant ce diagnostic.
