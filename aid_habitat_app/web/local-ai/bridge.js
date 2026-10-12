@@ -3,6 +3,8 @@
   let nextId = 0;
   let progress = 0;
   let idle;
+  // Retain the loaded GPU model between edits; release after a bounded idle period.
+  const warmIdleMs = 10 * 60 * 1000;
   let generation = 0;
   const pending = new Map();
   let preparing = false;
@@ -62,7 +64,7 @@
           item.reject(error);
         }
         else item.resolve(data.result);
-        if (!pending.size && !preparing) idle = setTimeout(stop, 120000);
+        if (!pending.size && !preparing) idle = setTimeout(stop, warmIdleMs);
       };
       worker.onerror = stop;
     }
@@ -133,7 +135,7 @@
     }
     checkCancelled();
     localStorage.setItem('appergo-local-ai-qwen3-v1', 'complete');
-    idle = setTimeout(stop, 120000);
+    idle = setTimeout(stop, warmIdleMs);
     phase = 'Installation terminée';
     return JSON.stringify(result);
     } catch (error) {
@@ -151,7 +153,7 @@
     } finally {
       preparing = false;
       clearTimeout(idle);
-      if (worker) idle = setTimeout(stop, 120000);
+      if (worker) idle = setTimeout(stop, warmIdleMs);
     }
   };
   window.aidHabitatLocalAiRewrite = async (text, mode) => {

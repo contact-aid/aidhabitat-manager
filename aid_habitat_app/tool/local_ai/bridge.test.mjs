@@ -15,3 +15,16 @@ test('a stalled offline shell keeps the completed model available and vault inta
 
 test('offline rejection is explicit without invalidating the installed model',async()=>{const h=harness({offlineFails:true});try{const result=JSON.parse(await h.window.aidHabitatLocalAiPrepare());assert.match(result.warning,/OFFLINE_SHELL/);assert.equal(result.ready,true);assert.equal(h.storage.get('patient-vault'),'unchanged');}finally{h.window.aidHabitatLocalAiCancel();}});
 test('cancellation during offline preparation does not report success',async()=>{const h=harness({offlineFails:true,cancelOffline:true});await assert.rejects(h.window.aidHabitatLocalAiPrepare());assert.equal(h.storage.has('appergo-local-ai-qwen3-v1'),false);assert.equal(h.storage.get('patient-vault'),'unchanged');});
+test('editing pauses reuse the loaded worker while expiry and page exit release it',async()=>{
+ let now=0,next=0,created=0,terminated=0;const timers=new Map(),events={};
+ const window={addEventListener:(name,handler)=>events[name]=handler};
+ class Worker{constructor(){created++;}postMessage({id}){queueMicrotask(()=>this.onmessage({data:{id,result:'Proposition fictive.'}}));}terminate(){terminated++;}}
+ const advance=ms=>{now+=ms;for(const [id,timer] of [...timers])if(timer.at<=now){timers.delete(id);timer.fn();}};
+ vm.runInNewContext(source,{window,Worker,URL,Promise,Error,JSON,navigator:{},document:{baseURI:'https://app.example/'},localStorage:{removeItem(){}},setTimeout:(fn,ms)=>{const id=++next;timers.set(id,{fn,at:now+ms});return id;},clearTimeout:id=>timers.delete(id)});
+ await window.aidHabitatLocalAiRewrite('Texte fictif.','professional');advance(180000);
+ await window.aidHabitatLocalAiRewrite('Autre texte fictif.','professional');
+ assert.equal(created,1);assert.equal(terminated,0);
+ advance(599999);assert.equal(terminated,0);advance(1);assert.equal(terminated,1);
+ await window.aidHabitatLocalAiRewrite('Dernier texte fictif.','professional');assert.equal(created,2);
+ events.pagehide();assert.equal(terminated,2);
+});
