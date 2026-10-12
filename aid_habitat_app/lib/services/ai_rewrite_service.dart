@@ -76,6 +76,8 @@ class AiRewriteService {
     return status['installed'] != true || status['offlineReady'] != true;
   }
 
+  String get preparationPhase => web_ai.localAiPhase();
+
   Future<void> prepareLocalModel() => web_ai.prepareLocalAi();
   double get preparationProgress => web_ai.localAiProgress();
   void cancelPreparation() => web_ai.cancelLocalAi();

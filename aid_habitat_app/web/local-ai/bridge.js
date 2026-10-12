@@ -5,6 +5,24 @@
   let idle;
   let generation = 0;
   const pending = new Map();
+  let preparing = false;
+  let phase = '';
+  let lastError = '';
+  const messages = {
+    storage: 'Le navigateur ne répond pas à la vérification du stockage. Fermez cette fenêtre et réessayez.',
+    space: 'Espace insuffisant : prévoyez au moins 1,3 Go libres.',
+    unsupported: 'L’IA locale nécessite WebGPU. Vérifiez que l’accélération graphique est activée dans Chrome.',
+    download: 'Le téléchargement ne répond pas. Vérifiez la connexion puis réessayez. Les notes sont conservées.',
+    offline: 'Le modèle est prêt, mais la préparation hors ligne a échoué. Réessayez sans effacer les données du navigateur.',
+  };
+  function deadline(promise, ms, code) {
+    let timer;
+    return Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => { const error = new Error(messages[code]); error.setupCode = code; reject(error); }, ms);
+    })]).finally(() => clearTimeout(timer));
+  }
+  window.aidHabitatLocalAiPhase = () => phase;
+  window.aidHabitatLocalAiLastError = () => lastError;
   const stop = () => {
     generation++;
     clearTimeout(idle);
@@ -32,13 +50,13 @@
           item.reject(error);
         }
         else item.resolve(data.result);
-        if (!pending.size) idle = setTimeout(stop, 120000);
+        if (!pending.size && !preparing) idle = setTimeout(stop, 120000);
       };
       worker.onerror = stop;
     }
     return new Promise((resolve, reject) => {
       const id = ++nextId;
-      const timer = setTimeout(stop, method === 'prepare' ? 1800000 : 130000);
+      const timer = setTimeout(stop, method === 'prepare' ? 1800000 : method === 'status' ? 15000 : 130000);
       pending.set(id, {resolve, reject, timer});
       worker.postMessage({id, method, ...payload});
     });
@@ -60,18 +78,32 @@
     const checkCancelled = () => {
       if (attempt !== generation) throw new Error('Preparation annulee.');
     };
+    if (preparing) throw new Error('Préparation déjà en cours.');
+    preparing = true;
+    lastError = '';
     progress = 0;
-    await navigator.storage?.persist?.();
-    const estimate = await navigator.storage?.estimate?.();
+    phase = 'Vérification du navigateur…';
+    try {
+    const state = await deadline(request('status'), 15000, 'unsupported');
+    checkCancelled();
+    if (!state.supported) { const error = new Error(messages.unsupported); error.setupCode = 'unsupported'; throw error; }
+    phase = 'Vérification du stockage…';
+    // Persistent storage is advisory, and must never strand the download UI.
+    await deadline(Promise.resolve(navigator.storage?.persist?.()), 10000, 'storage').catch(() => {});
+    checkCancelled();
+    const estimate = await deadline(Promise.resolve(navigator.storage?.estimate?.()), 10000, 'storage');
     if (estimate?.quota && estimate.quota - (estimate.usage ?? 0) < 1300000000) {
-      throw new Error('Espace local insuffisant pour le modele (au moins 1,3 Go requis).');
+      const error = new Error(messages.space); error.setupCode = 'space'; throw error;
     }
-    const result = await request('prepare');
+    checkCancelled();
+    phase = 'Téléchargement et chargement du modèle…';
+    const result = await deadline(request('prepare'), 1800000, 'download');
     clearTimeout(idle);
     checkCancelled();
     // Explicit opt-in; this worker caches only a build-time list of static files.
-    const registration = await navigator.serviceWorker.register('ai_offline_worker.js', {updateViaCache: 'none'});
-    await registration.update();
+    phase = 'Préparation de l’accès hors ligne…';
+    const registration = await deadline(navigator.serviceWorker.register('ai_offline_worker.js', {updateViaCache: 'none'}), 30000, 'offline');
+    await deadline(registration.update(), 30000, 'offline');
     const installing = registration.installing || registration.waiting;
     if (installing && installing.state !== 'activated') {
       await new Promise((resolve, reject) => {
@@ -87,7 +119,17 @@
     checkCancelled();
     localStorage.setItem('appergo-local-ai-qwen3-v1', 'complete');
     idle = setTimeout(stop, 120000);
+    phase = 'Installation terminée';
     return JSON.stringify(result);
+    } catch (error) {
+      lastError = messages[error.setupCode] || messages.download;
+      stop();
+      throw new Error(lastError);
+    } finally {
+      preparing = false;
+      clearTimeout(idle);
+      if (worker) idle = setTimeout(stop, 120000);
+    }
   };
   window.aidHabitatLocalAiRewrite = async (text, mode) => {
     try { return await request('rewrite', {text, mode}); }

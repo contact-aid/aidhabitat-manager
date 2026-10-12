@@ -4260,6 +4260,7 @@ class _LocalAiSetupDialog extends StatefulWidget {
 class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
   bool _busy = false;
   double _progress = 0;
+  String _phase = 'Démarrage du téléchargement…';
   String? _error;
   Timer? _timer;
 
@@ -4271,15 +4272,18 @@ class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
   }
 
   Future<void> _prepare() async {
+    if (_busy) return;
     setState(() {
       _busy = true;
+      _progress = 0;
       _error = null;
     });
     _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (mounted) {
-        setState(
-          () => _progress = AiRewriteService.instance.preparationProgress,
-        );
+        setState(() {
+          _progress = AiRewriteService.instance.preparationProgress;
+          _phase = AiRewriteService.instance.preparationPhase;
+        });
       }
     });
     try {
@@ -4288,12 +4292,11 @@ class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
         _busy = false;
         Navigator.pop(context, true);
       }
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error =
-              'Préparation impossible. Vérifiez la connexion et le stockage libre, puis réessayez.';
+          _error = error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
         });
       }
     } finally {
@@ -4320,11 +4323,7 @@ class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
               value: _progress > 0 && _progress < 1 ? _progress : null,
             ),
             const SizedBox(height: 8),
-            Text(
-              _progress >= 1
-                  ? 'Préparation hors ligne…'
-                  : 'Préparation du modèle…',
-            ),
+            Text(_phase.isEmpty ? 'Préparation du modèle…' : _phase),
           ],
           if (_error != null) ...[const SizedBox(height: 12), Text(_error!)],
         ],
