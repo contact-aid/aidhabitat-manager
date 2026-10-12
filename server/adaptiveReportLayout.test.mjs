@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { generateVisitReport } from './reports/generateVisitReport.mjs';
-import { reportOccupants, wrapReportLines } from './reports/adaptiveReportLayout.mjs';
+import { reportOccupants, reportOccupantStatuses, wrapReportLines } from './reports/adaptiveReportLayout.mjs';
 import { resolveReportPigPloermel } from './reports/pigPloermel.mjs';
 async function extract(bytes) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(),'adaptive-report-'));
@@ -78,4 +78,22 @@ for(const value of [[true],[false],[],[0],undefined]) {
 test('PIG read failure blocks incorrect AMO pricing and non-Airtable dossiers do not call Airtable',async()=>{
   await assert.rejects(resolveReportPigPloermel('airtable:recmHnOwbM7choQvu',{token:'synthetic',fetchImpl:async()=>({ok:false,status:503})}),/503/);
   assert.equal(await resolveReportPigPloermel('local-dossier',{fetchImpl:()=>{throw new Error('Unexpected read');}}),null);
+});
+
+test('APA and MDPH identify eligible occupants and omit negative stale statuses',()=>{
+  const p = {numberPeople:3, apa:true,apaGir:'1',invalidity:true,invalidityTxt:'Ancienne valeur',occupants:[
+    {apa:true,apaGir:'4',invalidity:true,invalidityTxt:'Entre 50 et 79%'},
+    {apa:false,apaGir:'2',invalidity:false,invalidityTxt:'80%'},
+    {apa:true,apaGir:'GIR 6',invalidity:true,invalidityTxt:'Supérieur à 80%'},
+  ]};
+  assert.deepEqual(reportOccupantStatuses(p),{apa:'Occupant 1 GIR 4, Occupant 3 GIR 6',mdph:'Occupant 1 Entre 50 et 79%, Occupant 3 Supérieur à 80%'});
+  assert.deepEqual(reportOccupantStatuses({occupants:[{apa:false,invalidity:false}]}),{apa:'',mdph:''});
+  assert.deepEqual(reportOccupantStatuses({apa:true,apaGir:'4',invalidity:true,invalidityTxt:'80%'}),{apa:'Occupant 1 GIR 4',mdph:'Occupant 1 80%'});
+});
+test('PDF displays occupant-specific APA and MDPH instead of household values',async()=>{
+ const {bytes}=await generateVisitReport({dossier:{patient:{...patient,occupants:patient.occupants.map((o,i)=>({...o,apa:i!==1,apaGir:i===0?'4':'6',invalidity:i!==1,invalidityTxt:i===0?'Entre 50 et 79%':'80%'}))}},fetchImageBytes:async()=>null});
+ const page=(await extract(bytes)).split('\f')[2];
+ assert.match(page,/Bénéficiaire APA : Occupant 1 GIR 4, Occupant 3 GIR 6/);
+ assert.match(page,/Reconnaissance d.invalidité MDPH : Occupant 1 Entre 50 et 79%, Occupant 3 80%/);
+ assert(!page.includes('Occupant 2 GIR'));
 });
