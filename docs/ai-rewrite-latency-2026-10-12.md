@@ -12,7 +12,7 @@ Ces changements déplacent le chargement à froid avant le clic lorsque le navig
 
 Les mesures consignées lors du correctif Firefox précédent étaient de 50,3 puis 8,9 secondes pour une entrée répétitive de 2 088 caractères avec sortie de 173 caractères, et 24,7 puis 24,9 secondes pour une entrée variée de 773 caractères avec sortie de 765 caractères. Ce sont des mesures antérieures, pas une comparaison avant/après de cette PR. Le parcours à neuf buffers utilise des passages bornés et séquentiels ; il reste inchangé pour préserver sa compatibilité.
 
-Pour valider cinq secondes, il faudra mesurer le moteur réel sur un corpus représentatif dans le Firefox utilisé. Un modèle plus petit nécessiterait de nouveaux essais de fidélité en français ; un serveur d’inférence accéléré modifierait le lieu de traitement des notes. Aucune de ces deux modifications n’est activée ici.
+Les essais complémentaires et le mode serveur accéléré sont décrits dans [ai-rewrite-native-engine-2026-10-12.md](ai-rewrite-native-engine-2026-10-12.md). Ce mode nécessite une activation explicite côté serveur privé ; les seules optimisations du worker Firefox restent insuffisantes.
 
 ## Vérification
 
