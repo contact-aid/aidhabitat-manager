@@ -1,3 +1,4 @@
+import { resolveReportPigPloermel } from './reports/pigPloermel.mjs';
 import { registerNoteBackupRoutes } from './noteBackupRoutes.mjs';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
@@ -7400,6 +7401,7 @@ app.post(
       };
     })();
 
+    const pigPloermelResolved = await resolveReportPigPloermel(dossierId, { token: process.env.AIRTABLE_TOKEN });
     const ergoProfile = await resolveReportErgoProfile({ dossier, appUser: req.appUser });
 
     const { bytes, stats } = await generateVisitReport({
@@ -7423,6 +7425,7 @@ app.post(
       caisseComplementaireResolved,
       epciResolved,
       ergoProfile,
+      pigPloermelResolved,
       // Wrapper inline-first : si le descriptor cible un asset embarqué
       // dans la requête multipart, on lit le buffer en mémoire (zéro
       // round-trip). Fallback sur le fetcher d'origine (NocoDB / URL).
