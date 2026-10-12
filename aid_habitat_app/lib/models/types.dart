@@ -359,6 +359,10 @@ class Occupant {
   /// GIR APA (6 → 1). Rempli uniquement quand `apa == true`. Séparé de
   /// `invalidityTxt` pour ne pas écraser la donnée MDPH si les deux cases
   /// sont cochées.
+  final String apaDetails;
+  final String invalidityDetails;
+  /// Household fiscal reference year, carried by occupant 0 in occupants_json.
+  final String fiscalReferenceYear;
   final String apaGir;
 
   const Occupant({
@@ -377,6 +381,9 @@ class Occupant {
     this.caisseRetraitePrincipale = '',
     this.caissesRetraiteComplementaires = '',
     this.fiscalRevenue,
+    this.apaDetails = '',
+    this.invalidityDetails = '',
+    this.fiscalReferenceYear = '',
     this.apaGir = '',
   });
 
@@ -401,6 +408,9 @@ class Occupant {
     caissesRetraiteComplementaires:
         json['caissesRetraiteComplementaires'] as String? ?? '',
     fiscalRevenue: (json['fiscalRevenue'] as num?)?.toDouble(),
+    apaDetails: json['apaDetails'] as String? ?? '',
+    invalidityDetails: json['invalidityDetails'] as String? ?? '',
+    fiscalReferenceYear: json['fiscalReferenceYear'] as String? ?? '',
     apaGir: json['apaGir'] as String? ?? '',
   );
 
@@ -420,6 +430,9 @@ class Occupant {
     'caisseRetraitePrincipale': caisseRetraitePrincipale,
     'caissesRetraiteComplementaires': caissesRetraiteComplementaires,
     'fiscalRevenue': fiscalRevenue,
+    'apaDetails': apaDetails,
+    'invalidityDetails': invalidityDetails,
+    'fiscalReferenceYear': fiscalReferenceYear,
     'apaGir': apaGir,
   };
 
@@ -440,6 +453,9 @@ class Occupant {
     String? caissesRetraiteComplementaires,
     double? fiscalRevenue,
     bool clearFiscalRevenue = false,
+    String? apaDetails,
+    String? invalidityDetails,
+    String? fiscalReferenceYear,
     String? apaGir,
   }) {
     return Occupant(
@@ -463,6 +479,9 @@ class Occupant {
       fiscalRevenue: clearFiscalRevenue
           ? null
           : (fiscalRevenue ?? this.fiscalRevenue),
+      apaDetails: apaDetails ?? this.apaDetails,
+      invalidityDetails: invalidityDetails ?? this.invalidityDetails,
+      fiscalReferenceYear: fiscalReferenceYear ?? this.fiscalReferenceYear,
       apaGir: apaGir ?? this.apaGir,
     );
   }

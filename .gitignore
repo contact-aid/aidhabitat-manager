@@ -19,6 +19,7 @@ backups/
 # Cache & temp
 .npm-cache
 tmp/
+aid_habitat_app/web/local-voice/
 
 # Editor directories and files
 .vscode/*

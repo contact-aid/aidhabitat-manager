@@ -12,3 +12,25 @@ Future<String> prepareWebVoiceSpeechRuntimeImpl() async {
     return 'remote';
   }
 }
+
+@JS('aidHabitatStartSpeechRecognition')
+external void _start(JSFunction result, JSFunction status, JSFunction error);
+@JS('aidHabitatStopSpeechRecognition')
+external void _stop();
+@JS('aidHabitatCancelSpeechRecognition')
+external void _cancel();
+
+void startWebVoiceRecognition({
+  required void Function(String) onResult,
+  required void Function(String) onStatus,
+  required void Function(String) onError,
+}) {
+  _start(
+    ((JSString value) => onResult(value.toDart)).toJS,
+    ((JSString value) => onStatus(value.toDart)).toJS,
+    ((JSString value) => onError(value.toDart)).toJS,
+  );
+}
+
+void stopWebVoiceRecognition() => _stop();
+void cancelWebVoiceRecognition() => _cancel();

@@ -1,7 +1,8 @@
 (function installAidHabitatSpeechBridge() {
-  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const NativeRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const LocalRecognition = window.AidHabitatLocalSpeechRecognition;
+  const Recognition = NativeRecognition || LocalRecognition;
   let runtime = 'remote';
-  let retryWithBrowserService = false;
 
   function setRuntime(value) {
     runtime = value;
@@ -17,9 +18,8 @@
   }
 
   if (Recognition) {
-    // speech_to_text keeps one recognition object after initialize(). Install
-    // its constructor alias once; apply the CURRENT mode each time it starts.
-    // This also supports browsers exposing only the unprefixed constructor.
+    // Keep the legacy constructor alias compatible while the web lifecycle
+    // below routes results directly to Dart without native-plugin timers.
     function BridgedSpeechRecognition() {
       const recognition = new Recognition();
       const nativeStart = recognition.start.bind(recognition);
@@ -28,8 +28,8 @@
       let intentionalStop = false;
       let receivedResult = false;
       let failed = false;
-      let localSession = false;
       let startTimer = null;
+      let fallback = null;
       const clearStartTimer = function() {
         clearTimeout(startTimer);
         startTimer = null;
@@ -48,15 +48,11 @@
       recognition.addEventListener('error', function(event) {
         clearStartTimer();
         failed = true;
-        if (localSession && ['language-not-supported', 'network', 'no-speech'].includes(event.error)) {
-          retryWithBrowserService = true;
-        }
       });
       recognition.addEventListener('end', function() {
         clearStartTimer();
         if (!receivedResult && !failed && !intentionalStop) {
           // Do not silently flash the microphone then return to idle.
-          if (localSession) retryWithBrowserService = true;
           emitError('no-speech');
         }
       });
@@ -65,10 +61,29 @@
         intentionalStop = false;
         receivedResult = false;
         failed = false;
-        localSession = runtime === 'local';
         recognition.lang = 'fr-FR';
-        if ('processLocally' in recognition) recognition.processLocally = localSession;
+        if ('processLocally' in recognition) recognition.processLocally = false;
         window.__aidHabitatSpeechEvents = [];
+        if (NativeRecognition && runtime === 'local-model' && LocalRecognition) {
+          fallback = new LocalRecognition();
+          ['start', 'speechend', 'result', 'error', 'end'].forEach(function(type) {
+            fallback.addEventListener(type, function(source) {
+              const event = new Event(type);
+              if (type === 'result') {
+                Object.defineProperty(event, 'results', { value: source.results });
+                Object.defineProperty(event, 'resultIndex', { value: source.resultIndex });
+              }
+              if (type === 'error') Object.defineProperty(event, 'error', { value: source.error });
+              recognition.dispatchEvent(event);
+            });
+          });
+          fallback.start();
+          return;
+        }
+        fallback = null;
+        // The local recorder owns its bounded model preparation and capture
+        // timers. The native startup deadline must not interrupt its download.
+        if (!NativeRecognition) { nativeStart(); return; }
         startTimer = setTimeout(function() {
           startTimer = null;
           emitError('start-timeout');
@@ -87,12 +102,14 @@
       recognition.stop = function() {
         intentionalStop = true;
         clearStartTimer();
-        nativeStop();
+        if (fallback) fallback.stop();
+        else nativeStop();
       };
       recognition.abort = function() {
         intentionalStop = true;
         clearStartTimer();
-        nativeAbort();
+        if (fallback) fallback.abort();
+        else nativeAbort();
       };
       return recognition;
     }
@@ -102,25 +119,46 @@
     });
   }
 
-  window.aidHabitatPrepareSpeechRecognition = async function(locale) {
+  window.aidHabitatPrepareSpeechRecognition = async function() {
     if (!Recognition) return setRuntime('unsupported');
-    if (retryWithBrowserService || typeof Recognition.available !== 'function') {
-      return setRuntime('remote');
-    }
-    let timeout;
-    try {
-      // Use an already-installed local language pack. A download, browser
-      // policy denial or stalled experimental API must not block dictation.
-      const availability = await Promise.race([
-        Recognition.available({ langs: [locale], processLocally: true }),
-        new Promise(resolve => { timeout = setTimeout(() => resolve('unavailable'), 1500); }),
-      ]);
-      return setRuntime(availability === 'available' ? 'local' : 'remote');
-    } catch (_) {
-      record('preparation', 'local-unavailable');
-      return setRuntime('remote');
-    } finally {
-      clearTimeout(timeout);
-    }
+    // Do not await an experimental language-pack probe before microphone
+    // startup: it can lose Safari's tap activation or select a broken engine.
+    return setRuntime(LocalRecognition ? 'local-model' : 'remote');
+  };
+
+  let active;
+  window.aidHabitatStartSpeechRecognition = function(onResult, onStatus, onError) {
+    window.aidHabitatCancelSpeechRecognition();
+    const recognition = active = new window.webkitSpeechRecognition();
+    recognition.lang = 'fr-FR';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.onstart = function() { if (active === recognition) onStatus('listening'); };
+    recognition.onspeechend = function() { if (active === recognition) onStatus('processing'); };
+    recognition.onresult = function(event) {
+      if (active !== recognition) return;
+      let transcript = '';
+      for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0].transcript + ' ';
+      onResult(transcript.trim());
+    };
+    recognition.onerror = function(event) {
+      if (active !== recognition) return;
+      onError(event.error);
+      // Release permission and pending transcription even if the browser
+      // does not emit end after an error. Old callbacks cannot reach an editor.
+      if (active === recognition) window.aidHabitatCancelSpeechRecognition();
+    };
+    recognition.onend = function() {
+      if (active !== recognition) return;
+      active = null;
+      onStatus('done');
+    };
+    recognition.start();
+  };
+  window.aidHabitatStopSpeechRecognition = function() { active?.stop(); };
+  window.aidHabitatCancelSpeechRecognition = function() {
+    const previous = active;
+    active = null;
+    previous?.abort();
   };
 })();

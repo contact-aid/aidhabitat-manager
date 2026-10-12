@@ -7,14 +7,14 @@ import {rewriteParts} from './rewrite_parts.mjs';
 const source=(await readFile(new URL('worker.mjs',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 function harness({cached=true,fail=false,prepareError,networkFails=false,buffers=10,failGeneration=0}={}) {
   const messages=[],requests=[];
-  let resets=0,generations=0;
+  let resets=0,generations=0,reloads=0,cacheChecks=0;
   const self={location:{href:'https://app.example/local-ai/worker.js'},
     navigator:{gpu:{requestAdapter:async()=>({features:new Set(['shader-f16']),limits:{maxStorageBuffersPerShaderStage:buffers,maxComputeWorkgroupStorageSize:32768,maxBufferSize:268435456,maxStorageBufferBindingSize:134217728,maxComputeInvocationsPerWorkgroup:256}})}},
     fetch:async(url)=>{requests.push(url);if(networkFails)throw Error('synthetic network failure');return new Response('{}');},
     postMessage:message=>messages.push(message)};
   class MLCEngine {
     loadedModelIdToPipeline=new Map([[config.MODEL_ID,{tokenizer:{encode:text=>new Uint8Array(text.length)}}]]);
-    async reload(){if(!cached)await self.fetch(`${config.MODEL_URL}tokenizer.json`);if(prepareError)throw prepareError;}
+    async reload(){reloads++;if(!cached)await self.fetch(`${config.MODEL_URL}tokenizer.json`);if(prepareError)throw prepareError;}
     async unload(){}
     async resetChat(){resets++;}
     chat={completions:{create:async(request)=>{
@@ -23,8 +23,8 @@ function harness({cached=true,fail=false,prepareError,networkFails=false,buffers
       return {choices:[{finish_reason:'stop',message:{content:'Proposition locale.'}}]};
     }}};
   }
-  vm.runInNewContext(source,{...config,rewriteParts,self,MLCEngine,hasModelInCache:async()=>cached,URL,Error});
-  return {messages,requests,resets:()=>resets,send:(method,text)=>self.onmessage({data:{id:1,method,text,mode:'professional'}})};
+  vm.runInNewContext(source,{...config,rewriteParts,self,MLCEngine,hasModelInCache:async()=>{cacheChecks++;return cached;},URL,Error});
+  return {messages,requests,reloads:()=>reloads,cacheChecks:()=>cacheChecks,resets:()=>resets,send:(method,text)=>self.onmessage({data:{id:1,method,text,mode:'professional'}})};
 }
 test('rewriting cannot transmit notes and clears model conversation',async()=>{
   const h=harness();await h.send('rewrite','SYNTHETIC PRIVATE NOTE');
@@ -72,4 +72,22 @@ test('nine-buffer generation clears every context and never publishes partial te
   assert.ok(h.resets()>=3);
   assert.ok(h.messages.every(message=>message.result===undefined));
   assert.doesNotMatch(JSON.stringify(h.messages),/SYNTHETIC PRIVATE/);
+});
+
+test('warming an installed model loads once and subsequent statuses avoid cache scans',async()=>{
+  const h=harness({buffers:9});
+  await h.send('warmup');
+  assert.equal(h.messages.at(-1).result.ready,true);
+  const checks=h.cacheChecks();
+  await h.send('status');
+  assert.equal(h.cacheChecks(),checks);
+  await h.send('rewrite','SYNTHETIC PRIVATE NOTE');
+  assert.equal(h.reloads(),1);
+  assert.equal(h.requests.length,0);
+  assert.equal(h.messages.at(-1).result,'Proposition locale.');
+});
+test('background warmup cannot download a missing model',async()=>{
+  const h=harness({cached:false});await h.send('warmup');
+  assert.equal(h.requests.length,0);
+  assert.equal(h.messages.at(-1).code,'model_unavailable');
 });

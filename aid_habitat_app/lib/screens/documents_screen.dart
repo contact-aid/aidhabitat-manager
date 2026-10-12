@@ -3709,6 +3709,7 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
   int _totalPages = 1;
   Uint8List? _currentImage;
   final Map<int, Uint8List> _pagePreviews = {};
+  final Map<int, Future<Uint8List>> _pageRenderJobs = {};
   final GlobalKey<DocumentPageSlideState> _pageSlideKey = GlobalKey();
   int _renderTicket = 0;
   bool _loading = true;
@@ -3895,43 +3896,14 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     if (doc == null) return;
     final pageNumber = _currentPage;
     final ticket = ++_renderTicket;
-    setState(() {
-      _loading = true;
-      _currentImage = null;
-    });
-
-    PdfPage? page;
     try {
-      page = await doc.getPage(pageNumber);
-      _pageAspects[pageNumber] = page.width / page.height;
-      var cachedFlat = _flatPagesByPage[pageNumber];
-      if (cachedFlat != null) {
-        if (_legacyPages.contains(pageNumber)) {
-          cachedFlat = await normalizeLegacyWebPdfPage(
-            cachedFlat,
-            _pageAspects[pageNumber]!,
-          );
-          _flatPagesByPage[pageNumber] = cachedFlat;
-          _legacyPages.remove(pageNumber);
-        }
-      }
-      // Render à 2x la taille naturelle pour un peu de netteté sur les
-      // écrans Retina sans exploser la mémoire.
-      final scale = math.min(2.0, 4096 / math.max(page.width, page.height));
-      final raster = await page.render(
-        width: page.width * scale,
-        height: page.height * scale,
-        format: PdfPageImageFormat.png,
-      );
+      final bytes = await _ensurePagePreview(pageNumber);
       if (!mounted || ticket != _renderTicket || pageNumber != _currentPage) {
         return;
       }
       setState(() {
-        _currentImage = raster?.bytes;
+        _currentImage = bytes;
         _currentOverlay = _flatPagesByPage[pageNumber];
-        _pagePreviews.removeWhere(
-          (number, _) => (number - pageNumber).abs() > 1,
-        );
         _loading = false;
       });
       widget.onChanged();
@@ -3944,35 +3916,67 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
         _loading = false;
         _error = 'Rendu page $pageNumber impossible : $e';
       });
+    }
+  }
+
+  Future<Uint8List> _ensurePagePreview(int number) async {
+    final cached = _pagePreviews[number];
+    if (cached != null) return cached;
+    final existing = _pageRenderJobs[number];
+    if (existing != null) return existing;
+    final job = _renderPagePreview(number);
+    _pageRenderJobs[number] = job;
+    try {
+      return await job;
     } finally {
-      await page?.close();
+      _pageRenderJobs.remove(number);
+    }
+  }
+
+  Future<Uint8List> _renderPagePreview(int number) async {
+    final page = await _doc!.getPage(number);
+    try {
+      _pageAspects[number] = page.width / page.height;
+      final flat = _flatPagesByPage[number];
+      if (flat != null && _legacyPages.contains(number)) {
+        _flatPagesByPage[number] = await normalizeLegacyWebPdfPage(
+          flat,
+          _pageAspects[number]!,
+        );
+        _legacyPages.remove(number);
+      }
+      final scale = math.min(2.0, 4096 / math.max(page.width, page.height));
+      final image = await page.render(
+        width: page.width * scale,
+        height: page.height * scale,
+        format: PdfPageImageFormat.png,
+      );
+      if (image == null) throw StateError('Rendu PDF vide');
+      if (mounted) {
+        await precacheImage(MemoryImage(image.bytes), context);
+        final overlay = _flatPagesByPage[number];
+        if (mounted && overlay != null) {
+          await precacheImage(MemoryImage(overlay), context);
+        }
+        if (mounted) _pagePreviews[number] = image.bytes;
+      }
+      return image.bytes;
+    } finally {
+      await page.close();
     }
   }
 
   Future<void> _prefetchNeighbors(int center) async {
-    final doc = _doc;
-    if (doc == null) return;
+    // Keep the displayed page and its neighbors, including their decoded image.
+    _pagePreviews.removeWhere((number, _) => (number - _currentPage).abs() > 1);
     for (final number in [center - 1, center + 1]) {
-      if (number < 1 ||
-          number > _totalPages ||
-          _pagePreviews.containsKey(number)) {
-        continue;
-      }
-      PdfPage? page;
+      if (!mounted || center != _currentPage) return;
+      if (number < 1 || number > _totalPages) continue;
       try {
-        page = await doc.getPage(number);
-        final scale = math.min(2.0, 4096 / math.max(page.width, page.height));
-        final image = await page.render(
-          width: page.width * scale,
-          height: page.height * scale,
-          format: PdfPageImageFormat.png,
-        );
-        if (!mounted || image == null) return;
-        setState(() => _pagePreviews[number] = image.bytes);
+        await _ensurePagePreview(number);
+        if (mounted) setState(() {});
       } catch (_) {
         // The current page remains usable if a neighboring preview fails.
-      } finally {
-        await page?.close();
       }
     }
   }
@@ -3996,8 +4000,10 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     if (_changingPage || target < 1 || target > _totalPages) return;
     if (!_pagePreviews.containsKey(target)) {
       await _prefetchNeighbors(_currentPage);
+      if (!mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
     }
-    await _pageSlideKey.currentState?.turnPage(direction);
+    if (mounted) await _pageSlideKey.currentState?.turnPage(direction);
   }
 
   /// Capture les strokes courants en aplat PNG et les stocke en
@@ -4068,13 +4074,17 @@ class _WebPdfAnnotatorWrapperState extends State<_WebPdfAnnotatorWrapper> {
     setState(() => _changingPage = true);
     try {
       if (!await _captureCurrentPageFlat() || !mounted) return;
+      // Keep the slide and outgoing canvas mounted until the target is ready.
+      final bytes = await _ensurePagePreview(page);
+      if (!mounted) return;
       setState(() {
         _currentPage = page;
-        _currentImage = null;
-        _loading = true;
+        _currentImage = bytes;
+        _currentOverlay = _flatPagesByPage[page];
         _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
       });
-      await _renderCurrent();
+      widget.onChanged();
+      unawaited(_prefetchNeighbors(page));
     } finally {
       if (mounted) setState(() => _changingPage = false);
     }
@@ -4636,18 +4646,17 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
     // Avant de quitter la page courante, on capture ses strokes en mémoire
     // pour ne pas les perdre lors du rebuild.
     _captureCurrentPage();
-    final pageChanged = pageNumber != _currentPage;
-    setState(() {
-      _rendering = true;
-      _currentPage = pageNumber;
-      if (pageChanged) {
-        _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
-      }
-    });
+    setState(() => _rendering = true);
     try {
       await _ensurePagePng(pageNumber);
       if (!mounted) return;
+      await precacheImage(FileImage(File(_pagePngPaths[pageNumber]!)), context);
+      if (!mounted) return;
       setState(() {
+        if (pageNumber != _currentPage) {
+          _liveAnnotatorKey = GlobalKey<_ImageAnnotatorState>();
+        }
+        _currentPage = pageNumber;
         _rendering = false;
       });
       widget.onChanged();
@@ -4706,6 +4715,9 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
     } finally {
       await page.close();
     }
+    if (mounted) {
+      await precacheImage(FileImage(File(pngPath)), context);
+    }
     _pagePngPaths[pageNumber] = pngPath;
   }
 
@@ -4744,9 +4756,11 @@ class _PdfAnnotatorWrapperState extends State<_PdfAnnotatorWrapper> {
     if (_rendering || target < 1 || target > _totalPages) return;
     if (!_pagePngPaths.containsKey(target)) {
       await _ensurePagePng(target);
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      setState(() {});
+      await WidgetsBinding.instance.endOfFrame;
     }
-    await _pageSlideKey.currentState?.turnPage(direction);
+    if (mounted) await _pageSlideKey.currentState?.turnPage(direction);
   }
 
   @override

@@ -763,20 +763,17 @@ class _RecommendationCard extends StatelessWidget {
           const SizedBox(height: 8),
           // Titre éditable. Marge réduite avec la description (4 px)
           // pour resserrer le bloc texte (demande utilisateur).
-          _InlineTitleField(
-            value: item.customTitle,
-            hint: title.isNotEmpty ? title : 'Titre…',
+          _InlineRecommendationField(
+            value: title,
+            hint: 'Titre…',
+            isTitle: true,
             onChanged: (v) => onChange(item.copyWith(customTitle: v)),
           ),
           const SizedBox(height: 4),
           // Le champ grandit avec le texte et détermine la hauteur de la ligne.
-          FormTextField(
-            label: '',
+          _InlineRecommendationField(
             value: descriptionValue,
-            maxLines: null,
-            minLines: 2,
-            valueSize: 14,
-            valueWeight: FontWeight.w700,
+            hint: 'Description…',
             onChanged: (v) => onChange(item.copyWith(note: v)),
           ),
         ],
@@ -1026,40 +1023,46 @@ class _WikiPickerDialogState extends State<WikiPickerDialog> {
 }
 
 // =============================================================================
-// Titre inline éditable (sans cadre) — utilisé pour le titre de chaque
-// préconisation. Stocke dans `customTitle`. Affiche un hint grisé quand
-// vide. N'écrase pas la saisie de l'utilisateur quand un rebuild asynchrone
-// survient (même logique que FormTextField).
+// Champs de préconisation directement sur le fond de la carte.
+// Le survol et le focus signalent l'édition sans réduire la largeur du texte.
+// La saisie reste intacte pendant les sauvegardes asynchrones.
 // =============================================================================
 
-class _InlineTitleField extends StatefulWidget {
+class _InlineRecommendationField extends StatefulWidget {
   final String value;
   final String hint;
+  final bool isTitle;
   final ValueChanged<String> onChanged;
 
-  const _InlineTitleField({
+  const _InlineRecommendationField({
     required this.value,
     required this.hint,
+    this.isTitle = false,
     required this.onChanged,
   });
 
   @override
-  State<_InlineTitleField> createState() => _InlineTitleFieldState();
+  State<_InlineRecommendationField> createState() =>
+      _InlineRecommendationFieldState();
 }
 
-class _InlineTitleFieldState extends State<_InlineTitleField> {
-  late TextEditingController _controller;
-  late FocusNode _focusNode;
+class _InlineRecommendationFieldState
+    extends State<_InlineRecommendationField> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+  bool _hovered = false;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.value);
-    _focusNode = FocusNode();
+    _focusNode = FocusNode()..addListener(_handleFocusChange);
   }
 
+  void _handleFocusChange() => setState(() {});
+
   @override
-  void didUpdateWidget(covariant _InlineTitleField oldWidget) {
+  void didUpdateWidget(covariant _InlineRecommendationField oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (_focusNode.hasFocus) return;
     if (oldWidget.value != widget.value && _controller.text != widget.value) {
@@ -1069,49 +1072,57 @@ class _InlineTitleFieldState extends State<_InlineTitleField> {
 
   @override
   void dispose() {
-    _focusNode.dispose();
+    _focusNode
+      ..removeListener(_handleFocusChange)
+      ..dispose();
     _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: _controller,
-      focusNode: _focusNode,
-      maxLines: 2,
-      minLines: 1,
-      stylusHandwritingEnabled: true,
-      style: const TextStyle(
-        fontSize: 14,
-        fontWeight: FontWeight.w700,
-        color: Color(0xFF2B323A),
+    final active = _hovered || _focusNode.hasFocus;
+    final style = TextStyle(
+      fontSize: widget.isTitle ? 16 : 14,
+      fontWeight: widget.isTitle ? FontWeight.w700 : FontWeight.w400,
+      color: widget.isTitle ? const Color(0xFF2B323A) : const Color(0xFF5C6670),
+      height: 1.4,
+    );
+    return MouseRegion(
+      cursor: SystemMouseCursors.text,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Semantics(
+        label: widget.isTitle ? 'Modifier le titre' : 'Modifier la description',
+        child: TextField(
+          controller: _controller,
+          focusNode: _focusNode,
+          maxLines: widget.isTitle ? 2 : null,
+          minLines: widget.isTitle ? 1 : 2,
+          keyboardType: TextInputType.multiline,
+          stylusHandwritingEnabled: true,
+          style: style,
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: active
+                ? Colors.white.withValues(alpha: 0.55)
+                : Colors.transparent,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 2,
+              vertical: 6,
+            ),
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: const UnderlineInputBorder(
+              borderSide: BorderSide(color: Colors.white, width: 2),
+            ),
+            hintText: widget.hint,
+            hintStyle: style.copyWith(color: const Color(0xFF8A939D)),
+          ),
+          onChanged: widget.onChanged,
+        ),
       ),
-      decoration: InputDecoration(
-        isDense: true,
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFB9C0C7)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFB9C0C7)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: kBrandPurple, width: 1.5),
-        ),
-        hintText: widget.hint,
-        hintStyle: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w700,
-          color: Color(0xFF8A939D),
-        ),
-      ),
-      onChanged: widget.onChanged,
     );
   }
 }

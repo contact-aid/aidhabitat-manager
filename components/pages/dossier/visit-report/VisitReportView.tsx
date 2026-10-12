@@ -199,6 +199,10 @@ const createEmptyOccupant = () => ({
     firstName: '',
     lastName: '',
     birthDate: '',
+    apaGir: '',
+    apaDetails: '',
+    invalidityDetails: '',
+    fiscalReferenceYear: '',
     apa: false,
     invalidity: false,
     invalidityTxt: '',
@@ -214,6 +218,10 @@ const normalizeOccupant = (value: any) => ({
     firstName: String(value?.firstName || ''),
     lastName: String(value?.lastName || ''),
     birthDate: String(value?.birthDate || '').trim(),
+    apaGir: String(value?.apaGir ?? '').trim(),
+    apaDetails: String(value?.apaDetails ?? '').trim(),
+    invalidityDetails: String(value?.invalidityDetails ?? '').trim(),
+    fiscalReferenceYear: String(value?.fiscalReferenceYear ?? '').trim(),
     apa: Boolean(value?.apa),
     invalidity: Boolean(value?.invalidity),
     invalidityTxt: String(value?.invalidityTxt || '').trim(),
@@ -3348,7 +3356,7 @@ const BeneficiaryForm: React.FC<{
 
     const activeOccupant = displayedOccupants[activeOccupantIndex] || createEmptyOccupant();
     const activeOccupantAge = computeAgeFromBirthDate(activeOccupant.birthDate);
-    const familySituationOptions = buildToggleOptions(refSituations, data.familySituation);
+    const familySituationOptions = buildToggleOptions([...refSituations.filter(option => !option.label.toLowerCase().startsWith('pacs')), { id: 'pacse', label: 'Pacsé' }], data.familySituation);
     const dependenceOptions = buildToggleOptions(refDependances, activeOccupant.dependenceTxt, 'Aucune');
     const selectedComplementaryFunds = parseComplementaryFundNames(activeOccupant.caissesRetraiteComplementaires);
     const updateActiveOccupant = (field: keyof ReturnType<typeof createEmptyOccupant>, value: string | boolean) => {
@@ -3493,6 +3501,7 @@ const BeneficiaryForm: React.FC<{
                     value={data.incomeCategory || 'Calcul automatique'}
                     hint="Calculée automatiquement à partir des revenus et du foyer."
                 />
+                <div className="grid grid-cols-2 gap-2">
                 <Input
                     label="Revenu Fiscal Ref."
                     type="number"
@@ -3501,6 +3510,12 @@ const BeneficiaryForm: React.FC<{
                     onFocus={onFiscalRevenueFocus}
                     onBlur={onFiscalRevenueBlur}
                 />
+                    <Input label="Année de référence" type="text" placeholder="Ex: 2025" value={displayedOccupants[0]?.fiscalReferenceYear || ''} onChange={v => {
+                        const next = buildOccupantsFromPatient(data, data.numberPeople);
+                        next[0].fiscalReferenceYear = v;
+                        onChange('occupants', next);
+                    }} />
+                </div>
             </Section>
         </div>
         )}
@@ -3510,7 +3525,15 @@ const BeneficiaryForm: React.FC<{
             <Section title={renderOccupantSwitcher('Santé', 'soft')}>
                 <div className="space-y-3">
                     <Checkbox label="Bénéficiaire APA" checked={Boolean(activeOccupant.apa)} onChange={v => updateActiveOccupant('apa', v)} />
+                    {activeOccupant.apa && <>
+                        <ToggleGroup label="GIR" options={['6', '5', '4', '3', '2', '1']} selected={activeOccupant.apaGir} onSelect={v => updateActiveOccupant('apaGir', v)} small />
+                        <TextArea placeholder="Détails GIR" value={activeOccupant.apaDetails} onChange={v => updateActiveOccupant('apaDetails', v)} />
+                    </>}
                     <Checkbox label="Reconnaissance Invalidité" checked={Boolean(activeOccupant.invalidity)} onChange={v => updateActiveOccupant('invalidity', v)} />
+                    {activeOccupant.invalidity && <>
+                        <ToggleGroup label="Pourcentage d’invalidité" options={['Inférieur à 50%', 'Entre 50 et 79%', 'Supérieur à 80%']} selected={activeOccupant.invalidityTxt} onSelect={v => updateActiveOccupant('invalidityTxt', v)} small />
+                        <TextArea placeholder="Détails invalidité" value={activeOccupant.invalidityDetails} onChange={v => updateActiveOccupant('invalidityDetails', v)} />
+                    </>}
                     <Checkbox label="Aide à domicile" checked={Boolean(activeOccupant.homeHelp)} onChange={v => updateActiveOccupant('homeHelp', v)} />
                     <ToggleGroup
                         label="Dépendance"

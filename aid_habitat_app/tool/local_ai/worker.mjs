@@ -39,7 +39,7 @@ async function status() {
       if (!supported) reason = 'gpu_limits';
     }
   }
-  return {supported, reason, segmented, installed: supported && await hasModelInCache(MODEL_ID, config),
+  return {supported, reason, segmented, installed: supported && (loaded || await hasModelInCache(MODEL_ID, config)),
     ready: loaded, bytes: MODEL_BYTES};
 }
 async function load(downloads, id) {
@@ -68,9 +68,15 @@ self.onmessage = async ({data}) => {
     if (method === 'prepare') {
       await load(true, id);
       self.postMessage({id, result: {...await status(), ready: true}});
+    } else if (method === 'warmup') {
+      phase = 'load';
+      self.postMessage({id, phase: 'Chargement du moteur local…'});
+      await load(false, id);
+      self.postMessage({id, result: {ready: true}});
     } else if (method === 'rewrite') {
       if (typeof text !== 'string' || text.length < 3 || text.length > 6000) throw new Error('length');
       phase = 'load';
+      self.postMessage({id, phase: loaded ? 'Reformulation en cours…' : 'Chargement du moteur local…'});
       await load(false, id);
       phase = 'rewrite';
       try {

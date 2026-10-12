@@ -22,6 +22,42 @@ class AiRewriteService {
   final http.Client _client;
   final MethodChannel _nativeChannel;
   Future<bool>? _availability;
+  Future<bool>? _serverProbe;
+  String? _serverProbeKey;
+  DateTime? _serverProbeExpires;
+
+  // Server processing is explicitly advertised by the authenticated API.
+  // Cache only availability, never the note or its generated response.
+  Future<bool> isServerRewriteAvailable({
+    String? apiBaseUrl,
+    String? sessionToken,
+  }) {
+    final base = (apiBaseUrl ?? AppConfig.apiBaseUrl).trim();
+    final token = (sessionToken ?? AppConfig.appSessionToken).trim();
+    final key = '$base|$token|${AppConfig.sessionEpoch}';
+    if (_serverProbeKey == key &&
+        _serverProbe != null &&
+        (_serverProbeExpires == null ||
+            DateTime.now().isBefore(_serverProbeExpires!))) {
+      return _serverProbe!;
+    }
+    _serverProbeKey = key;
+    _serverProbeExpires = null;
+    final probe = _remoteAvailable(
+      apiBaseUrl: base,
+      sessionToken: token,
+      requireWebEnabled: true,
+    );
+    _serverProbe = probe;
+    probe.then((ready) {
+      if (_serverProbeKey == key && identical(_serverProbe, probe)) {
+        _serverProbeExpires = DateTime.now().add(
+          Duration(seconds: ready ? 30 : 5),
+        );
+      }
+    });
+    return probe;
+  }
 
   bool get _usesAppleModel =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
@@ -32,6 +68,12 @@ class AiRewriteService {
     String? sessionToken,
   }) async {
     if (kIsWeb) {
+      if (await isServerRewriteAvailable(
+        apiBaseUrl: apiBaseUrl,
+        sessionToken: sessionToken,
+      )) {
+        return true;
+      }
       final state = await web_ai.localAiStatus();
       return state['supported'] == true;
     }
@@ -46,6 +88,7 @@ class AiRewriteService {
   Future<bool> _remoteAvailable({
     String? apiBaseUrl,
     String? sessionToken,
+    bool requireWebEnabled = false,
   }) async {
     final apiBase = (apiBaseUrl ?? AppConfig.apiBaseUrl).trim().replaceAll(
       RegExp(r'/+$'),
@@ -59,12 +102,14 @@ class AiRewriteService {
             Uri.parse('$apiBase/api/ai/status'),
             headers: {'X-App-Session': token},
           )
-          .timeout(const Duration(seconds: 7));
+          .timeout(Duration(milliseconds: requireWebEnabled ? 1500 : 7000));
       if (response.statusCode != 200) return false;
       final payload = jsonDecode(response.body);
       return payload is Map &&
           payload['data'] is Map &&
-          (payload['data'] as Map)['ready'] == true;
+          (payload['data'] as Map)['ready'] == true &&
+          (!requireWebEnabled ||
+              (payload['data'] as Map)['webEnabled'] == true);
     } catch (_) {
       return false;
     }
@@ -72,8 +117,9 @@ class AiRewriteService {
 
   Future<bool> needsPreparation() async {
     if (!kIsWeb) return false;
+    if (await isServerRewriteAvailable()) return false;
     final status = await web_ai.localAiStatus();
-      return status['installed'] != true;
+    return status['installed'] != true;
   }
 
   String get preparationPhase => web_ai.localAiPhase();
@@ -109,6 +155,19 @@ class AiRewriteService {
     }
     if (sourceText.length > 8000) {
       throw Exception('La note ne doit pas dépasser 8000 caractères.');
+    }
+
+    if (kIsWeb &&
+        await isServerRewriteAvailable(
+          apiBaseUrl: apiBaseUrl,
+          sessionToken: sessionToken,
+        )) {
+      return _rewriteRemotely(
+        text: sourceText,
+        mode: mode,
+        apiBaseUrl: apiBaseUrl,
+        sessionToken: sessionToken,
+      );
     }
 
     if (!kIsWeb &&

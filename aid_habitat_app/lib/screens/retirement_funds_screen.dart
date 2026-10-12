@@ -565,17 +565,16 @@ class _FundCardState extends State<_FundCard> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      // Info : date en UPPERCASE — "Modifiée le …" si
+                      // Info : date discrète en minuscules, « modifiée le » si
                       // une édition existe, "Ajoutée le …" sinon.
                       Text(
-                        widget.dateLabel.toUpperCase(),
+                        widget.dateLabel.toLowerCase(),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF8A939D),
-                          letterSpacing: 1.2,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w400,
+                          color: Color(0xFF9CA3AF),
                         ),
                       ),
                       const Spacer(),
@@ -1769,9 +1768,8 @@ class _IconCircleButton extends StatelessWidget {
   }
 }
 
-/// Renders a retirement fund logo using the on-disk media cache. Uses the
-/// exact URL returned by the API (no extension cascade) so the logo keeps
-/// working offline once seen. Falls back to the fund's initials on failure.
+/// Renders official catalog logos from bundled assets and custom logos from
+/// the media cache. Falls back to the fund's initials on failure.
 class _FundLogoImage extends StatelessWidget {
   const _FundLogoImage({required this.fund});
   final RetirementFund fund;
@@ -1779,16 +1777,54 @@ class _FundLogoImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fallback = _FundInitials(name: fund.name);
-    final logoUrl = fund.logoUrl.trim().isEmpty
+    final suppliedLogo = fund.logoUrl.trim();
+    // Bundle the official catalog logos so local previews and offline builds
+    // use the same images, without relying on static routes on the API.
+    const officialLogos = {
+      '/retirement-logos/ag2r.svg': 'ag2r.svg',
+      '/retirement-logos/agirc-arrco.svg': 'agirc-arrco.png',
+      '/retirement-logos/agirc-arrco.jpg': 'agirc-arrco.png',
+      '/retirement-logos/agirc-arrco.png': 'agirc-arrco.png',
+      '/retirement-logos/cipav.svg': 'cipav.svg',
+      '/retirement-logos/cipav.png': 'cipav.svg',
+      '/retirement-logos/carpimko.svg': 'carpimko.svg',
+    };
+    const officialNames = {
+      'ag2r': 'ag2r.svg',
+      'ag2r la mondiale': 'ag2r.svg',
+      'agirc-arrco': 'agirc-arrco.png',
+      'agirc arrco': 'agirc-arrco.png',
+      'cipav': 'cipav.svg',
+      'la cipav': 'cipav.svg',
+      'carpimko': 'carpimko.svg',
+    };
+    final officialLogo = suppliedLogo.isEmpty
+        ? officialNames[fund.name.trim().toLowerCase()]
+        : officialLogos[Uri.tryParse(suppliedLogo)?.path];
+    final logoUrl = officialLogo != null
+        ? 'asset:web-assets/retirement-logos/$officialLogo'
+        : suppliedLogo.isEmpty
         ? _generatedFundLogoUrl(fund.name)
-        : fund.logoUrl;
-    return CachedRemoteImage(
+        : suppliedLogo;
+    final image = CachedRemoteImage(
       key: ValueKey(logoUrl),
       url: logoUrl,
       fit: BoxFit.contain,
       placeholder: fallback,
       errorWidget: fallback,
     );
+    // The official Cipav wordmark is white and needs a contrasting background.
+    if (officialLogo == 'cipav.svg') {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF65234C),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: image,
+      );
+    }
+    return image;
   }
 }
 

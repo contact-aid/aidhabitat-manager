@@ -838,6 +838,9 @@ const parseOccupantsJson = (rawValue) => {
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
+        ...(Object.hasOwn(entry, 'apaDetails') ? { apaDetails: stringValue(entry.apaDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'invalidityDetails') ? { invalidityDetails: stringValue(entry.invalidityDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'fiscalReferenceYear') ? { fiscalReferenceYear: stringValue(entry.fiscalReferenceYear).trim() } : {}),
         apa: Boolean(entry.apa),
         // GIR (Groupe Iso-Ressources) — sélectionné dans l'onglet
         // bénéficiaire quand `apa` est true. Doit être préservé sinon le
@@ -2558,7 +2561,8 @@ const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
   birthDateMme: field(beneficiaryRecord, 'date_naissance_madame') || null,
   occupant1BirthDate: field(beneficiaryRecord, 'date_naissance_monsieur') || null,
   occupant2BirthDate: field(beneficiaryRecord, 'date_naissance_madame') || null,
-  familySituation: refLabel(field(beneficiaryRecord, 'situation_proprietaire')),
+  familySituation: normalizeLabelForMatch(refLabel(field(beneficiaryRecord, 'situation_proprietaire'))).startsWith('pacs')
+    ? 'Pacsé' : refLabel(field(beneficiaryRecord, 'situation_proprietaire')),
   occupationStatus: normalizeOccupation(refLabel(field(beneficiaryRecord, 'statut_occupation'))),
   numberPeople: toNumber(field(beneficiaryRecord, 'nombre_personnes')),
   // This is derived data; do not manufacture a stored baseline.
@@ -4223,6 +4227,18 @@ const selectBaremeAnah = (records, householdSize) => {
   })[0];
 };
 
+let pacseReferenceCreation = null;
+const ensurePacseReference = async (updates, references) => {
+  if (!normalizeLabelForMatch(updates.familySituation).startsWith('pacs')) return;
+  if (references.situations.some(record => normalizeLabelForMatch(refLabel(record)).startsWith('pacs'))) return;
+  if (!pacseReferenceCreation) {
+    pacseReferenceCreation = createRecord(TABLES.situationProprietaire, { libelle: 'Pacsé' })
+      .finally(() => { pacseReferenceCreation = null; });
+  }
+  const record = await pacseReferenceCreation;
+  if (!references.situations.some(item => String(item.id) === String(record.id))) references.situations.push(record);
+};
+
 const mapBeneficiaryUpdatesToFields = (updates, references) => {
   const has = (key) => Object.prototype.hasOwnProperty.call(updates, key);
   const hasTrustedPerson = has('trustedPerson') && updates.trustedPerson && typeof updates.trustedPerson === 'object';
@@ -4241,7 +4257,9 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
   // desired patch and its baseline through this same function.
   const situationLabel = normalizeLabelForMatch(updates.familySituation) === 'concubinage'
     ? 'En concubinage' : updates.familySituation;
-  const situationMatch = findByLabel(references.situations, situationLabel);
+  const situationMatch = findByLabel(references.situations, situationLabel)
+    || (normalizeLabelForMatch(situationLabel).startsWith('pacs')
+      ? references.situations.find(record => normalizeLabelForMatch(refLabel(record)).startsWith('pacs')) : undefined);
   const normalizedOccupation = normalizeLabelForMatch(updates.occupationStatus);
   const occupationMatch = findByLabel(references.statuts, updates.occupationStatus === 'Usufruitier' ? 'Usufruitier(e)' : updates.occupationStatus)
     || (normalizedOccupation.startsWith('usufruitier')
@@ -4270,6 +4288,9 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
+        ...(Object.hasOwn(entry, 'apaDetails') ? { apaDetails: stringValue(entry.apaDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'invalidityDetails') ? { invalidityDetails: stringValue(entry.invalidityDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'fiscalReferenceYear') ? { fiscalReferenceYear: stringValue(entry.fiscalReferenceYear).trim() } : {}),
         apa: Boolean(entry.apa),
         // GIR (Groupe Iso-Ressources) — préservé pour le rapport PDF.
         // Sans cette ligne, le serveur dépouille `apaGir` lors du
@@ -7557,6 +7578,7 @@ app.post('/api/beneficiaires', requireAuth, async (req, res, next) => {
     const updates = req.body || {};
     const assignedErgoLabel = await resolveRequestedErgoLabel(req.appUser, updates.ergoId);
     const references = await loadBeneficiaryReferenceSets();
+    await ensurePacseReference(updates, references);
     const fields = mapBeneficiaryUpdatesToFields(updates, references);
     const relationFieldNames = [
       'situation_proprietaire_id1',
@@ -7702,6 +7724,7 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
     }
 
     assertCollectionMutationAllowed({ kind: 'patient', payload: updates });
+    await ensurePacseReference(updates, references);
     const storedOccupantsJson = field(beneficiaryRecord, 'occupants_json');
     const protectedUpdates = preserveLegacyOccupantGender(updates, storedOccupantsJson);
     const fields = mapBeneficiaryUpdatesToFields(protectedUpdates, references);

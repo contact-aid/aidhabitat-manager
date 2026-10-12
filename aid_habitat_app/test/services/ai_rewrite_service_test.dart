@@ -24,6 +24,97 @@ void main() {
         .setMockMethodCallHandler(nativeChannel, null);
   });
 
+  test('server inference requires opt-in and shares status probes', () async {
+    var requests = 0;
+    final service = AiRewriteService(
+      client: MockClient((request) async {
+        requests++;
+        expect(request.headers['X-App-Session'], 'session-test');
+        return http.Response(
+          jsonEncode({
+            'data': {'ready': true, 'webEnabled': true},
+          }),
+          200,
+        );
+      }),
+    );
+    final probes = await Future.wait(
+      List.generate(
+        5,
+        (_) => service.isServerRewriteAvailable(
+          apiBaseUrl: 'https://private.test',
+          sessionToken: 'session-test',
+        ),
+      ),
+    );
+    expect(probes, everyElement(isTrue));
+    expect(requests, 1);
+    expect(
+      await service.isServerRewriteAvailable(
+        apiBaseUrl: 'https://private.test',
+        sessionToken: 'session-test',
+      ),
+      isTrue,
+    );
+    expect(requests, 1);
+  });
+
+  test(
+    'an older ready server never enables browser note transmission',
+    () async {
+      final service = AiRewriteService(
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'data': {'ready': true},
+            }),
+            200,
+          ),
+        ),
+      );
+      expect(
+        await service.isServerRewriteAvailable(
+          apiBaseUrl: 'https://private.test',
+          sessionToken: 'session-test',
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('server availability is isolated between sessions', () async {
+    var requests = 0;
+    final service = AiRewriteService(
+      client: MockClient((request) async {
+        requests++;
+        return http.Response(
+          jsonEncode({
+            'data': {
+              'ready': request.headers['X-App-Session'] == 'first',
+              'webEnabled': true,
+            },
+          }),
+          200,
+        );
+      }),
+    );
+    expect(
+      await service.isServerRewriteAvailable(
+        apiBaseUrl: 'https://private.test',
+        sessionToken: 'first',
+      ),
+      isTrue,
+    );
+    expect(
+      await service.isServerRewriteAvailable(
+        apiBaseUrl: 'https://private.test',
+        sessionToken: 'second',
+      ),
+      isFalse,
+    );
+    expect(requests, 2);
+  });
+
   test('returns the rewritten note from the authenticated endpoint', () async {
     late http.Request capturedRequest;
     final service = AiRewriteService(

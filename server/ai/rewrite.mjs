@@ -1,12 +1,13 @@
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_MODEL = 'gemma3:4b';
+const DEFAULT_LLAMA_MODEL = 'Qwen3-4B-Instruct-2507-Q4_K_M.gguf';
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_KEEP_ALIVE = '0';
+const DEFAULT_KEEP_ALIVE = '10m';
 
 export const REWRITE_MODES = Object.freeze({
   professional: [
-    "Reformule cette note dans un français professionnel adapté à un rapport d'ergothérapie.",
-    'Améliore la clarté et la fluidité avec les modifications les plus petites possible.',
+    "Corrige les fautes et reformule les tournures incorrectes ou maladroites dans un français professionnel.",
+    'Conserve la structure et le vocabulaire précis de la note. Modifie seulement ce qui est nécessaire.',
   ].join(' '),
   concise: [
     "Reformule cette note dans un français professionnel adapté à un rapport d'ergothérapie.",
@@ -27,14 +28,21 @@ const positiveNumber = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-export const getRewriteConfig = (env = process.env) => ({
-  baseUrl: cleanBaseUrl(env.OLLAMA_BASE_URL),
-  model: String(env.OLLAMA_REWRITE_MODEL || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
-  timeoutMs: positiveNumber(env.OLLAMA_REWRITE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
-  keepAlive: String(
-    env.OLLAMA_REWRITE_KEEP_ALIVE ?? DEFAULT_KEEP_ALIVE,
-  ).trim() || DEFAULT_KEEP_ALIVE,
-});
+export const getRewriteConfig = (env = process.env) => {
+  const provider = env.AI_REWRITE_PROVIDER === 'llama.cpp' ? 'llama.cpp' : 'ollama';
+  return {
+    provider,
+    webEnabled: env.AI_REWRITE_WEB_ENABLED === 'true',
+    baseUrl: cleanBaseUrl(provider === 'llama.cpp'
+      ? (env.LLAMA_REWRITE_BASE_URL || 'http://127.0.0.1:8080')
+      : env.OLLAMA_BASE_URL),
+    model: provider === 'llama.cpp'
+      ? String(env.LLAMA_REWRITE_MODEL || DEFAULT_LLAMA_MODEL).trim() || DEFAULT_LLAMA_MODEL
+      : String(env.OLLAMA_REWRITE_MODEL || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
+    timeoutMs: positiveNumber(env.AI_REWRITE_TIMEOUT_MS || env.OLLAMA_REWRITE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
+    keepAlive: String(env.OLLAMA_REWRITE_KEEP_ALIVE ?? DEFAULT_KEEP_ALIVE).trim() || DEFAULT_KEEP_ALIVE,
+  };
+};
 
 export const normalizeRewriteMode = (value) => (
   Object.hasOwn(REWRITE_MODES, value) ? value : 'professional'
@@ -57,6 +65,7 @@ export const buildRewriteMessages = (text, mode = 'professional') => {
         "Si une formulation est ambiguë, conserve son sens sans la compléter.",
         "Réponds uniquement avec le texte final, sans titre, commentaire, guillemets ni mise en forme Markdown.",
         REWRITE_MODES[normalizedMode],
+        "Corrige les accords, conjugaisons, élisions et fautes d'orthographe, y compris dans les noms communs d'équipements.",
       ].join(' '),
     },
     {
@@ -94,7 +103,7 @@ export const findMissingProtectedFragments = (sourceText, rewrittenText) => {
   ));
 };
 
-const ollamaError = (message, statusCode = 503) => {
+const rewriteError = (message, statusCode = 503) => {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
@@ -110,9 +119,9 @@ const fetchWithTimeout = async (url, options, timeoutMs, fetchImpl) => {
     });
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw ollamaError("La reformulation locale a dépassé le délai d'attente.", 504);
+      throw rewriteError("La reformulation locale a dépassé le délai d'attente.", 504);
     }
-    throw ollamaError('Le service de reformulation locale est indisponible.');
+    throw rewriteError('Le service de reformulation locale est indisponible.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -124,7 +133,7 @@ export const getLocalAiStatus = async ({
 } = {}) => {
   try {
     const response = await fetchWithTimeout(
-      `${config.baseUrl}/api/tags`,
+      `${config.baseUrl}/${config.provider === 'llama.cpp' ? 'health' : 'api/tags'}`,
       { headers: { Accept: 'application/json' } },
       Math.min(config.timeoutMs, 5_000),
       fetchImpl,
@@ -139,13 +148,16 @@ export const getLocalAiStatus = async ({
 
     const payload = await response.json();
     const models = Array.isArray(payload?.models) ? payload.models : [];
-    const installed = models.some((entry) => (
-      entry?.name === config.model || entry?.model === config.model
-    ));
+    const installed = config.provider === 'llama.cpp'
+      ? payload?.status === 'ok'
+      : models.some((entry) => (
+        entry?.name === config.model || entry?.model === config.model
+      ));
     return {
       ready: installed,
       model: config.model,
       installed,
+      ...(config.webEnabled ? { webEnabled: true } : {}),
     };
   } catch {
     return {
@@ -162,15 +174,23 @@ export const rewriteNote = async ({
   fetchImpl = fetch,
   config = getRewriteConfig(),
 }) => {
+  const usesLlama = config.provider === 'llama.cpp';
   const response = await fetchWithTimeout(
-    `${config.baseUrl}/api/chat`,
+    `${config.baseUrl}/${usesLlama ? 'v1/chat/completions' : 'api/chat'}`,
     {
       method: 'POST',
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
+      body: JSON.stringify(usesLlama ? {
+        model: config.model,
+        stream: false,
+        messages: buildRewriteMessages(text, mode),
+        temperature: 0,
+        max_tokens: 2048,
+        chat_template_kwargs: { enable_thinking: false },
+      } : {
         model: config.model,
         stream: false,
         keep_alive: config.keepAlive ?? DEFAULT_KEEP_ALIVE,
@@ -188,20 +208,26 @@ export const rewriteNote = async ({
 
   if (!response.ok) {
     if (response.status === 404) {
-      throw ollamaError(`Le modèle local ${config.model} n'est pas installé.`);
+      throw rewriteError(`Le modèle local ${config.model} n'est pas installé.`);
     }
-    throw ollamaError('La reformulation locale a échoué.');
+    throw rewriteError('La reformulation locale a échoué.');
   }
 
   const payload = await response.json();
-  const rewrittenText = String(payload?.message?.content || '').trim();
+  if ((usesLlama && payload?.choices?.[0]?.finish_reason !== 'stop') ||
+      (!usesLlama && payload?.done_reason === 'length')) {
+    throw rewriteError("La proposition est incomplète. La note a été conservée.", 422);
+  }
+  const rewrittenText = String(usesLlama
+    ? payload?.choices?.[0]?.message?.content || ''
+    : payload?.message?.content || '').trim();
   if (!rewrittenText) {
-    throw ollamaError("Le modèle local n'a renvoyé aucun texte.");
+    throw rewriteError("Le modèle local n'a renvoyé aucun texte.");
   }
 
   const missingFragments = findMissingProtectedFragments(text, rewrittenText);
   if (missingFragments.length > 0) {
-    throw ollamaError(
+    throw rewriteError(
       "La proposition n'était pas assez fidèle à la note originale. La note a été conservée.",
       422,
     );

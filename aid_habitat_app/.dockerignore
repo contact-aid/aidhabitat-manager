@@ -29,4 +29,7 @@
 !tool/
 !tool/**
 
+# Dependencies are installed from lockfiles during the image build.
+**/node_modules/
+
 # (le `*` exclu tout, les `!xxx` ré-incluent ce qu'on veut)

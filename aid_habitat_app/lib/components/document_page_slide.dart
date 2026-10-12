@@ -165,11 +165,12 @@ class DocumentPageSlideState extends State<DocumentPageSlide>
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (neighbor != null && _offset != 0)
-                  Transform.translate(
-                    offset: Offset(_offset + (_offset > 0 ? -width : width), 0),
-                    child: IgnorePointer(child: neighbor),
-                  ),
+                // Keep both stack slots stable so starting/ending a slide
+                // does not detach the current page's image and canvas.
+                Transform.translate(
+                  offset: Offset(_offset + (_offset > 0 ? -width : width), 0),
+                  child: IgnorePointer(child: _offset != 0 ? neighbor : null),
+                ),
                 Transform.translate(
                   offset: Offset(_offset, 0),
                   child: widget.current,

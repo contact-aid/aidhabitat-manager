@@ -328,6 +328,10 @@ export const parseOccupantsJson = (rawValue) => {
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
+        ...(Object.hasOwn(entry, 'apaGir') ? { apaGir: stringValue(entry.apaGir).trim() } : {}),
+        ...(Object.hasOwn(entry, 'apaDetails') ? { apaDetails: stringValue(entry.apaDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'invalidityDetails') ? { invalidityDetails: stringValue(entry.invalidityDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'fiscalReferenceYear') ? { fiscalReferenceYear: stringValue(entry.fiscalReferenceYear).trim() } : {}),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),
@@ -1686,7 +1690,8 @@ export const mapPatient = (beneficiaryRecord, appBeneficiaryId) => ({
   birthDateMme: field(beneficiaryRecord, 'date_naissance_madame') || undefined,
   occupant1BirthDate: field(beneficiaryRecord, 'date_naissance_monsieur') || undefined,
   occupant2BirthDate: field(beneficiaryRecord, 'date_naissance_madame') || undefined,
-  familySituation: refLabel(field(beneficiaryRecord, 'situation_proprietaire')),
+  familySituation: normalizeLabelForMatch(refLabel(field(beneficiaryRecord, 'situation_proprietaire'))).startsWith('pacs')
+    ? 'Pacsé' : refLabel(field(beneficiaryRecord, 'situation_proprietaire')),
   occupationStatus: normalizeOccupation(refLabel(field(beneficiaryRecord, 'statut_occupation'))),
   numberPeople: toNumber(field(beneficiaryRecord, 'nombre_personnes')),
   incomeCategory: stringValue(field(beneficiaryRecord, 'categorie_revenu_calculee')),
@@ -2711,7 +2716,9 @@ export const mapBeneficiaryUpdatesToFields = (updates, references) => {
   const trustedPersonEmailValue = hasTrustedPerson && Object.prototype.hasOwnProperty.call(trustedPersonPayload, 'email')
     ? trustedPersonPayload?.email
     : (has('trustedEmail') ? updates.trustedEmail : undefined);
-  const situationMatch = findByLabel(references.situations, updates.familySituation);
+  const situationMatch = findByLabel(references.situations, updates.familySituation)
+    || (normalizeLabelForMatch(updates.familySituation).startsWith('pacs')
+      ? references.situations.find(record => normalizeLabelForMatch(refLabel(record)).startsWith('pacs')) : undefined);
   const normalizedOccupation = normalizeLabelForMatch(updates.occupationStatus);
   const occupationMatch = findByLabel(references.statuts, updates.occupationStatus === 'Usufruitier' ? 'Usufruitier(e)' : updates.occupationStatus)
     || (normalizedOccupation.startsWith('usufruitier')
@@ -2740,6 +2747,10 @@ export const mapBeneficiaryUpdatesToFields = (updates, references) => {
         ...(typeof entry.fiscalRevenue === 'number' && Number.isFinite(entry.fiscalRevenue)
           ? { fiscalRevenue: entry.fiscalRevenue } : {}),
         birthDate: stringValue(entry.birthDate).trim(),
+        ...(Object.hasOwn(entry, 'apaGir') ? { apaGir: stringValue(entry.apaGir).trim() } : {}),
+        ...(Object.hasOwn(entry, 'apaDetails') ? { apaDetails: stringValue(entry.apaDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'invalidityDetails') ? { invalidityDetails: stringValue(entry.invalidityDetails).trim() } : {}),
+        ...(Object.hasOwn(entry, 'fiscalReferenceYear') ? { fiscalReferenceYear: stringValue(entry.fiscalReferenceYear).trim() } : {}),
         apa: Boolean(entry.apa),
         invalidity: Boolean(entry.invalidity),
         invalidityTxt: stringValue(entry.invalidityTxt).trim(),

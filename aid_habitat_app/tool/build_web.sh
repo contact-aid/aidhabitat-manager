@@ -57,6 +57,9 @@ npm --prefix tool/local_ai ci --ignore-scripts --no-audit --no-fund
 npm --prefix tool/local_ai test
 npm --prefix tool/local_ai run build
 
+npm --prefix tool/local_voice ci --ignore-scripts --no-audit --no-fund
+npm --prefix tool/local_voice run build
+
 "$FLUTTER" build web --release --no-web-resources-cdn \
   --pwa-strategy=none \
   --dart-define=AIDHABITAT_API_BASE_URL="$API_BASE_URL"
