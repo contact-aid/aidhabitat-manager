@@ -2351,6 +2351,54 @@ class SyncRepository {
 
   /// Réinitialise UNE op à `pending` (attempt_count=0, last_error=null).
   /// Renvoie le nombre de lignes modifiées (0 ou 1).
+  Future<bool> retryOriginalOccupantConflict({
+    required String operationId,
+    required String expectedPayloadJson,
+  }) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        where: "id = ? AND entity_type = 'patient' AND status = 'conflict'",
+        whereArgs: [operationId],
+      );
+      if (rows.length != 1) return false;
+      final raw = await OfflineVault.instance.openString(
+        rows.single['payload_json'] as String,
+      );
+      if (raw != expectedPayloadJson ||
+          !canRetryOriginalOccupantConflict(
+            jsonDecode(raw) as Map<String, dynamic>,
+          )) {
+        return false;
+      }
+      await txn.update(
+        'sync_operations',
+        {
+          'status': 'pending',
+          'attempt_count': 0,
+          'last_error': null,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: "id = ? AND status = 'conflict'",
+        whereArgs: [operationId],
+      );
+      if (_enforceOwnership &&
+          !await SyncOperationOwnership.mayClaim(txn, operationId)) {
+        throw StateError('Reconnectez le compte auteur de cette saisie.');
+      }
+      await _updateEntitySyncState(
+        db: txn,
+        entityType: 'patient',
+        entityLocalId: rows.single['entity_local_id'] as String,
+        syncState: SyncState.pendingSync,
+      );
+      // Keep the original baseline, write ID, bytes and ownership. The server
+      // must compare again; this action grants no permission to overwrite.
+      return true;
+    });
+  }
+
   Future<int> resetSingleOperationToPending(String operationId) async {
     final db = await _database.database;
     return db.update(

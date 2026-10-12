@@ -265,6 +265,23 @@ class _AiRewritePreviewDialogState extends State<AiRewritePreviewDialog> {
                 'Relisez et ajustez la proposition avant de remplacer votre note.',
                 style: TextStyle(fontSize: 14, color: Color(0xFF5C6670)),
               ),
+              if (!_generating &&
+                  _error == null &&
+                  _proposalController.text.trim() == widget.originalText.trim())
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        "L’IA n’a proposé aucune modification.",
+                        style: TextStyle(color: Color(0xFF5C6670)),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _generate,
+                      child: const Text('Réessayer'),
+                    ),
+                  ],
+                ),
               const SizedBox(height: 18),
               Expanded(
                 child: LayoutBuilder(

@@ -23,6 +23,21 @@ const structuredColumns = new Set(['sdb_instances_json', 'wc_instances_json', 'o
 const levelDescriptions = new Set(['description_sous_sol', 'description_rdc', 'description_etage']);
 const presetRooms = new Set(['Salle de bain', 'WC', 'Garage', 'Buanderie', 'Cuisine', 'Chambre', 'Salon', 'Bureau']);
 
+// These defaults are exposed by the occupant form. They are not data edits.
+// Keep real numbers, non-empty details, unknown keys and roster order exact.
+export function canonicalOccupantValues(value) {
+  if (!Array.isArray(value)) return value;
+  return value.map((person) => {
+    if (!person || typeof person !== 'object' || Array.isArray(person)) return person;
+    const result = { ...person };
+    for (const key of ['apaGir', 'apaDetails', 'invalidityDetails', 'fiscalReferenceYear']) {
+      if (result[key] == null) result[key] = '';
+    }
+    if (result.fiscalRevenue == null) delete result.fiscalRevenue;
+    return result;
+  });
+}
+
 function sameRoomBreakdown(a, b) {
   try {
     const left = JSON.parse(a);
@@ -136,7 +151,9 @@ export function createDatabaseValueComparator(columns = []) {
       try {
         const left = JSON.parse(a);
         const right = JSON.parse(b);
-        return Array.isArray(left) && Array.isArray(right) && isDeepStrictEqual(left, right);
+        return Array.isArray(left) && Array.isArray(right) && isDeepStrictEqual(
+          key === 'occupants_json' ? canonicalOccupantValues(left) : left,
+          key === 'occupants_json' ? canonicalOccupantValues(right) : right);
       } catch { return false; }
     }
     if (key === 'rooms_breakdown_json' && typeof a === 'string' && typeof b === 'string') {

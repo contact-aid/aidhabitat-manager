@@ -74,3 +74,14 @@ test('level rooms ignore display order but retain counts and distinct text', () 
   assert(!equals('description_sous_sol', 'WC, Salle de bain ²', 'WC, Salle de bain'));
   assert(!equals('description_sous_sol', 'entrée, sortie', 'sortie, entrée'));
 });
+
+test('occupant defaults are equivalent but actual health edits and roster changes stay distinct', () => {
+  const equals = createDatabaseValueComparator([]);
+  const person = { firstName: 'Anne', lastName: 'Fictif', apa: false };
+  const projected = { ...person, fiscalRevenue: null, apaGir: '', apaDetails: '', invalidityDetails: '', fiscalReferenceYear: '' };
+  assert(equals('occupants_json', JSON.stringify([person]), JSON.stringify([projected])));
+  for (const change of [{ apa: true }, { fiscalRevenue: 0 }, { apaDetails: 'Information saisie' }, { fiscalReferenceYear: '2026' }]) {
+    assert(!equals('occupants_json', JSON.stringify([person]), JSON.stringify([{ ...projected, ...change }])));
+  }
+  assert(!equals('occupants_json', JSON.stringify([person]), JSON.stringify([projected, projected])));
+});

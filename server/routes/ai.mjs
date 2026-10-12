@@ -64,6 +64,7 @@ router.post('/api/ai/rewrite', requireAuth, async (req, res, next) => {
     const result = await rewriteNote({
       text,
       mode: normalizeRewriteMode(req.body?.mode),
+      context: req.body?.context,
     });
     res.json({
       success: true,

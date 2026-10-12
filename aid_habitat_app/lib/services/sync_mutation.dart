@@ -245,6 +245,110 @@ Map<String, dynamic>? rebaseAcknowledgedNoteMutation({
   };
 }
 
+Object? canonicalOccupantValues(Object? value) {
+  if (value is String) {
+    try {
+      value = jsonDecode(value);
+    } catch (_) {
+      return value;
+    }
+  }
+  if (value is! List) return value;
+  return value.map((person) {
+    if (person is! Map) return person;
+    final result = Map<Object?, Object?>.of(person);
+    for (final key in [
+      'apaGir',
+      'apaDetails',
+      'invalidityDetails',
+      'fiscalReferenceYear',
+    ]) {
+      result[key] ??= '';
+    }
+    if (result['fiscalRevenue'] == null) result.remove('fiscalRevenue');
+    return result;
+  }).toList();
+}
+
+bool equivalentSyncField(String key, Object? left, Object? right) => _equalJson(
+  key == 'occupants' || key == 'occupants_json'
+      ? canonicalOccupantValues(left)
+      : left,
+  key == 'occupants' || key == 'occupants_json'
+      ? canonicalOccupantValues(right)
+      : right,
+);
+
+bool canRetryOriginalOccupantConflict(Map<String, dynamic> payload) {
+  final guard = payload['concurrency'];
+  final conflict = payload['conflict'];
+  final remote = conflict is Map ? conflict['remote'] : null;
+  return payload['updates'] is Map &&
+      (payload['updates'] as Map).containsKey('occupants') &&
+      guard is Map &&
+      guard['version'] == 1 &&
+      guard['collectionContract'] == 'collections-v2' &&
+      guard['baseValues'] is Map &&
+      (guard['baseValues'] as Map).containsKey('occupants') &&
+      guard['writeId'] is String &&
+      conflict is Map &&
+      conflict['code'] != 'LOCAL_EDIT_BASE_CHANGED' &&
+      remote is Map &&
+      const {
+        'SYNC_FIELD_CONFLICT',
+        'SYNC_REMOTE_VALUES_REQUIRE_REVIEW',
+      }.contains(remote['error']);
+}
+
+List<({String label, Object? local, Object? remote})>?
+occupantConflictDifferences(Object? local, Object? remote) {
+  final left = canonicalOccupantValues(local);
+  final right = canonicalOccupantValues(remote);
+  if (left is! List || right is! List || left.length != right.length) {
+    return null;
+  }
+  String identity(Map person) => jsonEncode([
+    person['firstName'] ?? '',
+    person['lastName'] ?? '',
+    person['birthDate'] ?? '',
+  ]);
+  final identities = <String>{};
+  final result = <({String label, Object? local, Object? remote})>[];
+  const labels = {
+    'apa': 'APA',
+    'apaGir': 'GIR',
+    'apaDetails': 'Détails APA',
+    'invalidity': 'Reconnaissance d’invalidité',
+    'invalidityTxt': 'Taux d’invalidité',
+    'invalidityDetails': 'Détails invalidité',
+    'fiscalReferenceYear': 'Année fiscale',
+    'fiscalRevenue': 'Revenu fiscal',
+    'homeHelp': 'Aide à domicile',
+    'homeHelpTxt': 'Détails aide à domicile',
+  };
+  for (var index = 0; index < left.length; index++) {
+    final a = left[index], b = right[index];
+    if (a is! Map ||
+        b is! Map ||
+        identity(a) != identity(b) ||
+        !identities.add(identity(a)) ||
+        '${a['firstName'] ?? ''}${a['lastName'] ?? ''}'.trim().isEmpty) {
+      return null;
+    }
+    final name = '${a['firstName'] ?? ''} ${a['lastName'] ?? ''}'.trim();
+    for (final key in {...a.keys, ...b.keys}) {
+      if (!_equalJson(a[key], b[key])) {
+        result.add((
+          label: '$name · ${labels[key] ?? key}',
+          local: a[key],
+          remote: b[key],
+        ));
+      }
+    }
+  }
+  return result;
+}
+
 class SyncMergePlan {
   const SyncMergePlan({required this.updates, required this.conflictingFields});
 
@@ -269,15 +373,15 @@ SyncMergePlan planSyncMerge({
     final key = entry.key;
     if (!remoteValues.containsKey(key)) {
       conflicts.add(key);
-    } else if (_equalJson(remoteValues[key], entry.value)) {
+    } else if (equivalentSyncField(key, remoteValues[key], entry.value)) {
       // Already applied (e.g. a successful request whose response was lost).
       continue;
     } else if (!baseValues.containsKey(key)) {
       conflicts.add(key);
-    } else if (_equalJson(baseValues[key], entry.value)) {
+    } else if (equivalentSyncField(key, baseValues[key], entry.value)) {
       // The local edit was undone; retain the remote change.
       continue;
-    } else if (_equalJson(baseValues[key], remoteValues[key])) {
+    } else if (equivalentSyncField(key, baseValues[key], remoteValues[key])) {
       patch[key] = entry.value;
     } else {
       conflicts.add(key);

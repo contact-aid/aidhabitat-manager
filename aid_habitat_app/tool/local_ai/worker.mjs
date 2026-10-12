@@ -53,7 +53,7 @@ async function load(downloads, id) {
   finally { allowDownloads = false; }
 }
 self.onmessage = async ({data}) => {
-  const {id, method, text, mode} = data;
+  const {id, method, text, mode, context} = data;
   if (method === 'status') {
     try { self.postMessage({id, result: await status()}); }
     catch (_) { self.postMessage({id, result: {supported: false, installed: false}}); }
@@ -80,7 +80,7 @@ self.onmessage = async ({data}) => {
       await load(false, id);
       phase = 'rewrite';
       try {
-        const prompt = instructions(mode);
+        const prompt = instructions(mode, context);
         let parts = [text];
         if (segmented) {
           // These fields are pinned to WebLLM 0.2.85. An unavailable tokenizer

@@ -1,3 +1,4 @@
+import '../services/ai_rewrite_context.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -2383,6 +2384,7 @@ class _NotesWidgetState extends State<NotesWidget> {
         initialText: _textController.text,
         placeholder: widget.placeholder,
         title: widget.title,
+        rewriteContext: aiRewriteContextForTab(widget.tabKey),
         startFullscreen: widget.expandModalFullscreen,
         onChanged: (value) {
           if (_textController.text == value) return;
@@ -2666,6 +2668,7 @@ class _NotesWidgetState extends State<NotesWidget> {
               child: _AiRewriteButton(
                 controller: _textController,
                 focusNode: _textFocusNode,
+                context: aiRewriteContextForTab(widget.tabKey),
               ),
             ),
           ],
@@ -3151,6 +3154,7 @@ class _NotesWidgetState extends State<NotesWidget> {
           child: _AiRewriteButton(
             controller: _textController,
             focusNode: _textFocusNode,
+            context: aiRewriteContextForTab(widget.tabKey),
           ),
         ),
       ],
@@ -4110,10 +4114,15 @@ class _NotesWidgetState extends State<NotesWidget> {
 // =============================================================================
 
 class _AiRewriteButton extends StatefulWidget {
-  const _AiRewriteButton({required this.controller, required this.focusNode});
+  const _AiRewriteButton({
+    required this.controller,
+    required this.focusNode,
+    required this.context,
+  });
 
   final TextEditingController controller;
   final FocusNode focusNode;
+  final String context;
 
   @override
   State<_AiRewriteButton> createState() => _AiRewriteButtonState();
@@ -4203,6 +4212,7 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
             }
             final result = await AiRewriteService.instance.rewrite(
               text: originalText,
+              context: widget.context,
             );
             if (widget.controller.text != originalText) {
               throw Exception(
@@ -4363,6 +4373,7 @@ class _FloatingTextModal extends StatefulWidget {
     required this.title,
     required this.onChanged,
     required this.onClose,
+    required this.rewriteContext,
     this.startFullscreen = false,
   });
 
@@ -4371,6 +4382,7 @@ class _FloatingTextModal extends StatefulWidget {
   final String title;
   final ValueChanged<String> onChanged;
   final VoidCallback onClose;
+  final String rewriteContext;
 
   /// Si true, le modal s'ouvre directement en pleine largeur (rect
   /// `(12, 12, screen.width - 24, screen.height - 24)`). Le bouton
@@ -4553,6 +4565,7 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
                               _AiRewriteButton(
                                 controller: _controller,
                                 focusNode: _focusNode,
+                                context: widget.rewriteContext,
                               ),
                               const SizedBox(width: 4),
                               IconButton(

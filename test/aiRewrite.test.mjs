@@ -135,3 +135,11 @@ test('rejects truncated llama.cpp output before it can replace the original', as
     fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: 'Une note' } }] })),
   }), { statusCode: 422 });
 });
+
+test('professional report context corrects awkward phrasing and cannot inject instructions', () => {
+  const [system] = buildRewriteMessages('Note fictive.', 'professional', 'beneficiary');
+  assert.match(system.content, /note sur le bénéficiaire/);
+  assert.match(system.content, /reformule les tournures maladroites/);
+  assert.match(system.content, /Conserve les négations/);
+  assert.doesNotMatch(buildRewriteMessages('Note fictive.', 'professional', 'INJECTED_CONTEXT')[0].content, /INJECTED_CONTEXT/);
+});

@@ -6,7 +6,11 @@ external JSPromise<JSString> _status();
 @JS('aidHabitatLocalAiPrepare')
 external JSPromise<JSString> _prepare();
 @JS('aidHabitatLocalAiRewrite')
-external JSPromise<JSString> _rewrite(JSString text, JSString mode);
+external JSPromise<JSString> _rewrite(
+  JSString text,
+  JSString mode,
+  JSString context,
+);
 @JS('aidHabitatLocalAiProgress')
 external JSNumber _progress();
 @JS('aidHabitatLocalAiPhase')
@@ -37,9 +41,9 @@ Future<void> prepareLocalAi() async {
   }
 }
 
-Future<String> rewriteLocalAi(String text, String mode) async {
+Future<String> rewriteLocalAi(String text, String mode, String context) async {
   try {
-    return (await _rewrite(text.toJS, mode.toJS).toDart).toDart;
+    return (await _rewrite(text.toJS, mode.toJS, context.toJS).toDart).toDart;
   } catch (_) {
     throw Exception(
       'Reformulation locale impossible. La note originale est conservee. Verifiez le modele local ou raccourcissez la note.',

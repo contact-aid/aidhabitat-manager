@@ -1387,6 +1387,15 @@ class DataService {
     return reviews;
   }
 
+  Future<bool> retryOriginalOccupantConflict(SyncConflictReview review) async {
+    final queued = await _syncRepository.retryOriginalOccupantConflict(
+      operationId: review.operationId,
+      expectedPayloadJson: review.payloadJson,
+    );
+    if (queued) SyncEngine().notify();
+    return queued;
+  }
+
   Future<void> resolveReviewedConflict(
     SyncConflictReview review, {
     required bool keepLocal,
