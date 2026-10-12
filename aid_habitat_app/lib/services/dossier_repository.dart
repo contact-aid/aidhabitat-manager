@@ -28,6 +28,8 @@ class SyncConflictReview {
     required this.table,
     required this.remoteExists,
     this.contextReferenceJson,
+    this.recommendationsRevision,
+    this.recommendationsLocalJson,
   });
 
   final String operationId;
@@ -47,6 +49,8 @@ class SyncConflictReview {
   final String table;
   final bool remoteExists;
   final String? contextReferenceJson;
+  final String? recommendationsRevision;
+  final String? recommendationsLocalJson;
 }
 
 class DossierRepository {
@@ -406,6 +410,80 @@ class DossierRepository {
     });
   }
 
+  /// Read-only comparison for both legacy and versioned publications.
+  /// Capture the current row as well as the queue, so a form edit invalidates
+  /// the review even when a wiki follow-up uses a separate operation id.
+  Future<List<SyncConflictReview>> reviewVisitRecommendationsConflict(
+    String dossierId,
+    Map<String, dynamic> snapshot,
+  ) async {
+    final exists = snapshot['snapshotExists'];
+    final revision = snapshot['revision']?.toString();
+    final remoteItems = snapshot['items'];
+    if (exists is! bool ||
+        remoteItems is! List ||
+        remoteItems.any((item) => item is! Map) ||
+        (exists
+            ? revision == null ||
+                  !RegExp(
+                    r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+                    caseSensitive: false,
+                  ).hasMatch(revision)
+            : revision != null || remoteItems.isNotEmpty)) {
+      throw StateError('Version distante des préconisations indisponible.');
+    }
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'visit_recommendations',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+      );
+      final operations = await txn.query(
+        'sync_operations',
+        where:
+            "entity_type = 'visit_recommendations' AND entity_local_id = ? AND status = 'conflict'",
+        whereArgs: [dossierId],
+      );
+      if (operations.isEmpty) return <SyncConflictReview>[];
+      if (rows.length != 1 || operations.length != 1) {
+        throw StateError(
+          'Plusieurs modifications attendent sur les préconisations.',
+        );
+      }
+      final localJson = rows.single['items_json'] as String;
+      final localItems = (jsonDecode(localJson) as List)
+          .map((item) => (item as Map).cast<String, dynamic>())
+          .toList();
+      final merged = mergePublishedRecommendationsWithLocalDrafts(
+        remotePublishedItems: remoteItems
+            .map((item) => (item as Map).cast<String, dynamic>())
+            .toList(),
+        localItems: localItems,
+      );
+      final op = operations.single;
+      return [
+        SyncConflictReview._(
+          operationId: op['id'] as String,
+          entityType: 'visit_recommendations',
+          entityLocalId: dossierId,
+          payloadJson: await OfflineVault.instance.openString(
+            op['payload_json'] as String,
+          ),
+          remoteUpdatedAt: snapshot['updatedAt']?.toString(),
+          localValues: {'items': localItems},
+          remoteValues: {'items': remoteItems},
+          remoteColumns: {'items_json': jsonEncode(merged)},
+          localRowId: rows.single['local_id'] as String,
+          table: 'visit_recommendations',
+          remoteExists: exists,
+          recommendationsRevision: revision,
+          recommendationsLocalJson: localJson,
+        ),
+      ];
+    });
+  }
+
   Future<void> resolveReviewedConflict(
     SyncConflictReview review, {
     required bool keepLocal,
@@ -445,6 +523,17 @@ class DossierRepository {
       if (others.isNotEmpty) {
         throw StateError('Une autre modification attend sur cette fiche.');
       }
+      if (review.entityType == 'visit_recommendations') {
+        final local = await txn.query(
+          'visit_recommendations',
+          where: 'local_id = ?',
+          whereArgs: [review.localRowId],
+        );
+        if (local.length != 1 ||
+            local.single['items_json'] != review.recommendationsLocalJson) {
+          throw StateError('La saisie a changé. Rechargez la comparaison.');
+        }
+      }
       if (!review.remoteExists && !keepLocal) {
         throw StateError('Aucune fiche serveur ne peut etre restauree.');
       }
@@ -458,11 +547,77 @@ class DossierRepository {
           jsonEncode({
             'mutation': jsonDecode(review.payloadJson),
             'remoteValues': review.remoteValues,
+            if (review.entityType == 'visit_recommendations') ...{
+              'localValues': review.localValues,
+              'remoteRevision': review.recommendationsRevision,
+            },
             'remoteUpdatedAt': review.remoteUpdatedAt,
           }),
         ),
         'created_at': now,
       });
+      if (review.entityType == 'visit_recommendations') {
+        final localItems = (review.localValues['items'] as List)
+            .map((item) => (item as Map).cast<String, dynamic>())
+            .toList();
+        final plan = planVisitRecommendationsPublication(
+          items: localItems,
+          hadPublishedItems: true,
+          hasPendingPublication: true,
+          remoteSnapshotExists: review.remoteExists,
+          remoteRevision: review.recommendationsRevision,
+          writeId: newSyncWriteId(),
+        );
+        final payload = {
+          'dossierId': review.entityLocalId,
+          'items': plan.publishedItems,
+          'updates': {'items': plan.publishedItems},
+          'envelope': plan.envelope,
+        };
+        await txn.update(
+          'sync_operations',
+          {
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+            'status': keepLocal ? 'pending' : 'completed',
+            'last_error': null,
+            'attempt_count': 0,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [review.operationId],
+        );
+        final chosen = keepLocal
+            ? localItems
+            : (jsonDecode(review.remoteColumns['items_json'] as String)
+                  as List);
+        await txn.update(
+          'visit_recommendations',
+          {
+            if (!keepLocal) ...review.remoteColumns,
+            'remote_revision': review.recommendationsRevision,
+            'remote_snapshot_exists': review.remoteExists ? 1 : 0,
+            'updated_at': now,
+            'sync_state':
+                keepLocal ||
+                    chosen.any(
+                      (item) =>
+                          (item['wikiItemId']?.toString() ?? '')
+                              .trim()
+                              .isEmpty ||
+                          (item['wikiItemId']?.toString() ?? '').startsWith(
+                            'local_draft_',
+                          ),
+                    )
+                ? 'pendingSync'
+                : 'synced',
+          },
+          where: 'local_id = ?',
+          whereArgs: [review.localRowId],
+        );
+        return;
+      }
       final payload = jsonDecode(review.payloadJson) as Map<String, dynamic>;
       payload.remove('conflict');
       payload.remove('localReference');
@@ -4352,6 +4507,14 @@ class DossierRepository {
       );
       if (localAt == null || localAt.isAtSameMomentAs(remoteAt)) return false;
       final op = operations.single;
+      final queued =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  op['payload_json'] as String,
+                ),
+              )
+              as Map;
+      if (queued['envelope'] is! Map) return false;
       final now = DateTime.now().toIso8601String();
       if (localAt.isAfter(remoteAt)) {
         final payload =

@@ -164,13 +164,23 @@ bool _payloadReferences(Map<String, dynamic> payload, String wikiItemId) {
   return false;
 }
 
-Map<String, dynamic> _legacyPublicationPayload({
+Map<String, dynamic> _publicationPayload({
   required String dossierId,
   required List<Map<String, dynamic>> items,
   required String writeId,
+  required Map<String, dynamic> row,
 }) {
+  final plan = planVisitRecommendationsPublication(
+    items: items,
+    hadPublishedItems: true,
+    hasPendingPublication: true,
+    remoteSnapshotExists: row['remote_snapshot_exists'] == 1,
+    remoteRevision: row['remote_revision'] as String?,
+    writeId: writeId,
+  );
   return <String, dynamic>{
     'dossierId': dossierId,
+    'envelope': plan.envelope,
     'updates': <String, dynamic>{'items': items},
     'items': items,
     'mutationOrigin': SyncMutationOrigin.dataMigration.wireName,
@@ -308,10 +318,11 @@ remapVisitRecommendationReferencesInTransaction(
 
     if (!hasDurableFollowUp) {
       final writeId = nextWriteId();
-      final payload = _legacyPublicationPayload(
+      final payload = _publicationPayload(
         dossierId: dossierId,
         items: _publishableItems(remap.items),
         writeId: writeId,
+        row: row,
       );
       await txn.insert('sync_operations', {
         'id': 'visitrec_update_${dossierId}_wiki_$writeId',
