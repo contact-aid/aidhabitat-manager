@@ -662,6 +662,17 @@ class _WikiItemDialogState extends State<_WikiItemDialog> {
     setState(() => _descCtrls.add(TextEditingController()));
   }
 
+  void _removeDescription(int index) {
+    if (_descCtrls.length == 1) {
+      _descCtrls.single.clear();
+      return;
+    }
+    late TextEditingController removed;
+    setState(() => removed = _descCtrls.removeAt(index));
+    // The TextField releases its controller at the next rebuild.
+    WidgetsBinding.instance.addPostFrameCallback((_) => removed.dispose());
+  }
+
   void _moveDescription(int fromIndex, int toIndex) {
     if (fromIndex < 0 ||
         fromIndex >= _descCtrls.length ||
@@ -916,26 +927,47 @@ class _WikiItemDialogState extends State<_WikiItemDialog> {
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.center,
                                                 children: [
-                                                  AnimatedSize(
-                                                    duration: kSoftMedium,
-                                                    curve: kSoftCurve,
-                                                    child:
-                                                        hasMultipleDescriptions
-                                                        ? ReorderableDragStartListener(
+                                                  SizedBox(
+                                                    width: 20,
+                                                    child: Column(
+                                                      mainAxisSize:
+                                                          MainAxisSize.min,
+                                                      children: [
+                                                        if (hasMultipleDescriptions)
+                                                          ReorderableDragStartListener(
                                                             index: i,
                                                             child:
                                                                 const _DescriptionDragHandle(),
-                                                          )
-                                                        : const SizedBox.shrink(),
+                                                          ),
+                                                        IconButton(
+                                                          onPressed: () =>
+                                                              _removeDescription(
+                                                                i,
+                                                              ),
+                                                          tooltip:
+                                                              'Supprimer la description',
+                                                          icon: const Icon(
+                                                            Icons.remove,
+                                                            size: 16,
+                                                          ),
+                                                          color: const Color(
+                                                            0xFFDC2626,
+                                                          ),
+                                                          padding:
+                                                              EdgeInsets.zero,
+                                                          constraints:
+                                                              const BoxConstraints.tightFor(
+                                                                width: 20,
+                                                                height: 28,
+                                                              ),
+                                                          visualDensity:
+                                                              VisualDensity
+                                                                  .compact,
+                                                        ),
+                                                      ],
+                                                    ),
                                                   ),
-                                                  AnimatedContainer(
-                                                    duration: kSoftMedium,
-                                                    curve: kSoftCurve,
-                                                    width:
-                                                        hasMultipleDescriptions
-                                                        ? 8
-                                                        : 0,
-                                                  ),
+                                                  const SizedBox(width: 4),
                                                   Expanded(
                                                     child: MouseRegion(
                                                       cursor: SystemMouseCursors
@@ -1092,23 +1124,23 @@ class _DescriptionDragHandle extends StatelessWidget {
       child: Tooltip(
         message: 'Déplacer la description',
         child: SizedBox(
-          width: 22,
-          height: 64,
+          width: 18,
+          height: 28,
           child: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 16,
+                  width: 12,
                   height: 2,
                   decoration: BoxDecoration(
                     color: const Color(0xFF8A939D),
                     borderRadius: BorderRadius.circular(999),
                   ),
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 3),
                 Container(
-                  width: 16,
+                  width: 12,
                   height: 2,
                   decoration: BoxDecoration(
                     color: const Color(0xFF8A939D),
@@ -2056,7 +2088,7 @@ class _WikiCardState extends State<_WikiCard> {
               // ---------- Text content ----------
               // Anatomie identique aux cartes Caisses :
               //   • titre
-              //   • info (date d'ajout/modif uppercase)
+              //   • info (date d'ajout/modification discrète)
               //   • widget (pastille avec le tag primaire)
               Expanded(
                 child: Padding(
@@ -2076,17 +2108,15 @@ class _WikiCardState extends State<_WikiCard> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      // Date d'ajout / modification — format uppercase,
-                      // identique aux cartes Caisses de retraite.
+                      // Date d'ajout / modification, discrète sous le titre.
                       Text(
-                        _wikiDateLabel(item).toUpperCase(),
+                        _wikiDateLabel(item).toLowerCase(),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF8A939D),
-                          letterSpacing: 1.2,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w400,
+                          color: Color(0xFF9CA3AF),
                         ),
                       ),
                       const Spacer(),
