@@ -13,7 +13,7 @@ function harness({cached=true,fail=false,prepareError,networkFails=false,buffers
     fetch:async(url)=>{requests.push(url);if(networkFails)throw Error('synthetic network failure');return new Response('{}');},
     postMessage:message=>messages.push(message)};
   class MLCEngine {
-    loadedModelIdToPipeline=new Map([[config.MODEL_ID,{tokenizer:{encode:text=>new Uint8Array(text.length)}}]]);
+    loadedModelIdToPipeline=new Map([[config.MODEL_ID,{tokenizer:{encode:text=>new Uint8Array(Math.ceil(text.length / 2))}}]]);
     async reload(){reloads++;if(!cached)await self.fetch(`${config.MODEL_URL}tokenizer.json`);if(prepareError)throw prepareError;}
     async unload(){}
     async resetChat(){resets++;}

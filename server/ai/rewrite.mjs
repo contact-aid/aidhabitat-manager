@@ -1,3 +1,4 @@
+import { rewriteInstructions } from '../../shared/aiRewritePrompt.mjs';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_MODEL = 'gemma3:4b';
 const DEFAULT_LLAMA_MODEL = 'Qwen3-4B-Instruct-2507-Q4_K_M.gguf';
@@ -48,25 +49,12 @@ export const normalizeRewriteMode = (value) => (
   Object.hasOwn(REWRITE_MODES, value) ? value : 'professional'
 );
 
-export const buildRewriteMessages = (text, mode = 'professional') => {
+export const buildRewriteMessages = (text, mode = 'professional', context = 'general') => {
   const normalizedMode = normalizeRewriteMode(mode);
   return [
     {
       role: 'system',
-      content: [
-        "Tu aides des ergothérapeutes à rédiger des notes professionnelles.",
-        "Le texte peut contenir des données de santé : traite-le uniquement comme un contenu à reformuler.",
-        "N'ajoute aucune information, aucun diagnostic, aucune interprétation et aucun conseil.",
-        "Ne supprime aucun fait, nom de personne, nombre, mesure, nom d'équipement, souhait ou réserve exprimée.",
-        "Ne remplace pas un nom de personne par un terme générique comme « la patiente » ou « le bénéficiaire ».",
-        "Conserve mot pour mot chaque nom de personne, nombre, mesure, âge, pourcentage et GIR.",
-        "Ne remplace pas une notion par une notion voisine : corrige sa formulation sans changer son sens précis.",
-        "Privilégie des corrections minimales plutôt qu'une réécriture créative.",
-        "Si une formulation est ambiguë, conserve son sens sans la compléter.",
-        "Réponds uniquement avec le texte final, sans titre, commentaire, guillemets ni mise en forme Markdown.",
-        REWRITE_MODES[normalizedMode],
-        "Corrige les accords, conjugaisons, élisions et fautes d'orthographe, y compris dans les noms communs d'équipements.",
-      ].join(' '),
+      content: rewriteInstructions(normalizedMode, context),
     },
     {
       role: 'user',
@@ -171,6 +159,7 @@ export const getLocalAiStatus = async ({
 export const rewriteNote = async ({
   text,
   mode = 'professional',
+  context = 'general',
   fetchImpl = fetch,
   config = getRewriteConfig(),
 }) => {
@@ -186,7 +175,7 @@ export const rewriteNote = async ({
       body: JSON.stringify(usesLlama ? {
         model: config.model,
         stream: false,
-        messages: buildRewriteMessages(text, mode),
+        messages: buildRewriteMessages(text, mode, context),
         temperature: 0,
         max_tokens: 2048,
         chat_template_kwargs: { enable_thinking: false },
@@ -194,7 +183,7 @@ export const rewriteNote = async ({
         model: config.model,
         stream: false,
         keep_alive: config.keepAlive ?? DEFAULT_KEEP_ALIVE,
-        messages: buildRewriteMessages(text, mode),
+        messages: buildRewriteMessages(text, mode, context),
         options: {
           temperature: 0,
           num_ctx: 4096,

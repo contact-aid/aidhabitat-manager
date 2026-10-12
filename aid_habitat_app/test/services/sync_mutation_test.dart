@@ -4,6 +4,55 @@ import 'package:aid_habitat_app/services/sync_mutation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('occupant defaults do not block a real APA edit', () {
+    final original = {'firstName': 'Anne', 'lastName': 'Fictif', 'apa': false};
+    final projected = {
+      ...original,
+      'apaGir': '',
+      'apaDetails': '',
+      'invalidityDetails': '',
+      'fiscalReferenceYear': '',
+      'fiscalRevenue': null,
+    };
+    final changed = {...projected, 'apa': true};
+    final plan = planSyncMerge(
+      baseValues: {
+        'occupants': [projected],
+      },
+      updates: {
+        'occupants': [changed],
+      },
+      remoteValues: {
+        'occupants': [original],
+      },
+    );
+    expect(plan.canApplyAutomatically, isTrue);
+    expect(plan.updates['occupants'], [changed]);
+    expect(equivalentSyncField('occupants', [projected], [original]), isTrue);
+    expect(
+      equivalentSyncField(
+        'occupants',
+        [projected],
+        [
+          {...original, 'fiscalRevenue': 0},
+        ],
+      ),
+      isFalse,
+    );
+    final differences = occupantConflictDifferences([changed], [original])!;
+    expect(differences.length, 1);
+    expect(differences.single.label, 'Anne Fictif · APA');
+    expect(differences.single.local, isTrue);
+    expect(differences.single.remote, isFalse);
+  });
+
+  test('ambiguous and reordered occupants are never compared by position', () {
+    final a = {'firstName': 'Anne', 'lastName': 'Fictif'};
+    final b = {'firstName': 'Bob', 'lastName': 'Fictif'};
+    expect(occupantConflictDifferences([a, b], [b, a]), isNull);
+    expect(occupantConflictDifferences([a, a], [a, a]), isNull);
+  });
+
   test(
     'conflict explanation distinguishes local and remote version changes',
     () {

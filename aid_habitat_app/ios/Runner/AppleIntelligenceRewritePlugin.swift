@@ -46,6 +46,7 @@ final class AppleIntelligenceRewritePlugin: NSObject, FlutterPlugin {
     }
 
     let mode = arguments["mode"] as? String ?? "professional"
+    let context = arguments["context"] as? String ?? "general"
 
     guard #available(iOS 26.0, *) else {
       result(Self.unavailableError())
@@ -64,6 +65,7 @@ final class AppleIntelligenceRewritePlugin: NSObject, FlutterPlugin {
         let rewrittenText = try await Self.rewrite(
           text: text,
           mode: mode,
+          context: context,
           model: model
         )
         result(rewrittenText)
@@ -113,11 +115,12 @@ final class AppleIntelligenceRewritePlugin: NSObject, FlutterPlugin {
   private static func rewrite(
     text: String,
     mode: String,
+    context: String,
     model: SystemLanguageModel
   ) async throws -> String {
     let session = LanguageModelSession(
       model: model,
-      instructions: instructions(for: mode)
+      instructions: instructions(for: mode, context: context)
     )
     let response = try await session.respond(
       to: text,
@@ -152,7 +155,7 @@ final class AppleIntelligenceRewritePlugin: NSObject, FlutterPlugin {
   }
 
   @available(iOS 26.0, *)
-  private static func instructions(for mode: String) -> String {
+  private static func instructions(for mode: String, context: String) -> String {
     let modeInstruction: String
     switch mode {
     case "concise":
@@ -163,14 +166,17 @@ final class AppleIntelligenceRewritePlugin: NSObject, FlutterPlugin {
         "Corrige uniquement l'orthographe, la grammaire et la ponctuation."
     default:
       modeInstruction =
-        "Améliore la clarté et la fluidité avec les modifications les plus petites possible."
+        "Corrige toutes les fautes et reformule les tournures maladroites pour les rendre claires, naturelles et professionnelles. Conserve les phrases déjà claires."
     }
 
+    let sections = ["beneficiary": "note sur le bénéficiaire", "living_context": "contexte de vie", "medical": "contexte médical", "autonomy": "autonomie", "human_help": "aides humaines", "housing": "logement et accessibilité", "recommendations": "préconisations"]
+    let section = sections[context] ?? "note de visite à domicile"
     return """
+    Rubrique : \(section).
     Tu aides des ergothérapeutes à rédiger des notes professionnelles en français.
     Reformule uniquement le texte fourni pour un rapport d'ergothérapie.
     N'ajoute aucune information, aucun diagnostic, aucune interprétation et aucun conseil.
-    Ne supprime aucun fait, souhait ou réserve exprimée.
+    Ne supprime aucun fait, souhait ou réserve exprimée. Conserve les négations et les incertitudes. Ne déduis jamais une cause ou une condition non écrite.
     Conserve exactement tous les identifiants qui commencent par AIDHABITAT_DATA_.
     Ne traduis, ne modifie, ne déplace et ne supprime aucun de ces identifiants.
     Si une formulation est ambiguë, conserve son sens sans la compléter.

@@ -146,6 +146,7 @@ class AiRewriteService {
   Future<String> rewrite({
     required String text,
     String mode = 'professional',
+    String context = 'general',
     String? apiBaseUrl,
     String? sessionToken,
   }) async {
@@ -165,6 +166,7 @@ class AiRewriteService {
       return _rewriteRemotely(
         text: sourceText,
         mode: mode,
+        context: context,
         apiBaseUrl: apiBaseUrl,
         sessionToken: sessionToken,
       );
@@ -176,6 +178,7 @@ class AiRewriteService {
       return _rewriteRemotely(
         text: sourceText,
         mode: mode,
+        context: context,
         apiBaseUrl: apiBaseUrl,
         sessionToken: sessionToken,
       );
@@ -190,6 +193,7 @@ class AiRewriteService {
         return _rewriteRemotely(
           text: sourceText,
           mode: mode,
+          context: context,
           apiBaseUrl: apiBaseUrl,
           sessionToken: sessionToken,
         );
@@ -210,7 +214,11 @@ class AiRewriteService {
     final protectedText = _protect(sourceText);
     if (kIsWeb) {
       return protectedText.restore(
-        await web_ai.rewriteLocalAi(protectedText.text, _normalizeMode(mode)),
+        await web_ai.rewriteLocalAi(
+          protectedText.text,
+          _normalizeMode(mode),
+          context,
+        ),
       );
     }
     try {
@@ -218,6 +226,7 @@ class AiRewriteService {
           .invokeMethod<String>('rewrite', {
             'text': protectedText.text,
             'mode': _normalizeMode(mode),
+            'context': context,
           })
           .timeout(const Duration(seconds: 130));
       final rewrittenText = response?.trim() ?? '';
@@ -244,6 +253,7 @@ class AiRewriteService {
   Future<String> _rewriteRemotely({
     required String text,
     required String mode,
+    required String context,
     required String? apiBaseUrl,
     required String? sessionToken,
   }) async {
@@ -262,7 +272,11 @@ class AiRewriteService {
         .post(
           Uri.parse('$apiBase/api/ai/rewrite'),
           headers: {'Content-Type': 'application/json', 'X-App-Session': token},
-          body: jsonEncode({'text': text, 'mode': _normalizeMode(mode)}),
+          body: jsonEncode({
+            'text': text,
+            'mode': _normalizeMode(mode),
+            'context': context,
+          }),
         )
         .timeout(const Duration(seconds: 130));
 

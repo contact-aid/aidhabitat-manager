@@ -168,13 +168,13 @@
       if (worker) idle = setTimeout(stop, warmIdleMs);
     }
   };
-  window.aidHabitatLocalAiRewrite = async (text, mode) => {
+  window.aidHabitatLocalAiRewrite = async (text, mode, context) => {
     const attempt = generation;
     try {
       if (warming) await warming;
       if (attempt !== generation) throw new Error('Reformulation annulée.');
       phase = 'Préparation de la reformulation…';
-      return await request('rewrite', {text, mode});
+      return await request('rewrite', {text, mode, context});
     }
     catch (error) {
       if (error.code === 'model_unavailable') localStorage.removeItem('appergo-local-ai-qwen3-v1');

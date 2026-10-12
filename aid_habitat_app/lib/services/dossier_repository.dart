@@ -2901,7 +2901,9 @@ class DossierRepository {
     final fields = <String, dynamic>{
       for (final key in changes.keys)
         if (observed.containsKey(key) &&
-            _fieldChanged(observed[key], current[key]))
+            (key == 'occupants_json'
+                ? !equivalentSyncField(key, observed[key], current[key])
+                : _fieldChanged(observed[key], current[key])))
           key: {'observed': observed[key], 'current': current[key]},
     };
     if (fields.isEmpty) return null;
@@ -2955,7 +2957,9 @@ class DossierRepository {
     if (existing == null) return candidateFields;
     final diff = <String, dynamic>{};
     candidateFields.forEach((key, value) {
-      if (_fieldChanged(existing[key], value)) {
+      if (key == 'occupants_json'
+          ? !equivalentSyncField(key, existing[key], value)
+          : _fieldChanged(existing[key], value)) {
         diff[key] = value;
       }
     });

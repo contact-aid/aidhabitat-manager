@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:aid_habitat_app/services/ai_rewrite_service.dart';
+import 'package:aid_habitat_app/services/ai_rewrite_context.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,6 +23,40 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(nativeChannel, null);
+  });
+
+  test(
+    'note tabs select report context without sending an arbitrary heading',
+    () {
+      expect(aiRewriteContextForTab('Bénéficiaire-Notes'), 'beneficiary');
+      expect(aiRewriteContextForTab('Contexte de vie-Médical'), 'medical');
+      expect(aiRewriteContextForTab('Contexte de vie-Autonomie'), 'autonomy');
+      expect(aiRewriteContextForTab('Contexte de vie'), 'living_context');
+      expect(aiRewriteContextForTab('Autre titre'), 'general');
+    },
+  );
+
+  test('the authenticated request carries the report section', () async {
+    final service = AiRewriteService(
+      client: MockClient((request) async {
+        expect(jsonDecode(request.body)['context'], 'beneficiary');
+        return http.Response(
+          jsonEncode({
+            'data': {'text': 'Note corrigée.'},
+          }),
+          200,
+        );
+      }),
+    );
+    expect(
+      await service.rewrite(
+        text: 'Note fictive.',
+        context: 'beneficiary',
+        apiBaseUrl: 'https://private.test',
+        sessionToken: 'synthetic',
+      ),
+      'Note corrigée.',
+    );
   });
 
   test('server inference requires opt-in and shares status probes', () async {
@@ -148,6 +183,7 @@ void main() {
     expect(jsonDecode(capturedRequest.body), {
       'text': 'Mme Test a du mal à rentrer dans la douche.',
       'mode': 'professional',
+      'context': 'general',
     });
     expect(
       result,

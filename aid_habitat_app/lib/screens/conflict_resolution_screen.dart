@@ -99,6 +99,31 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
     }
   }
 
+  Future<void> _retryOriginal(SyncConflictReview review) async {
+    if (_resolving) return;
+    setState(() => _resolving = true);
+    try {
+      if (!await DataService().retryOriginalOccupantConflict(review)) {
+        throw StateError('La saisie a changé.');
+      }
+      if (!mounted) return;
+      setState(() {
+        _reviews.remove(review);
+        _resolving = false;
+      });
+      widget.onReviewApplied?.call(review.entityType);
+      if (_reviews.isEmpty) widget.onResolved();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _resolving = false;
+          _error =
+              'Nouvelle tentative impossible. Actualisez la comparaison et vérifiez votre compte.';
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !_resolving,
@@ -151,7 +176,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
 
   Widget _buildReview(SyncConflictReview review) {
     final title = switch (review.entityType) {
-      'patient' => 'Beneficiaire',
+      'patient' => 'Bénéficiaire',
       'housing' => 'Logement',
       'contexte_de_vie' => 'Contexte de vie et autonomie',
       'mesures_anthropometriques' => 'Mesures',
@@ -191,6 +216,45 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                   const SizedBox(height: 6),
                   LayoutBuilder(
                     builder: (context, constraints) {
+                      if (key == 'occupants') {
+                        final differences = occupantConflictDifferences(
+                          review.localValues[key],
+                          review.remoteValues[key],
+                        );
+                        if (differences != null) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (differences.isEmpty)
+                                const Text(
+                                  'Aucune différence de valeur entre ces occupants.',
+                                ),
+                              for (final difference in differences)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        difference.label,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Cet appareil : ${difference.local is bool ? (difference.local == true ? 'Oui' : 'Non') : difference.local ?? 'Non renseigné'}',
+                                      ),
+                                      Text(
+                                        'Serveur : ${difference.remote is bool ? (difference.remote == true ? 'Oui' : 'Non') : difference.remote ?? 'Non renseigné'}',
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          );
+                        }
+                      }
                       if (review.entityType == 'visit_recommendations') {
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -214,7 +278,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                       final remote = _value(
                         review.remoteExists
                             ? 'Serveur'
-                            : 'Serveur — aucune fiche',
+                            : 'Serveur, aucune fiche',
                         review.remoteValues[key],
                       );
                       return constraints.maxWidth < 600
@@ -243,6 +307,17 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
             spacing: 12,
             runSpacing: 8,
             children: [
+              if (review.entityType == 'patient' &&
+                  canRetryOriginalOccupantConflict(
+                    jsonDecode(review.payloadJson) as Map<String, dynamic>,
+                  ))
+                OutlinedButton.icon(
+                  onPressed: _resolving || _error != null
+                      ? null
+                      : () => _retryOriginal(review),
+                  icon: const Icon(LucideIcons.refreshCw),
+                  label: const Text('Réessayer sans remplacer'),
+                ),
               OutlinedButton.icon(
                 onPressed: _resolving || _error != null
                     ? null

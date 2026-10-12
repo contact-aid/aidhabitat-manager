@@ -501,6 +501,16 @@ try {
   }
 
   if (entity === 'beneficiaire') {
+    await check('empty optional occupant fields do not turn an APA edit into a conflict', async () => {
+      mock.row(entity).occupants_json = JSON.stringify([{ firstName: 'Anne', lastName: 'Fictif', gender: 'Femme', apa: false, fiscalRevenue: null }]);
+      mock.row(entity).prenom = 'Anne'; mock.row(entity).nom = 'Fictif';
+      const readBack = await read(clientA);
+      const base = readBack.occupants.map(person => ({ ...person, apaDetails: '', invalidityDetails: '', fiscalReferenceYear: '', fiscalRevenue: null }));
+      const changed = structuredClone(base); changed[0].apa = true;
+      expectStatus(await patch(clientA, mutation({ occupants: changed }, { occupants: base })), 200);
+      assert.equal(JSON.parse(mock.row(entity).occupants_json)[0].apa, true);
+    });
+
     await check('synthetic APA edit survives sync, reload, and another edit', async () => {
       const baseline = await read(clientA);
       mock.row(entity).beneficiaire_apa = true;

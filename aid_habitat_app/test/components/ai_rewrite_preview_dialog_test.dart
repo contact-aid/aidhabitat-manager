@@ -34,6 +34,29 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
   }
 
+  testWidgets('an unchanged result is identified and can be retried', (
+    tester,
+  ) async {
+    var attempts = 0;
+    await open(
+      tester,
+      (_) async => ++attempts == 1
+          ? 'Note originale de test.'
+          : 'Note corrigée de test.',
+    );
+    await tester.pump();
+    expect(find.text('L’IA n’a proposé aucune modification.'), findsOneWidget);
+    await tester.tap(find.text('Réessayer'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(attempts, 2);
+    expect(find.text('L’IA n’a proposé aucune modification.'), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      'Note corrigée de test.',
+    );
+  });
+
   testWidgets(
     'shows original immediately and enables editable proposal only after generation',
     (tester) async {
