@@ -45,7 +45,7 @@
   function request(method, payload = {}) {
     clearTimeout(idle);
     if (!worker) {
-      worker = new Worker(new URL('local-ai/worker.js?v=76', document.baseURI));
+      worker = new Worker(new URL('local-ai/worker.js', document.baseURI));
       worker.onmessage = ({data}) => {
         if (data.progress !== undefined) { progress = data.progress; return; }
         const item = pending.get(data.id);
