@@ -72,7 +72,7 @@ if (!process.argv.includes('--runner')) {
       for (const missingVersion of [false, true]) {
         mock.reset(); active = entity; writes = 0; hideVersion = missingVersion;
         const body = { [appKey]: 'saved', expectedUpdatedAt: timestamp,
-          concurrency: { version: 1, writeId: '11111111-1111-4111-8111-111111111111',
+          concurrency: { version: 1, collectionContract: 'collections-v2', writeId: '11111111-1111-4111-8111-111111111111',
             baseValues: { [appKey]: mock.row(entity)[dbKey] } } };
         const patch = () => nativeFetch(origin + route, { method: 'PATCH',
           headers: { 'content-type': 'application/json', 'x-app-session': token }, body: JSON.stringify(body) });
@@ -101,7 +101,7 @@ if (!process.argv.includes('--runner')) {
         occupant1BirthDate: '1966-08-04',
         occupants: patient.occupants.map((occupant) => ({ ...occupant, birthDate: '1966-08-04' })),
         expectedUpdatedAt: patient.updatedAt,
-        concurrency: { version: 1, writeId: '11111111-1111-4111-8111-111111111111',
+        concurrency: { version: 1, collectionContract: 'collections-v2', writeId: '11111111-1111-4111-8111-111111111111',
           baseValues: { occupant1BirthDate: null, occupants: patient.occupants } },
       };
       const patch = () => nativeFetch(origin + `/api/beneficiaires/${patientId}`, {
@@ -132,7 +132,7 @@ if (!process.argv.includes('--runner')) {
     ]) {
       mock.reset(); active = 'beneficiaire'; writes = 0;
       const body = { [appKey]: 'Selection test', expectedUpdatedAt: timestamp,
-        concurrency: { version: 1, writeId: '11111111-1111-4111-8111-111111111111', baseValues: { [appKey]: '' } } };
+        concurrency: { version: 1, collectionContract: 'collections-v2', writeId: '11111111-1111-4111-8111-111111111111', baseValues: { [appKey]: '' } } };
       const patch = () => nativeFetch(origin + `/api/beneficiaires/${patientId}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json', 'x-app-session': token }, body: JSON.stringify(body),
       });
@@ -167,7 +167,7 @@ if (!process.argv.includes('--runner')) {
     assert.equal(mock.rows('logement').length, 1, 'retry must not duplicate housing');
 
     const competing = await create({ comments: 'other device', concurrency: {
-      version: 1, writeId: '33333333-3333-4333-8333-333333333333',
+      version: 1, collectionContract: 'collections-v2', writeId: '33333333-3333-4333-8333-333333333333',
       createIfAbsent: true, expectedUpdatedAt: null, baseValues: {},
     } });
     if (competing.status !== 409) assert.fail(await competing.text());

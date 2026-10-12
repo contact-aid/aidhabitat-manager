@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
+import { createNoteContentStore, noteContentOwner, NOTE_CONTENT_PREFIX, NOTE_CONTENT_MAX_BYTES, isNoteChunkKey } from './noteContentChunks.mjs';
 import fs from 'node:fs/promises';
 import process from 'node:process';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { createKeyedSerialExecutor } from './keyedSerialExecutor.mjs';
 
 import { callNocoTool, requestConditionalNocodbRest } from './nocodbMcpClient.mjs';
 import { notePageReadFields } from './notePageFields.mjs';
+import { isIndependentNote, stampNoteInitialization, readNoteDrawing } from './independentNotes.mjs';
 
 const syncRevisionField = 'app_sync_revision';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -38,32 +41,31 @@ export class NotePageMutationError extends Error {
 const DRAWING_GZIP_PREFIX = 'GZIP:';
 const DRAWING_COMPRESS_THRESHOLD = 80_000;
 
-const compressDrawingForStorage = (drawingJson) => {
+export const compressDrawingForStorage = (drawingJson) => {
   const raw = drawingJson == null ? '' : String(drawingJson);
   if (raw.length <= DRAWING_COMPRESS_THRESHOLD) return raw;
   try {
     const compressed = gzipSync(Buffer.from(raw, 'utf8'));
-    return DRAWING_GZIP_PREFIX + compressed.toString('base64');
+    const encoded = DRAWING_GZIP_PREFIX + compressed.toString('base64');
+    if (encoded.length > 100000) {
+      throw new NotePageMutationError(413, 'NOTE_PAGE_CONTENT_TOO_LARGE');
+    }
+    return encoded;
   } catch (err) {
-    // Si gzip échoue (improbable), on renvoie le brut — NocoDB peut
-    // ensuite refuser avec 422, mais c'est moins pire qu'une corruption
-    // silencieuse.
-    console.warn('[drawing-compress] gzip échoué, fallback brut :', err?.message || err);
-    return raw;
+    if (err instanceof NotePageMutationError) throw err;
+    throw new NotePageMutationError(503, 'NOTE_PAGE_COMPRESSION_FAILED');
   }
 };
 
-const decompressDrawingForRead = (stored) => {
+export const decompressDrawingForRead = (stored) => {
   const raw = stored == null ? '' : String(stored);
   if (!raw.startsWith(DRAWING_GZIP_PREFIX)) return raw;
   try {
     const base64 = raw.slice(DRAWING_GZIP_PREFIX.length);
     return gunzipSync(Buffer.from(base64, 'base64')).toString('utf8');
   } catch (err) {
-    // Donnée corrompue : on logue + renvoie une chaîne vide pour ne
-    // pas planter le rendu côté client (mieux qu'une exception).
-    console.warn('[drawing-compress] gunzip échoué :', err?.message || err);
-    return '';
+    // Never turn unreadable stored content into an empty note.
+    throw new NotePageMutationError(503, 'NOTE_PAGE_DECOMPRESSION_FAILED');
   }
 };
 
@@ -74,6 +76,27 @@ const decompressDrawingForRead = (stored) => {
 // clarté côté caller — l'implémentation est strictement identique.
 const compressTextForStorage = compressDrawingForStorage;
 const decompressTextForRead = decompressDrawingForRead;
+
+export const assertNotePageWriteAllowed = ({ observedRevision, expectedRevision, writeId, matchesDesired }) => {
+  if (observedRevision === writeId) {
+    if (!matchesDesired) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_WRITE_ID_REUSED');
+    }
+    return 'replay';
+  }
+  if (observedRevision !== expectedRevision) {
+    throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT');
+  }
+  return 'update';
+};
+
+export const sameNotePageIdentity = (recordFields, { patientId, scopeType, scopeId, tabKey, subTabKey, pageNumber }) =>
+  stringValue(recordFields.beneficiaire_id) === stringValue(patientId)
+  && stringValue(recordFields.scope_type || 'legacy') === stringValue(scopeType || 'legacy')
+  && stringValue(recordFields.scope_id) === stringValue(scopeId)
+  && stringValue(recordFields.tab_key) === stringValue(tabKey)
+  && stringValue(recordFields.sub_tab_key) === stringValue(subTabKey)
+  && Number(recordFields.page_number) === Number(pageNumber);
 
 const DATA_DIR_URL = new URL('./data/', import.meta.url);
 const DOCUMENTS_DIR_URL = new URL('./data/documents/', import.meta.url);
@@ -474,6 +497,7 @@ const discoverMobileSyncTablesDetailed = async () => {
 };
 
 const listDocumentChunks = async (documentChunksTableId, documentId) => {
+  if (isNoteChunkKey(documentId)) throw new Error('Reserved note content namespace');
   const records = await queryAll(documentChunksTableId, {
     fields: ['document_uuid_source', 'chunk_index', 'chunk_base64', 'updated_at'],
     where: `(document_uuid_source,eq,${JSON.stringify(String(documentId))})`,
@@ -532,6 +556,7 @@ const deleteDocumentChunks = async (documentChunksTableId, documentId) => {
 };
 
 const createDocumentChunks = async (documentChunksTableId, documentId, chunks, metadata = {}) => {
+  if (isNoteChunkKey(documentId)) throw new Error('Reserved note content namespace');
   const beneficiary = normalizeBeneficiaryMetadata(metadata);
   const now = new Date().toISOString();
   await Promise.all(
@@ -558,7 +583,7 @@ const listChunkDocumentIdsForPatient = async (documentChunksTableId, patientId) 
     fields: ['document_uuid_source', 'beneficiaire_id'],
     where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})`,
   });
-  return new Set(chunks.map((chunk) => stringValue(field(chunk, 'document_uuid_source'))).filter(Boolean));
+  return new Set(chunks.map((chunk) => stringValue(field(chunk, 'document_uuid_source'))).filter((id) => id && !isNoteChunkKey(id)));
 };
 
 const buildDocumentPayload = (document, absoluteUrl, mode) => {
@@ -758,9 +783,10 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
       .map((notePage) => buildNotePagePayload(notePage, absoluteUrl));
   },
 
-  async getNotePageById(notePageId) {
+  async getNotePageById(notePageId, { metadataOnly = false } = {}) {
     const store = await readNotePagesStore();
     const notePage = store.notePages.find((entry) => String(entry.id) === String(notePageId));
+    if (metadataOnly && notePage) return { id: notePage.id, patientId: notePage.patientId };
     return notePage ? buildNotePagePayload(notePage, absoluteUrl) : null;
   },
 
@@ -860,6 +886,8 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
       ? store.notePages[existingIndex].id
       : (stringValue(notePageId) || crypto.randomUUID());
 
+    drawingJson = stampNoteInitialization({ tabKey, pageNumber, drawingJson });
+
     const notePage = {
       id: resolvedNotePageId,
       patientId,
@@ -930,7 +958,29 @@ const createLocalStoreAdapter = ({ absoluteUrl }) => ({
   },
 });
 
-const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId, notePagesTableId, preferLocal = false }) => {
+const defaultStoreIO = { queryAll, createRecord, updateRecord, deleteRecord,
+  callNocoTool, requestConditionalNocodbRest };
+// Process-local protection only. Multiple writers need a distributed uniqueness gate.
+const serializeNoteWrite = createKeyedSerialExecutor();
+const serializeMandateImport = createKeyedSerialExecutor();
+export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunksTableId,
+  notePagesTableId, preferLocal = false, io = defaultStoreIO }) => {
+  const { queryAll, createRecord, updateRecord, deleteRecord,
+    callNocoTool, requestConditionalNocodbRest } = io;
+  const noteContent = createNoteContentStore({ tableId: documentChunksTableId,
+    queryAll, createRecord, inlineEncode: compressDrawingForStorage, inlineDecode: decompressDrawingForRead });
+  const readContent = (record, kind, maxBytes) => noteContent.read(field(record, kind), noteContentOwner({
+    patientId: field(record, 'beneficiaire_id'), dossierId: field(record, 'dossier_id'),
+    scopeType: field(record, 'scope_type'), scopeId: field(record, 'scope_id'),
+    tabKey: field(record, 'tab_key'), subTabKey: field(record, 'sub_tab_key'),
+    pageNumber: field(record, 'page_number'),
+  }, kind), maxBytes);
+  const readPageContent = async (record, remaining = NOTE_CONTENT_MAX_BYTES) => {
+    const budget = Math.min(NOTE_CONTENT_MAX_BYTES, remaining);
+    const textContent = await readContent(record, 'text_content', budget);
+    const drawingJson = await readContent(record, 'drawing_json', budget - Buffer.byteLength(textContent));
+    return { textContent, drawingJson };
+  };
   let notePageFieldNamesPromise = null;
 
   const getNotePageFieldNames = async () => {
@@ -1063,6 +1113,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
     LEGACY_NOTE_TAB_KEYS.has(stringValue(tab).trim().toLowerCase());
 
   const isEmptyNotePageRecord = (record) => {
+    if (['drawing_json', 'text_content'].some((key) => String(field(record, key) || '').startsWith(NOTE_CONTENT_PREFIX))) return false;
     // Décompresser si gzippé (cf. compressDrawingForStorage) avant
     // d'essayer de parser le JSON pour décider si la note est vide.
     const drawingRaw = decompressDrawingForRead(stringValue(field(record, 'drawing_json'))).trim();
@@ -1151,7 +1202,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
 
   const findDocumentRecordByAnyId = async (documentId, fields) => {
     const id = stringValue(documentId).trim();
-    if (!id) return null;
+    if (!id || isNoteChunkKey(id)) return null;
     const byUuid = await queryAll(documentsTableId, {
       fields,
       where: `(uuid_source,eq,${JSON.stringify(id)})`,
@@ -1165,7 +1216,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
     return latestRecord(byClientId);
   };
 
-  return {
+  const adapter = {
   mode: 'nocodb',
 
   async listDocumentsByPatient(patientId, filters = {}) {
@@ -1272,12 +1323,42 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
 
     const existingRecords = documentLocalId
       ? await queryAll(documentsTableId, {
-        fields: ['uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom', 'beneficiaire_nom_complet', 'dossier_libelle', 'titre', 'nom_fichier', 'mime_type', 'tags_json', 'created_at', 'updated_at', 'client_document_id'],
+        fields: ['uuid_source', 'beneficiaire_id', 'dossier_id', 'beneficiaire_prenom', 'beneficiaire_nom', 'beneficiaire_nom_complet', 'dossier_libelle', 'titre', 'nom_fichier', 'mime_type', 'tags_json', 'created_at', 'updated_at', 'client_document_id', 'contenu_base64'],
         where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})~and(client_document_id,eq,${JSON.stringify(String(documentLocalId))})`,
       })
       : [];
 
     const existing = latestRecord(existingRecords);
+    if (existing && isNoteChunkKey(field(existing, 'uuid_source'))) throw new Error('Reserved note content namespace');
+    if (existing && stringValue(documentLocalId).startsWith('doc_mandat_')) {
+      if (stringValue(field(existing, 'dossier_id')) !== stringValue(dossierId)) {
+        throw Object.assign(new Error('Mandat lié à un autre dossier'), { status: 403, statusCode: 403 });
+      }
+      let storedContent = stringValue(field(existing, 'contenu_base64'));
+      if (!storedContent) {
+        const chunks = await queryAll(documentChunksTableId, {
+          fields: ['document_uuid_source', 'chunk_index', 'chunk_base64'],
+          where: `(document_uuid_source,eq,${JSON.stringify(stringValue(field(existing, 'uuid_source')))})`,
+        });
+        chunks.sort((a,b) => Number(field(a, 'chunk_index')) - Number(field(b, 'chunk_index')));
+        if (chunks.every((row,index) => Number(field(row,'chunk_index')) === index)) {
+          storedContent = chunks.map(row => stringValue(field(row,'chunk_base64'))).join('');
+        }
+      }
+      // Never replace an annotated copy or acknowledge different pending bytes.
+      if (existingRecords.length !== 1 || storedContent !== base64) {
+        throw Object.assign(new Error('Un mandat existe déjà. Votre copie locale est conservée pour comparaison.'), {
+          status: 409, statusCode: 409, code: 'DOCUMENT_IMPORT_ALREADY_EXISTS',
+        });
+      }
+      return buildDocumentPayload({
+        id: stringValue(field(existing, 'uuid_source') || existing.id), patientId, dossierId,
+        clientDocumentId: stringValue(documentLocalId),
+        title: stringValue(field(existing, 'titre')), fileName: stringValue(field(existing, 'nom_fichier')),
+        mimeType: stringValue(field(existing, 'mime_type')), tags: safeParseJsonArray(field(existing, 'tags_json')),
+        createdAt: stringValue(field(existing, 'created_at')), updatedAt: stringValue(field(existing, 'updated_at')),
+      }, absoluteUrl, 'nocodb');
+    }
     const now = new Date().toISOString();
     const storedInlineContent = base64.length <= MAX_NOCODB_LONG_TEXT_LENGTH ? base64 : '';
     const beneficiary = normalizeBeneficiaryMetadata({ patientFirstName, patientLastName, patientDisplayName, dossierLabel, dossierId });
@@ -1511,8 +1592,12 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       where: clauses.join('~and'),
     });
 
-    return records
-      .map((record) => ({
+    const pages = [];
+    let remaining = 64 * 1024 * 1024;
+    for (const record of records) {
+      const contents = await readPageContent(record, remaining);
+      remaining -= Buffer.byteLength(contents.textContent) + Buffer.byteLength(contents.drawingJson);
+      pages.push({
         id: stringValue(field(record, 'uuid_source') || record.id),
         patientId: stringValue(field(record, 'beneficiaire_id')),
         dossierId: stringValue(field(record, 'dossier_id')) || null,
@@ -1525,25 +1610,28 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
         tabKey: stringValue(field(record, 'tab_key')),
         subTabKey: stringValue(field(record, 'sub_tab_key')),
         pageNumber: Number(field(record, 'page_number')) || 0,
-        textContent: decompressTextForRead(stringValue(field(record, 'text_content'))),
-        drawingJson: decompressDrawingForRead(stringValue(field(record, 'drawing_json'))),
+        ...contents,
         previewDataUrl: stringValue(field(record, 'preview_data_url')),
         previewUrl: stringValue(field(record, 'preview_url')),
         layoutKind: stringValue(field(record, 'layout_kind')) || 'freeform',
         planPhase: stringValue(field(record, 'plan_phase')) || null,
         revision: stringValue(field(record, syncRevisionField)) || null,
         updatedAt: stringValue(field(record, 'updated_at')) || new Date().toISOString(),
-      }))
+      });
+    }
+    return pages
       .sort((a, b) => Number(a.pageNumber) - Number(b.pageNumber))
       .map((notePage) => buildNotePagePayload(notePage, absoluteUrl));
   },
 
-  async getNotePageById(notePageId) {
+  async getNotePageById(notePageId, { metadataOnly = false } = {}) {
     const existing = latestRecord(await queryAll(notePagesTableId, {
-      fields: await getNotePageFields(),
+      fields: metadataOnly ? ['uuid_source', 'beneficiaire_id'] : await getNotePageFields(),
       where: `(uuid_source,eq,${JSON.stringify(String(notePageId))})`,
     }));
     if (!existing) return null;
+    if (metadataOnly) return { id: notePageId, patientId: stringValue(field(existing, 'beneficiaire_id')) };
+    const contents = await readPageContent(existing);
 
     return buildNotePagePayload({
       id: stringValue(field(existing, 'uuid_source') || existing.id),
@@ -1558,8 +1646,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       tabKey: stringValue(field(existing, 'tab_key')),
       subTabKey: stringValue(field(existing, 'sub_tab_key')),
       pageNumber: Number(field(existing, 'page_number')) || 0,
-      textContent: decompressTextForRead(stringValue(field(existing, 'text_content'))),
-      drawingJson: decompressDrawingForRead(stringValue(field(existing, 'drawing_json'))),
+      ...contents,
       previewDataUrl: stringValue(field(existing, 'preview_data_url')),
       previewUrl: stringValue(field(existing, 'preview_url')),
       layoutKind: stringValue(field(existing, 'layout_kind')) || 'freeform',
@@ -1606,22 +1693,6 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       updated_at: now,
     });
 
-    await cleanupRemoteNotePageDuplicates({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      tabKey,
-      subTabKey,
-      pageNumber,
-      keepRecordId: created?.id,
-    });
-    await cleanupLegacyEmptyNoteCrossKey({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      pageNumber,
-      currentTabKey: tabKey,
-    });
     await syncRemoteNotePagesBeneficiaryMetadata(patientId, { ...beneficiary, dossierId });
 
     return buildNotePagePayload({
@@ -1684,16 +1755,49 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       if (existing && !sameId(field(existing, 'beneficiaire_id'), patientId)) {
         throw forbiddenNotePageAccessError();
       }
-    } else {
-      existing = latestRecord(await queryAll(notePagesTableId, {
-        fields: notePageFields,
-        where: `(beneficiaire_id,eq,${JSON.stringify(String(patientId))})~and(scope_type,eq,${JSON.stringify(String(scopeType || 'legacy'))})~and(scope_id,eq,${JSON.stringify(String(scopeId || dossierId || patientId))})~and(tab_key,eq,${JSON.stringify(String(tabKey))})~and(sub_tab_key,eq,${JSON.stringify(String(subTabKey || ''))})~and(page_number,eq,${Number(pageNumber)})`,
-      }));
+    }
+    const samePage = await queryAll(notePagesTableId, {
+      fields: notePageFields,
+      where: notePageIdentityWhere({ patientId, scopeType,
+        scopeId: scopeId || dossierId || patientId, tabKey, subTabKey, pageNumber }),
+    });
+    if (samePage.length > 1 || (existing && samePage.some((row) => row.id !== existing.id))) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_DUPLICATES_REQUIRE_REVIEW', existing);
+    }
+    existing ??= samePage[0] ?? null;
+    if (existing && !sameNotePageIdentity(existing.fields, {
+      patientId,
+      scopeType,
+      scopeId: scopeId || dossierId || patientId,
+      tabKey,
+      subTabKey,
+      pageNumber,
+    })) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_IDENTITY_CONFLICT', existing);
+    }
+
+    // Reject a stale version before staging content. The conditional PATCH
+    // below still protects against a writer racing after this read.
+    if (existing && field(existing, syncRevisionField) !== expectedRevision
+      && field(existing, syncRevisionField) !== writeId) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT', existing);
+    }
+    if (!existing && expectedRevision !== null) {
+      throw new NotePageMutationError(409, 'NOTE_PAGE_RECORD_MISSING');
+    }
+
+    // Stamp genuine saves, including build64 clears. For an acknowledged write
+    // predating this rollout, compare the original bytes so replay stays idempotent.
+    if (isIndependentNote(tabKey) && Number(pageNumber) === 0) {
+      const isReplay = existing && stringValue(field(existing, syncRevisionField)) === writeId;
+      if (!isReplay || readNoteDrawing(await readContent(existing, 'drawing_json')).noteTextInitialized === true) {
+        drawingJson = stampNoteInitialization({ tabKey, pageNumber, drawingJson });
+      }
     }
 
     const now = new Date().toISOString();
     const beneficiary = normalizeBeneficiaryMetadata({ patientFirstName, patientLastName, patientDisplayName, dossierLabel, dossierId });
-    const resolvedPreviewUrl = absoluteUrl(`/public/note-pages/${encodeURIComponent(stringValue(notePageId) || stringValue(field(existing, 'uuid_source')) || crypto.randomUUID())}/preview`);
+    const resolvedPreviewUrl = absoluteUrl(`/public/note-pages/${encodeURIComponent(stringValue(field(existing, 'uuid_source')) || stringValue(notePageId) || crypto.randomUUID())}/preview`);
     const supportsPreviewField = await supportsNotePageField('preview_data_url');
     const supportsPreviewUrlField = await supportsNotePageField('preview_url');
     // `plan_phase` n'a été ajouté qu'avec le générateur de rapport
@@ -1704,6 +1808,16 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
     const normalizedPlanPhase = (planPhase === 'avant' || planPhase === 'apres')
       ? planPhase
       : null;
+    if (Buffer.byteLength(stringValue(textContent)) + Buffer.byteLength(stringValue(drawingJson)) > NOTE_CONTENT_MAX_BYTES) {
+      throw new NotePageMutationError(413, 'NOTE_PAGE_CONTENT_TOO_LARGE');
+    }
+    const contentIdentity = { patientId, dossierId, scopeType, scopeId, tabKey, subTabKey, pageNumber };
+    const preparedText = noteContent.prepare(stringValue(textContent), noteContentOwner(contentIdentity, 'text_content'));
+    const preparedDrawing = noteContent.prepare(drawingJson, noteContentOwner(contentIdentity, 'drawing_json'));
+    const persistContent = async () => {
+      await noteContent.persist(preparedText);
+      await noteContent.persist(preparedDrawing);
+    };
     const desiredFields = {
       dossier_id: dossierId || null,
       beneficiaire_prenom: beneficiary.patientFirstName,
@@ -1713,8 +1827,8 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       scope_type: scopeType || 'legacy',
       scope_id: scopeId || dossierId || patientId,
       sub_tab_key: stringValue(subTabKey),
-      text_content: compressTextForStorage(stringValue(textContent)),
-      drawing_json: compressDrawingForStorage(drawingJson),
+      text_content: preparedText.stored,
+      drawing_json: preparedDrawing.stored,
       ...(supportsPreviewField ? { preview_data_url: previewDataUrlForStorage(previewDataUrl) } : {}),
       ...(supportsPreviewUrlField ? { preview_url: resolvedPreviewUrl } : {}),
       layout_kind: layoutKind || 'freeform',
@@ -1725,19 +1839,22 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
     );
     if (existing) {
       const observedRevision = stringValue(field(existing, syncRevisionField));
-      if (observedRevision === writeId) {
-        if (!matchesDesired(existing)) {
-          throw new NotePageMutationError(409, 'NOTE_PAGE_WRITE_ID_REUSED', existing);
-        }
-      } else {
-        if (!preferLocal && observedRevision !== expectedRevision) {
-          throw new NotePageMutationError(409, 'NOTE_PAGE_REVISION_CONFLICT', existing);
-        }
-        if (preferLocal && !uuidPattern.test(observedRevision)) {
-          throw new NotePageMutationError(503, 'NOTE_PAGE_REVISION_NOT_PREPARED', existing);
-        }
+      let writeDecision;
+      try {
+        writeDecision = assertNotePageWriteAllowed({
+          observedRevision,
+          expectedRevision,
+          writeId,
+          matchesDesired: matchesDesired(existing),
+        });
+      } catch (error) {
+        if (error instanceof NotePageMutationError) error.observed = existing;
+        throw error;
+      }
+      await persistContent();
+      if (writeDecision === 'update') {
         const params = new URLSearchParams({
-          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${preferLocal ? observedRevision : expectedRevision})`,
+          where: `(Id,eq,${Number(existing.id)})~and(${syncRevisionField},eq,${expectedRevision})`,
         });
         await requestConditionalNocodbRest({
           method: 'PATCH',
@@ -1754,22 +1871,6 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
         existing = confirmed;
       }
 
-      await cleanupRemoteNotePageDuplicates({
-        patientId,
-        scopeType,
-        scopeId: scopeId || dossierId || patientId,
-        tabKey,
-        subTabKey,
-        pageNumber,
-        keepRecordId: existing.id,
-      });
-      await cleanupLegacyEmptyNoteCrossKey({
-        patientId,
-        scopeType,
-        scopeId: scopeId || dossierId || patientId,
-        pageNumber,
-        currentTabKey: tabKey,
-      });
       await syncRemoteNotePagesBeneficiaryMetadata(patientId, { ...beneficiary, dossierId });
 
       return buildNotePagePayload({
@@ -1801,6 +1902,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
     if (expectedRevision !== null) {
       throw new NotePageMutationError(409, 'NOTE_PAGE_RECORD_MISSING');
     }
+    await persistContent();
     let created;
     try {
       created = await createRecord(notePagesTableId, {
@@ -1832,22 +1934,6 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       created = observed;
     }
 
-    await cleanupRemoteNotePageDuplicates({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      tabKey,
-      subTabKey,
-      pageNumber,
-      keepRecordId: created?.id,
-    });
-    await cleanupLegacyEmptyNoteCrossKey({
-      patientId,
-      scopeType,
-      scopeId: scopeId || dossierId || patientId,
-      pageNumber,
-      currentTabKey: tabKey,
-    });
     await syncRemoteNotePagesBeneficiaryMetadata(patientId, { ...beneficiary, dossierId });
 
     return buildNotePagePayload({
@@ -1895,6 +1981,7 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
   },
 
   async getDocumentContent(documentId) {
+    if (isNoteChunkKey(documentId)) return null;
     const record = latestRecord(await queryAll(documentsTableId, {
       fields: ['uuid_source', 'beneficiaire_id', 'nom_fichier', 'mime_type', 'contenu_base64'],
       where: `(uuid_source,eq,${JSON.stringify(String(documentId))})`,
@@ -1921,6 +2008,21 @@ const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, documentChunk
       buffer: Buffer.from(chunkedContent, 'base64'),
     };
   },
+  };
+  const noteGroupKey = (payload) => JSON.stringify([
+    payload.patientId, payload.scopeType || 'legacy',
+    payload.scopeId || payload.dossierId || payload.patientId,
+    payload.tabKey, payload.subTabKey || '',
+  ]);
+  return { ...adapter,
+    upsertDocument: (payload) => stringValue(payload.documentLocalId).startsWith('doc_mandat_')
+      ? serializeMandateImport(JSON.stringify([documentsTableId, payload.patientId, payload.documentLocalId]),
+        () => adapter.upsertDocument(payload))
+      : adapter.upsertDocument(payload),
+    // Share the lock with page-number allocation, including a page created
+    // between a missing-page GET and an upsert. No destructive deduplication.
+    upsertNotePage: (payload) => serializeNoteWrite(noteGroupKey(payload), () => adapter.upsertNotePage(payload)),
+    createNotePage: (payload) => serializeNoteWrite(noteGroupKey(payload), () => adapter.createNotePage(payload)),
   };
 };
 
@@ -2191,9 +2293,9 @@ export const createMobileSyncStore = ({ absoluteUrl, preferLocal = false }) => {
       return adapter.listNotePagesByPatient(patientId, filters);
     },
 
-    async getNotePageById(notePageId) {
+    async getNotePageById(notePageId, options) {
       const adapter = await getAdapter();
-      return adapter.getNotePageById(notePageId);
+      return adapter.getNotePageById(notePageId, options);
     },
 
     async createNotePage(payload) {

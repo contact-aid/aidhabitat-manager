@@ -102,6 +102,7 @@ void main() {
       'tabKey': 'notes_rapides',
       'pageNumber': 0,
       'drawingJson': '{"version":1,"text":"edited","strokes":[]}',
+      'textContent': 'Texte séparé préservé',
       'expectedRevision': revision,
       'writeId': writeId,
     });
@@ -125,6 +126,7 @@ void main() {
         expect(body['notePageId'], isEmpty);
         expect(body['expectedRevision'], revision);
         expect(body['writeId'], writeId);
+        expect(body['textContent'], 'Texte séparé préservé');
         return http.Response(
           '{"success":true,"data":{"notePage":'
           '{"id":"remote-note","revision":"$writeId"}}}',
@@ -142,4 +144,94 @@ void main() {
     expect(queue.completed, isTrue);
     expect(queue.conflicts, isEmpty);
   });
+  for (final scenario in ['unchanged', 'foreign', 'replay', 'reused']) {
+    final changed = scenario == 'foreign';
+    final reused = scenario == 'reused';
+    test('legacy scope repair keeps CAS: $scenario', () async {
+      const patient = 'nocodb-beneficiaire-synthetic';
+      const dossier = 'synthetic-dossier';
+      const revision = '00000000-0000-4000-8000-000000000011';
+      const writeId = '00000000-0000-4000-8000-000000000012';
+      final queue = _NoteQueue(
+        SyncOperation(
+          id: 'op',
+          entityType: 'note_page',
+          entityLocalId: 'note',
+          operationType: 'upsert',
+          status: SyncOperationStatus.pending,
+          attemptCount: 0,
+          createdAt: DateTime(2026),
+          updatedAt: DateTime(2026),
+          payloadJson: jsonEncode({
+            'patientLocalId': patient,
+            'dossierId': dossier,
+            'tabKey': 'Contexte de vie-Médical',
+            'pageNumber': 3,
+            'drawingJson': '{"text":"synthetic","strokes":[{"x":7}]}',
+            'expectedRevision': revision,
+            'writeId': writeId,
+          }),
+        ),
+      );
+      final writes = <Map<String, dynamic>>[];
+      final client = NocodbApiClient(
+        client: MockClient((request) async {
+          if (request.method == 'GET') {
+            return http.Response(
+              jsonEncode({
+                'success': true,
+                'data': {
+                  'notePages': [
+                    {
+                      'patientId': patient,
+                      'dossierId': dossier,
+                      'scopeId': patient,
+                      'scopeType': 'dossier_detail',
+                      'tabKey': 'Contexte de vie-Médical',
+                      'pageNumber': 3,
+                      'subTabKey': '',
+                      'revision': changed
+                          ? '00000000-0000-4000-8000-000000000099'
+                          : (scenario == 'replay' || reused)
+                          ? writeId
+                          : revision,
+                    },
+                  ],
+                },
+              }),
+              200,
+            );
+          }
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          writes.add(body);
+          if (body['scopeId'] == dossier) {
+            return http.Response('{"error":"NOTE_PAGE_RECORD_MISSING"}', 409);
+          }
+          expect(body['scopeId'], patient);
+          if (reused) {
+            return http.Response('{"error":"NOTE_PAGE_WRITE_ID_REUSED"}', 409);
+          }
+          expect(body['expectedRevision'], revision);
+          expect(body['writeId'], writeId);
+          expect(body['drawingJson'], writes.first['drawingJson']);
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'data': {
+                'notePage': {'id': 'legacy-note', 'revision': writeId},
+              },
+            }),
+            200,
+          );
+        }),
+      );
+      final result = await NocodbSyncService(
+        apiClient: client,
+        syncRepository: queue,
+      ).pushPendingChanges();
+      expect(writes.length, changed ? 1 : 2);
+      expect(queue.completed, !changed && !reused);
+      expect(result.pushedOperations, changed || reused ? 0 : 1);
+    });
+  }
 }

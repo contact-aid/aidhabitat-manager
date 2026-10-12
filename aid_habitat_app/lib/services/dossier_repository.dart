@@ -4,11 +4,13 @@ import 'dart:math';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/types.dart';
+import '../models/housing_rooms.dart';
 import 'local_database.dart';
 import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
+import 'collection_mutation_contract.dart';
 import 'context_sync_protocol.dart';
 import 'visit_recommendations_publication.dart';
 
@@ -480,6 +482,8 @@ class DossierRepository {
         if (review.contextReferenceJson != null)
           'reference': jsonDecode(review.contextReferenceJson!),
       };
+      // Only this explicit reviewed decision upgrades a legacy queued edit.
+      stampNewCollectionMutation(review.entityType, payload, null);
       await txn.update(
         'sync_operations',
         {
@@ -1843,24 +1847,24 @@ class DossierRepository {
       } catch (_) {}
     }
     if (map == null) return const {};
-    String encodeList(dynamic value) {
-      if (value is List) {
+    String encodeList(dynamic value, String level) {
+      if (value is! List) return jsonEncode(value ?? <dynamic>[]);
+      final identities = map!['_roomIds'];
+      final ids = identities is Map ? identities[level] : null;
+      if (ids is List && ids.length == value.length) {
         return jsonEncode(
-          value
-              .map((e) => e?.toString() ?? '')
-              .where((s) => s.isNotEmpty)
-              .toList(),
+          List.generate(value.length, (i) => {'id': ids[i], 'label': value[i]}),
         );
       }
-      return jsonEncode(const <String>[]);
+      return jsonEncode(value);
     }
 
     return {
-      'basement_rooms_json': encodeList(map['basement']),
-      'rdc_rooms_json': encodeList(map['rdc']),
-      'floor_rooms_json': encodeList(map['floor']),
-      'second_floor_rooms_json': encodeList(map['secondFloor']),
-      'third_floor_rooms_json': encodeList(map['thirdFloor']),
+      'basement_rooms_json': encodeList(map['basement'], 'basement'),
+      'rdc_rooms_json': encodeList(map['rdc'], 'rdc'),
+      'floor_rooms_json': encodeList(map['floor'], 'floor'),
+      'second_floor_rooms_json': encodeList(map['secondFloor'], 'secondFloor'),
+      'third_floor_rooms_json': encodeList(map['thirdFloor'], 'thirdFloor'),
     };
   }
 
@@ -2119,6 +2123,7 @@ class DossierRepository {
       expectedUpdatedAt: expectedUpdatedAt,
       previous: previous,
     );
+    stampNewCollectionMutation(entityType, payloadMap, previous);
     if (localConflict != null) {
       payloadMap['conflict'] = {
         ...localConflict,
@@ -2214,6 +2219,7 @@ class DossierRepository {
                 'concurrency': previous['localReference'],
             },
     );
+    stampNewCollectionMutation(entityType, payload, previous);
     if (previous?['concurrency'] == null && !canCaptureVersion) {
       payload['localReference'] = payload.remove('concurrency');
     }
@@ -2461,6 +2467,29 @@ class DossierRepository {
       beneficiaryPrepared:
           (row['dossier_beneficiary_prepared'] as int? ?? 0) == 1,
       housing: Housing(
+        roomIdentityErrors: _housingRoomErrors(row),
+        roomsByLevel: {
+          'basement': _displayHousingRooms(
+            row['housing_basement_rooms'] as String?,
+            'basement',
+          ),
+          'rdc': _displayHousingRooms(
+            row['housing_rdc_rooms'] as String?,
+            'rdc',
+          ),
+          'floor': _displayHousingRooms(
+            row['housing_floor_rooms'] as String?,
+            'floor',
+          ),
+          'secondFloor': _displayHousingRooms(
+            row['housing_second_floor_rooms'] as String?,
+            'secondFloor',
+          ),
+          'thirdFloor': _displayHousingRooms(
+            row['housing_third_floor_rooms'] as String?,
+            'thirdFloor',
+          ),
+        },
         type: HousingType.values.byName(row['housing_type'] as String),
         year: row['housing_year_value'] as int?,
         surface: (row['housing_surface'] as num?)?.toDouble(),
@@ -2569,12 +2598,41 @@ class DossierRepository {
     return SyncState.synced;
   }
 
+  List<HousingRoom> _displayHousingRooms(String? raw, String level) {
+    try {
+      return parseHousingRooms(raw, level);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Map<String, String> _housingRoomErrors(Map<String, Object?> row) {
+    final errors = <String, String>{};
+    for (final entry in const {
+      'basement': 'housing_basement_rooms',
+      'rdc': 'housing_rdc_rooms',
+      'floor': 'housing_floor_rooms',
+      'secondFloor': 'housing_second_floor_rooms',
+      'thirdFloor': 'housing_third_floor_rooms',
+    }.entries) {
+      try {
+        parseHousingRooms(row[entry.value] as String?, entry.key);
+      } catch (_) {
+        errors[entry.key] =
+            'Liste de pièces illisible : données conservées, revue nécessaire.';
+      }
+    }
+    return errors;
+  }
+
   List<String> _decodeRoomsJson(String? raw) {
     if (raw == null || raw.trim().isEmpty) return const [];
     try {
       final decoded = jsonDecode(raw);
       if (decoded is List) {
-        return decoded.map((e) => e.toString()).toList(growable: false);
+        return decoded
+            .map((e) => e is Map ? e['label'].toString() : e.toString())
+            .toList(growable: false);
       }
     } catch (_) {
       /* fall through */
@@ -2870,6 +2928,104 @@ class DossierRepository {
     }
   }
 
+  Future<void> _bindLegacyDiagnosticRoomsBeforeHousingEdit(
+    DatabaseExecutor txn,
+    String dossierId,
+    Map<String, dynamic> housing,
+    String now,
+  ) async {
+    final rows = await txn.query(
+      'diagnostic_sanitaires',
+      where: 'dossier_local_id = ?',
+      whereArgs: [dossierId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final row = rows.single;
+    final before = <String, dynamic>{};
+    final updates = <String, dynamic>{};
+    var changed = false;
+    const levels = {
+      'basement': 'basement_rooms_json',
+      'rdc': 'rdc_rooms_json',
+      'floor': 'floor_rooms_json',
+      'second_floor': 'second_floor_rooms_json',
+      'third_floor': 'third_floor_rooms_json',
+    };
+    for (final family in const {
+      'sdbInstances': 'sdb_instances_json',
+      'wcInstances': 'wc_instances_json',
+    }.entries) {
+      final raw = row[family.value] as String?;
+      final original = raw == null ? <dynamic>[] : jsonDecode(raw) as List;
+      before[family.key] = original;
+      final instances = original
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      final label = family.key == 'sdbInstances' ? 'Salle de bain' : 'WC';
+      for (final level in levels.entries) {
+        final rooms = parseHousingRooms(
+          housing[level.value] as String?,
+          level.key,
+        ).where((r) => r.label == label).toList();
+        final diagnostics = instances
+            .where(
+              (r) =>
+                  r['levelField'] == level.key ||
+                  (level.key == 'second_floor' &&
+                      r['levelField'] == 'secondFloor') ||
+                  (level.key == 'third_floor' &&
+                      r['levelField'] == 'thirdFloor'),
+            )
+            .toList();
+        final linked = diagnostics
+            .where((r) => (r['housingRoomId']?.toString() ?? '').isNotEmpty)
+            .toList();
+        final linkedIds = linked.map((r) => r['housingRoomId']).toSet();
+        if (linkedIds.length != linked.length ||
+            linkedIds.any((id) => !rooms.any((r) => r.id == id))) {
+          continue;
+        }
+        final unlinked = diagnostics
+            .where((r) => (r['housingRoomId']?.toString() ?? '').isEmpty)
+            .toList();
+        final available = rooms
+            .where((r) => !linkedIds.contains(r.id))
+            .toList();
+        // Unequal counts are ambiguous; never infer which data was deleted.
+        if (unlinked.length != available.length) continue;
+        for (var i = 0; i < unlinked.length; i++) {
+          unlinked[i]['housingRoomId'] = available[i].id;
+          changed = true;
+        }
+      }
+      updates[family.key] = instances;
+    }
+    if (!changed) return;
+    await txn.update(
+      'diagnostic_sanitaires',
+      {
+        'sdb_instances_json': jsonEncode(updates['sdbInstances']),
+        'wc_instances_json': jsonEncode(updates['wcInstances']),
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      },
+      where: 'local_id = ?',
+      whereArgs: [row['local_id']],
+    );
+    await _enqueueChildUpdate(
+      txn,
+      operationId: 'diag_update_$dossierId',
+      entityType: 'diagnostic_sanitaires',
+      dossierId: dossierId,
+      updates: updates,
+      baseValues: before,
+      existingRow: row,
+      rootFields: const ['sdbInstances', 'wcInstances'],
+      now: now,
+    );
+  }
+
   Future<void> updateHousing(
     String dossierId,
     Map<String, dynamic> fields,
@@ -2904,6 +3060,24 @@ class DossierRepository {
 
       final changedFields = _diffAgainstRow(existingRow, fields);
       _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
+      if (changedFields.keys.any(
+        (key) =>
+            _kHousingRoomBreakdownColumns.contains(key) ||
+            const {
+              'basement',
+              'rdc',
+              'floor',
+              'second_floor',
+              'third_floor',
+            }.contains(key),
+      )) {
+        for (final column in _kHousingRoomBreakdownColumns) {
+          parseHousingRooms(
+            (fields[column] ?? existingRow?[column]) as String?,
+            column,
+          );
+        }
+      }
 
       if (changedFields.isEmpty) {
         return; // rien n'a vraiment changé → no-op
@@ -2922,6 +3096,14 @@ class DossierRepository {
       // dans une seule transaction atomique. Si l'app crash entre les
       // deux writes, SQLite rollback complet → pas d'état orphelin.
       final apiUpdates = _mapHousingFieldsToApi(changedFields);
+      if (existingRow != null && hasCollectionUpdates('housing', apiUpdates)) {
+        await _bindLegacyDiagnosticRoomsBeforeHousingEdit(
+          txn,
+          dossierId,
+          existingRow,
+          now,
+        );
+      }
       await txn.update(
         'housings',
         localFields,
@@ -3029,7 +3211,8 @@ class DossierRepository {
       'second_floor_rooms_json': 'secondFloor',
       'third_floor_rooms_json': 'thirdFloor',
     };
-    final roomsBreakdown = <String, List<String>>{};
+    final roomsBreakdown = <String, dynamic>{};
+    final roomIds = <String, List<String>>{};
     final out = <String, dynamic>{};
     fields.forEach((key, value) {
       if (key == 'updated_at' || key == 'sync_state') return;
@@ -3043,13 +3226,20 @@ class DossierRepository {
           try {
             final decoded = jsonDecode(value);
             if (decoded is List) {
-              roomsBreakdown[breakdownKey] = decoded
-                  .map((e) => e?.toString() ?? '')
-                  .where((s) => s.isNotEmpty)
+              final rooms = parseHousingRooms(value, breakdownKey);
+              roomsBreakdown[breakdownKey] = rooms
+                  .map((room) => room.label)
                   .toList();
+              if (decoded.any((room) => room is Map)) {
+                roomIds[breakdownKey] = rooms.map((room) => room.id).toList();
+              }
+            } else {
+              throw const FormatException('Liste de pièces invalide');
             }
           } catch (_) {
-            // JSON malformé → on n'ajoute pas cette clé.
+            throw const FormatException(
+              'Liste de pièces illisible : sauvegarde suspendue, données conservées.',
+            );
           }
         } else {
           // Valeur vide / null → niveau désactivé, on transmet une
@@ -3119,6 +3309,7 @@ class DossierRepository {
     // toutes les listes sont vides — c'est le moyen explicite de
     // « vider » les pièces côté serveur (ex. niveau désactivé).
     if (roomsBreakdown.isNotEmpty) {
+      if (roomIds.isNotEmpty) roomsBreakdown['_roomIds'] = roomIds;
       out['roomsBreakdown'] = roomsBreakdown;
     }
     return out;
@@ -3316,6 +3507,67 @@ class DossierRepository {
           if (row?['wc_instances_json'] != null)
             'wcInstances': jsonDecode(row!['wc_instances_json'] as String),
         },
+        existingRow: row,
+        rootFields: const ['sdbInstances', 'wcInstances'],
+        now: now,
+      );
+    });
+    SyncEngine().notify();
+  }
+
+  /// Explicit removal by diagnostic identity, never by count or position.
+  Future<void> removeDiagnosticRooms(
+    String dossierId, {
+    required Set<String> bathroomIds,
+    required Set<String> wcIds,
+  }) async {
+    final db = await _database.database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'diagnostic_sanitaires',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+      final row = rows.single;
+      final before = <String, dynamic>{};
+      final updates = <String, dynamic>{};
+      var changed = false;
+      for (final entry in const {
+        'sdbInstances': 'sdb_instances_json',
+        'wcInstances': 'wc_instances_json',
+      }.entries) {
+        final raw = row[entry.value] as String?;
+        final items = raw == null ? <dynamic>[] : jsonDecode(raw) as List;
+        final removed = entry.key == 'sdbInstances' ? bathroomIds : wcIds;
+        final retained = items
+            .where((item) => !removed.contains((item as Map)['id']))
+            .toList();
+        before[entry.key] = items;
+        updates[entry.key] = retained;
+        changed = changed || retained.length != items.length;
+      }
+      if (!changed) return;
+      final now = DateTime.now().toIso8601String();
+      await txn.update(
+        'diagnostic_sanitaires',
+        {
+          'sdb_instances_json': jsonEncode(updates['sdbInstances']),
+          'wc_instances_json': jsonEncode(updates['wcInstances']),
+          'updated_at': now,
+          'sync_state': SyncState.pendingSync.name,
+        },
+        where: 'local_id = ?',
+        whereArgs: [row['local_id']],
+      );
+      await _enqueueChildUpdate(
+        txn,
+        operationId: 'diag_update_$dossierId',
+        entityType: 'diagnostic_sanitaires',
+        dossierId: dossierId,
+        updates: updates,
+        baseValues: before,
         existingRow: row,
         rootFields: const ['sdbInstances', 'wcInstances'],
         now: now,

@@ -106,7 +106,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
     if (!where) return true;
     const parts = where.split('~and');
     return parts.map((part) => {
-      const match = /^\((Id|uuid_source|patient_id|beneficiaires_id|beneficiaire_id|app_sync_revision),eq,([^(),]+)\)$/.exec(part);
+      const match = /^\((Id|uuid_source|patient_id|beneficiaires_id|beneficiaire_id|app_sync_revision|scope_type|scope_id|tab_key|sub_tab_key|page_number),eq,([^(),]*)\)$/.exec(part);
       assert(match, `Unsupported where: ${where}`);
       return String(row[match[1]]) === match[2];
     }).every(Boolean);

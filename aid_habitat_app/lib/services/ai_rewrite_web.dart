@@ -9,6 +9,10 @@ external JSPromise<JSString> _prepare();
 external JSPromise<JSString> _rewrite(JSString text, JSString mode);
 @JS('aidHabitatLocalAiProgress')
 external JSNumber _progress();
+@JS('aidHabitatLocalAiPhase')
+external JSString _phase();
+@JS('aidHabitatLocalAiLastError')
+external JSString _lastError();
 @JS('aidHabitatLocalAiCancel')
 external void _cancel();
 
@@ -24,8 +28,11 @@ Future<void> prepareLocalAi() async {
   try {
     await _prepare().toDart;
   } catch (_) {
+    final message = _lastError().toDart;
     throw Exception(
-      'Preparation locale impossible. Verifiez la connexion et au moins 1,3 Go de stockage libre.',
+      message.isNotEmpty
+          ? message
+          : 'Préparation locale impossible. Vérifiez la connexion et le stockage libre.',
     );
   }
 }
@@ -42,3 +49,5 @@ Future<String> rewriteLocalAi(String text, String mode) async {
 
 double localAiProgress() => _progress().toDartDouble;
 void cancelLocalAi() => _cancel();
+
+String localAiPhase() => _phase().toDart;

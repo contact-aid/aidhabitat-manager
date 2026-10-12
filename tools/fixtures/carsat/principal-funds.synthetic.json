@@ -1,0 +1,8 @@
+{
+  "environment": "synthetic",
+  "table": "Caisses_de_retraite",
+  "records": [
+    { "id": "101", "fields": { "nom": "CNAV", "numero_telephone_contact": "fiction" } },
+    { "id": "102", "fields": { "nom": "MSA" } }
+  ]
+}

@@ -54,6 +54,8 @@ function fixture(enabled = true) {
     resolveRequestedErgoLabel: async (_user, value) => value,
     upsertContexte: async (...args) => writes.push({ kind: 'context', args }),
     updateRecord: async (...args) => writes.push({ kind: 'legacy', args }),
+    changesCollection: () => false,
+    strictCollectionMutation: null,
     guardedMutation: enabled ? createGuardedMutation({
       readRecord: async () => ({ ...record.fields }),
       writer: async (input) => {

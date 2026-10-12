@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "environment": "synthetic",
+  "dossiers": [
+    {
+      "patientId": "nocodb-beneficiaire-fiction",
+      "dossierId": "airtable:recFICTION",
+      "initialText": "Description Airtable fictive",
+      "pages": [
+        {
+          "id": "note-fictive-beneficiaire",
+          "tabKey": "Bénéficiaire-Notes",
+          "pageNumber": 0,
+          "scopeType": "dossier_detail",
+          "scopeId": "airtable:recFICTION",
+          "drawingJson": "{\"version\":1,\"text\":\"Saisie iPad fictive à conserver\",\"strokes\":[{\"fiction\":true}]}",
+          "revision": "00000000-0000-4000-8000-000000000001"
+        }
+      ]
+    }
+  ]
+}

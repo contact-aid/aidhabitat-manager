@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import 'package:aid_habitat_app/components/form_widgets.dart';
 import 'package:aid_habitat_app/models/types.dart';
@@ -11,13 +13,42 @@ import 'package:flutter_test/flutter_test.dart';
 class _Repository extends Fake implements DossierRepository {
   final writes = <Map<String, dynamic>>[];
   int pruneCalls = 0;
+  final removedBathrooms = <String>{};
+  Map<String, dynamic> housing = {'typology': 'Maison', 'surface': 30.0};
+  @override
+  Future<DiagnosticSanitaire?> fetchDiagnosticSanitaire(String id) async =>
+      DiagnosticSanitaire(
+        dossierId: id,
+        sdbInstances: [
+          BathroomInstance(
+            id: 'first-bath',
+            housingRoomId: 'room-a',
+            levelField: 'rdc',
+            levelLabel: 'RDC',
+          ),
+          BathroomInstance(
+            id: 'second-bath',
+            housingRoomId: 'room-b',
+            levelField: 'rdc',
+            levelLabel: 'RDC',
+          ),
+        ],
+        wcInstances: [],
+      );
+  @override
+  Future<void> removeDiagnosticRooms(
+    String id, {
+    required Set<String> bathroomIds,
+    required Set<String> wcIds,
+  }) async {
+    removedBathrooms.addAll(bathroomIds);
+  }
+
   Completer<void>? firstWriteGate;
 
   @override
-  Future<Map<String, dynamic>?> fetchHousingRaw(String dossierId) async => {
-    'typology': 'Maison',
-    'surface': 30.0,
-  };
+  Future<Map<String, dynamic>?> fetchHousingRaw(String dossierId) async =>
+      housing;
 
   @override
   Future<void> updateHousing(
@@ -81,6 +112,44 @@ void main() {
               widget is FormNumberField && widget.label == 'Surface habitable',
         ),
       );
+
+  testWidgets(
+    'removing one bathroom keeps the other housing and diagnostic identity',
+    (tester) async {
+      final repository = _Repository();
+      repository.housing.addAll({
+        'rdc': 1,
+        'levels': '["rdc"]',
+        'rdc_rooms_json':
+            '[{"id":"room-a","label":"Salle de bain"},{"id":"room-b","label":"Salle de bain"}]',
+      });
+      await tester.binding.setSurfaceSize(const Size(1100, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(screen(repository));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Niveaux'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey<String>('collapsed-rdc')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Salle de bain').last);
+      await tester.pumpAndSettle();
+      final adjuster = find.byKey(
+        const ValueKey<String>('adjuster-rdc-Salle de bain'),
+      );
+      await tester.tap(
+        find.descendant(of: adjuster, matching: find.byIcon(LucideIcons.minus)),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      final saved =
+          jsonDecode(repository.writes.last['rdc_rooms_json']) as List;
+      expect(saved, [
+        {'id': 'room-a', 'label': 'Salle de bain'},
+      ]);
+      expect(repository.removedBathrooms, {'second-bath'});
+      expect(repository.pruneCalls, 0);
+    },
+  );
 
   testWidgets('opening cached housing never prunes sanitary details', (
     tester,
