@@ -2,11 +2,17 @@ import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import {RUNTIME_FILE} from './config.mjs';
+import {adaptGpuRuntime} from './gpu_runtime_compat.mjs';
 const output = new URL('../../web/local-ai/', import.meta.url);
 await mkdir(output, {recursive: true});
 await build({entryPoints: [new URL('worker.mjs', import.meta.url).pathname],
   bundle: true, minify: true, format: 'iife', platform: 'browser',
-  outfile: new URL('worker.js', output).pathname, legalComments: 'linked'});
+  outfile: new URL('worker.js', output).pathname, legalComments: 'linked',
+  plugins: [{name: 'pinned-nine-buffer-runtime', setup(bundler) {
+    bundler.onLoad({filter: /web-llm\/lib\/index.js$/}, async ({path}) => ({
+      contents: adaptGpuRuntime(await readFile(path, 'utf8')), loader: 'js',
+    }));
+  }}]});
 const wasm = new URL(RUNTIME_FILE, output);
 const source = 'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/025bcaf3780fa8254f5e5efd3bfea0a5397248f4/web-llm-models/v0_2_84/base/Qwen3-1.7B-q4f16_1_cs1k-webgpu.wasm';
 let bytes;

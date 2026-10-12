@@ -172,6 +172,29 @@ test('the earlier iPad request keeps its original import behavior', async () => 
   assert.equal(created[1].status, 'À visiter');
 });
 
+test('web Airtable sync fills primary gender without replacing existing occupant details', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  input.client.fields['M./Mme'] = 'Madame';
+  const saved = JSON.stringify([
+    { firstName: 'Camille', lastName: 'Exemple', homeHelpTxt: 'Visite conservée' },
+    { firstName: 'Alex', lastName: 'Exemple', gender: 'Homme' },
+  ]);
+  const patches = [];
+  await syncCurrentCoralieDossiers({
+    sourceRows: [input],
+    dossierRows: [{ id: 10, fields: { uuid_source: 'airtable:recAAAAAAAAAAAAAA',
+      beneficiaires_id: 11, ergo_id: 'Coralie' } }],
+    beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple', occupants_json: saved } }],
+    updateBeneficiary: async (_, patch) => patches.push(patch),
+    updateDossier: async () => {},
+  });
+  assert.equal(patches.length, 1);
+  const occupants = JSON.parse(patches[0].occupants_json);
+  assert.equal(occupants[0].gender, 'Femme');
+  assert.equal(occupants[0].homeHelpTxt, 'Visite conservée');
+  assert.equal(occupants[1].gender, 'Homme');
+});
+
 test('prefills housing and ownership from new-client Airtable fields without replacing visit edits', async () => {
   const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
   Object.assign(input.client.fields, {
@@ -198,4 +221,33 @@ test('prefills housing and ownership from new-client Airtable fields without rep
     { table: 'beneficiary', patch: { statut_occupation_id1: 1 } },
     { table: 'housing', patch: { type_de_logement_id: 1, annee_habitation: '1988' } },
   ]);
+});
+
+
+test('gender import hydrates scalar-only households and preserves explicit clears', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z');
+  input.client.fields['M./Mme'] = 'Madame';
+  for (const raw of [null, '[]', '[{"firstName":"Camille","lastName":"Exemple","gender":""}]', '{invalid']) {
+    const patches = [];
+    await syncCurrentCoralieDossiers({
+      sourceRows: [input],
+      dossierRows: [{ id: 10, fields: { uuid_source: 'airtable:recAAAAAAAAAAAAAA',
+        beneficiaires_id: 11, ergo_id: 'Coralie' } }],
+      beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple', occupants_json: raw,
+        aide_a_domicile: true, aide_a_domicile_txt: 'Conserver aide',
+        date_naissance_monsieur: '1950-01-01',
+        prenom_occupant_2: 'Alex', nom_occupant_2: 'Exemple', date_naissance_madame: '1951-02-02',
+      } }],
+      updateBeneficiary: async (_, patch) => patches.push(patch), updateDossier: async () => {},
+    });
+    const json = patches.find(p => p.occupants_json)?.occupants_json;
+    if (raw === null || raw === '[]') {
+      const occupants = JSON.parse(json);
+      assert.equal(occupants[0].gender, 'Femme');
+      assert.equal(occupants[0].homeHelpTxt, 'Conserver aide');
+      assert.equal(occupants[0].birthDate, '1950-01-01');
+      assert.equal(occupants[1].firstName, 'Alex');
+      assert.equal(occupants[1].birthDate, '1951-02-02');
+    } else assert.equal(json, undefined);
+  }
 });

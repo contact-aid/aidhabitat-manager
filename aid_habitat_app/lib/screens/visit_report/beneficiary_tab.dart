@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/mobility_aids.dart';
 import '../../models/aggir_eligibility.dart';
 import '../../services/data_service.dart';
 import '../../services/dossier_repository.dart';
@@ -533,7 +534,9 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   Future<void> _flushPendingSave() async {
     await _save();
     if (_hasPendingSave) {
-      throw StateError('Les informations du bénéficiaire ne sont pas encore enregistrées.');
+      throw StateError(
+        'Les informations du bénéficiaire ne sont pas encore enregistrées.',
+      );
     }
   }
 
@@ -988,6 +991,17 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             ),
           ),
           const SizedBox(height: 12),
+          if (_occupants[idx].gender == 'Femme') ...[
+            FormTextField(
+              label: 'Nom de jeune fille',
+              value: _occupants[idx].maidenName ?? '',
+              onChanged: (value) => _updateOccupant(
+                idx,
+                _occupants[idx].copyWith(maidenName: value),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           _buildBirthDateRow(idx),
           if (idx == 0 && requiresAggir(_occupants.first.birthDate))
             const Padding(
@@ -1172,7 +1186,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   /// disparaissent (pas de navigation nécessaire).
   Widget _buildOccupantSwipeContainer({
     required Widget perOccupantContent,
-    required Widget sharedContent,
+    Widget? sharedContent,
   }) {
     final hasMultiple = _occupants.length > 1;
     if (!hasMultiple) {
@@ -1184,8 +1198,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             perOccupantContent,
-            const SizedBox(height: 24),
-            sharedContent,
+            if (sharedContent != null) ...[
+              const SizedBox(height: 24),
+              sharedContent,
+            ],
           ],
         ),
       );
@@ -1228,8 +1244,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         perOccupantContent,
-                        const SizedBox(height: 24),
-                        sharedContent,
+                        if (sharedContent != null) ...[
+                          const SizedBox(height: 24),
+                          sharedContent,
+                        ],
                       ],
                     ),
                   ),
@@ -1360,6 +1378,8 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   // ---------------------------------------------------------------------------
 
   Widget _buildFinanceSection() {
+    final trustedPhoneInvalid = !isValidFrenchPhone(_trustedPhone);
+    final trustedEmailInvalid = !isValidEmail(_trustedEmail);
     // Foyer n'a aucune donnée "par occupant" (situation familiale et
     // occupation sont partagées pour le ménage). On conserve donc un
     // simple SingleChildScrollView sans header / swipe / dots.
@@ -1415,6 +1435,59 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
             },
           ),
           const SizedBox(height: 24),
+          FormTextField(
+            label: 'Personnes présentes à la visite',
+            value: _personnesPresentesVisite,
+            onChanged: (v) {
+              _personnesPresentesVisite = v;
+              _markChanged();
+            },
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: FormTextFieldWithWarning(
+                  label: 'Téléphone de la personne de confiance',
+                  value: _trustedPhone,
+                  keyboardType: TextInputType.phone,
+                  showWarning: trustedPhoneInvalid,
+                  warningText: 'Numéro français invalide',
+                  onChanged: (v) {
+                    _trustedPhone = v;
+                    _markChanged();
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FormTextFieldWithWarning(
+                  label: 'Email de la personne de confiance',
+                  value: _trustedEmail,
+                  keyboardType: TextInputType.emailAddress,
+                  showWarning: trustedEmailInvalid,
+                  warningText: 'Adresse mail invalide',
+                  onChanged: (v) {
+                    _trustedEmail = v;
+                    _markChanged();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          FormMultiToggleGroup(
+            label: 'Envoi du rapport',
+            options: const ['Mail', 'Courrier'],
+            selected: _parseEnvoiRapport(_envoiRapport),
+            columns: 2,
+            onChanged: (next) {
+              _envoiRapport = _serializeEnvoiRapport(next);
+              _markChanged();
+            },
+          ),
+          const SizedBox(height: 24),
         ],
       ),
     );
@@ -1428,21 +1501,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     return _buildOccupantSwipeContainer(
       perOccupantContent: _buildAidesDependenceBlock(idx),
-      sharedContent: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // --- Bloc "Visite" — partagé (une seule fois par dossier).
-          FormTextField(
-            label: 'Personnes présentes à la visite',
-            value: _personnesPresentesVisite,
-            onChanged: (v) {
-              _personnesPresentesVisite = v;
-              _markChanged();
-            },
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
     );
   }
 
@@ -1496,32 +1554,65 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     );
   }
 
-  /// Dépendance : liste de pills toutes égales (Aucune incluse). On
-  /// stocke directement le libellé cliqué dans `dependenceTxt`. Le tap
-  /// sur la pill déjà sélectionnée la désélectionne (cf. FormToggleGroup
-  /// `allowDeselect=true`) → retour à `''` = non renseigné.
-  ///
-  /// NB : avant 2026-04-30, l'historique stockait `''` quand l'ergo
-  /// cliquait « Aucune » (convention partagée avec NocoDB) — résultat :
-  /// la pill « Aucune » ne pouvait jamais être visiblement highlighted,
-  /// et un tap dessus était un no-op visible. Maintenant on stocke le
-  /// libellé tel quel ("Aucune"). Côté NocoDB, `dependance_particuliere`
-  /// (link) ne matchera pas "Aucune" (pas dans le ref list) et le
-  /// fallback `dependance_particuliere_txt` recevra simplement "Aucune"
-  /// comme texte — ce qui est sémantiquement correct.
+  /// Plusieurs aides peuvent être utilisées par un même occupant. On garde
+  /// le champ texte existant et sépare les choix par une virgule pour rester
+  /// compatible avec les dossiers déjà enregistrés. « Aucune » est exclusive.
   Widget _buildDependenceSelector(int index) {
     final occ = _occupants[index];
-    final value = occ.dependenceTxt.trim();
-    return FormToggleGroup(
-      label: 'Dépendance',
-      options: _dependenceOptions,
-      columns: 2,
-      selected: value,
-      onChanged: (v) {
-        // v peut être '' (désélection via FormToggleGroup.allowDeselect)
-        // ou une des options (y compris « Aucune »). On stocke tel quel.
-        _updateOccupant(index, occ.copyWith(dependenceTxt: v));
-      },
+    final selected = parseMobilityAids(occ.dependenceTxt);
+
+    void toggle(String option) {
+      final next = [...selected];
+      if (option == 'Aucune') {
+        if (next.contains(option)) {
+          next.clear();
+        } else {
+          next
+            ..clear()
+            ..add(option);
+        }
+      } else {
+        next.remove('Aucune');
+        if (next.contains(option)) {
+          next.remove(option);
+        } else {
+          next.add(option);
+        }
+      }
+      _updateOccupant(index, occ.copyWith(dependenceTxt: encodeMobilityAids(next)));
+    }
+
+    Widget option(String value) => FormToggleGroup(
+      label: '',
+      options: [value],
+      expand: true,
+      selected: selected.contains(value) ? value : '',
+      onChanged: (_) => toggle(value),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Dépendance',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+            color: Color(0xFF0E1116),
+          ),
+        ),
+        const SizedBox(height: 6),
+        for (var row = 0; row < _dependenceOptions.length; row += 2) ...[
+          if (row > 0) const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: option(_dependenceOptions[row])),
+              const SizedBox(width: 8),
+              Expanded(child: option(_dependenceOptions[row + 1])),
+            ],
+          ),
+        ],
+      ],
     );
   }
 
@@ -2081,8 +2172,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   }
 
   Widget _buildAdminSection() {
-    final trustedPhoneInvalid = !isValidFrenchPhone(_trustedPhone);
-    final trustedEmailInvalid = !isValidEmail(_trustedEmail);
     final idx = _currentOccupantIndex.clamp(0, _occupants.length - 1);
     return _buildOccupantSwipeContainer(
       perOccupantContent: _buildAdminPersonalBlock(idx),
@@ -2099,55 +2188,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
               _markChanged();
             },
           ),
-          const SizedBox(height: 14),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: FormTextFieldWithWarning(
-                  label: 'Téléphone',
-                  value: _trustedPhone,
-                  keyboardType: TextInputType.phone,
-                  showWarning: trustedPhoneInvalid,
-                  warningText: 'Numéro français invalide',
-                  onChanged: (v) {
-                    _trustedPhone = v;
-                    _markChanged();
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FormTextFieldWithWarning(
-                  label: 'Email',
-                  value: _trustedEmail,
-                  keyboardType: TextInputType.emailAddress,
-                  showWarning: trustedEmailInvalid,
-                  warningText: 'Adresse mail invalide',
-                  onChanged: (v) {
-                    _trustedEmail = v;
-                    _markChanged();
-                  },
-                ),
-              ),
-            ],
-          ),
           const SizedBox(height: 24),
-
-          // --- Bloc "Renseignements sur la visite" — partagé.
-          // Multi-select : l'ergo peut cocher Mail ET Courrier (demande
-          // utilisateur 2026-05-04). Stocké en CSV "Mail, Courrier" dans
-          // la colonne `envoi_rapport` (texte libre côté NocoDB).
-          FormMultiToggleGroup(
-            label: 'Envoi du rapport',
-            options: const ['Mail', 'Courrier'],
-            selected: _parseEnvoiRapport(_envoiRapport),
-            columns: 2,
-            onChanged: (next) {
-              _envoiRapport = _serializeEnvoiRapport(next);
-              _markChanged();
-            },
-          ),
           // NB : le bloc « Création compte ANAH » a été déplacé dans la
           // section Profil (demande utilisateur 2026-05-04). Voir
           // _buildProfilSection > Bloc Compte ANAH.

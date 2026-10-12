@@ -1,3 +1,4 @@
+import { formatMobilityAidsForReport, printableMobilityAidsForReport, applyMobilityAidsToReport } from './mobilityAids.mjs';
 // Génère un rapport de visite PDF depuis le template
 // `server/templates/visitReport.template.pdf` avec les données du
 // dossier (récupérées depuis NocoDB).
@@ -15,6 +16,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { appendSanitaryRoomsAppendix } from './sanitaryRoomsAppendix.mjs';
 import { uniformPhotoHeight } from './photoLayout.mjs';
 import { needsMorbihanEligibleWorks, insertMorbihanEligibleWorks } from './morbihanEligibleWorks.mjs';
 import { fileURLToPath } from 'node:url';
@@ -809,34 +811,6 @@ function joinNotePagesText(pages) {
     .trim();
 }
 
-/**
- * Pour le champ "Dépendance" du PDF, on n'affiche que l'un des 4
- * mots-clés : « Aucune » / « Canne » / « Déambulateur » /
- * « Fauteuil roulant ». Tout ce qui n'est pas l'un de ces 3 derniers
- * (vide, "Non" legacy NocoDB, texte libre non-classifiable…) ⇒
- * « Aucune ».
- *
- * Pourquoi : côté Flutter, sélectionner « Aucune » dans la pill list
- * stocke `dependenceTxt = ''` (cf. beneficiary_tab.dart). Et certaines
- * lignes NocoDB historiques gardent « Non » dans
- * `dependance_particuliere_txt`. Avant ce fix, ces deux cas
- * affichaient soit du vide, soit littéralement « Non » dans le PDF —
- * confusant car « Aucune » est l'option par défaut visible dans l'app.
- */
-function normalizeDependenceForReport(raw) {
-  const text = String(raw || '').trim();
-  const positives = ['Canne', 'Déambulateur', 'Fauteuil roulant'];
-  if (text) {
-    const lc = text.toLowerCase();
-    for (const opt of positives) {
-      if (lc.includes(opt.toLowerCase())) return opt;
-    }
-  }
-  // Vide, "Aucune", "Non", ou texte non-classifiable → on affiche
-  // « Aucune » (canonique, équivalent à la pill par défaut Flutter).
-  return 'Aucune';
-}
-
 // Resolve the two printed birth-date slots by occupant order. The legacy
 // database columns are named Monsieur/Madame but actually store positions 1/2.
 export function reportBirthSlots(patient = {}) {
@@ -1236,7 +1210,7 @@ function buildViewModel({
       // un élément ». On match d'abord le texte contre les options
       // connues, fallback sur le 1er segment avant virgule/point si
       // aucune correspondance.
-      dependenceTxt: normalizeDependenceForReport(patient.dependenceTxt),
+      dependenceTxt: formatMobilityAidsForReport(patient.dependenceTxt),
       incomeCategory: String(patient.incomeCategory || '').trim(),
       // Cellule « Caisse de retraite complémentaire » de la page
       // « Descriptif des aides prévisionnelles » — pré-résolu côté
@@ -2702,9 +2676,9 @@ function formatRecoText(reco) {
  * Sert à blanchir précisément la zone d'une case BOT vide quand on
  * conserve la page (TOP rempli, BOT vide).
  */
-function getRecoCaseBoundingBox(fieldsByName, recoIdx) {
-  const textName = RECO_TEXT_FIELDS[recoIdx];
-  const imgName = RECO_IMAGE_FIELDS[recoIdx];
+function getRecoCaseBoundingBox(fieldsByName, recoIdx, textFields = RECO_TEXT_FIELDS, imageFields = RECO_IMAGE_FIELDS) {
+  const textName = textFields[recoIdx];
+  const imgName = imageFields[recoIdx];
   const text = fieldsByName.get(textName);
   const img = fieldsByName.get(imgName);
   const rects = [];
@@ -3912,24 +3886,51 @@ export async function generateVisitReport({
   }
 
   // ---------------------------------------------------------------
-  // Pages 11-14 — Recommandations (texte + image wiki). 8 slots
-  // fixes en v1 ; au-delà, on incrémente `recoOverflow` mais on ne
-  // génère pas (encore) de pages bonus dynamiques — TODO chunk 4.2c.
-  // ---------------------------------------------------------------
-  // 1) Texte : `setText` est synchrone → on l'applique en boucle
-  //    classique (pas de gain à paralléliser).
-  // 2) Images wiki : chacune fait fetch HTTP wiki + embed PDF →
-  //    parallélisé 2026-05-07 pour overlap les latences réseau.
-  //    Avant : 8 awaits séquentiels = ~5-8s sur cold start.
-  //    Après : Promise.all = ~1-2s (max d'une seule fetch).
+  // Extend the recommendation section with the same blank template and
+  // widget geometry. Embed the background before filling any recommendation
+  // so bonus pages cannot repeat text or images from the source page.
+  const recoTextFields = [...RECO_TEXT_FIELDS];
+  const recoImageFields = [...RECO_IMAGE_FIELDS];
+  stats.recoPagesAdded = 0;
+  if (recommendations.length > RECO_TEXT_FIELDS.length) {
+    const sourceText = [0, 1].map((i) => getFieldFirstWidgetInfo(pdfDoc, form, RECO_TEXT_FIELDS[i]));
+    const sourceImage = [0, 1].map((i) => getFieldFirstWidgetInfo(pdfDoc, form, RECO_IMAGE_FIELDS[i]));
+    const lastSlot = getFieldFirstWidgetInfo(pdfDoc, form, RECO_TEXT_FIELDS.at(-1));
+    if (!lastSlot || sourceText.some((info) => !info) || sourceImage.some((info) => !info)) {
+      throw new Error('Recommendation template geometry is missing');
+    }
+    const background = await pdfDoc.embedPage(sourceText[0].page);
+    await background.embed();
+    for (let start = RECO_TEXT_FIELDS.length; start < recommendations.length; start += 2) {
+      const page = pdfDoc.insertPage(lastSlot.pageIndex + 1 + stats.recoPagesAdded,
+        [lastSlot.pageWidth, lastSlot.pageHeight]);
+      page.drawPage(background);
+      stats.recoPagesAdded += 1;
+      // Create both slots, including the last empty one, for the existing
+      // empty-slot masking and aid-summary merging pipeline.
+      for (let slot = 0; slot < 2; slot += 1) {
+        const index = start + slot;
+        const options = (rect) => ({ ...rect, borderWidth: 0,
+          borderColor: rgb(1, 1, 1), backgroundColor: rgb(1, 1, 1), textColor: rgb(0, 0, 0) });
+        const textName = `Préconisation supplémentaire ${index + 1}`;
+        const text = form.createTextField(textName);
+        text.enableMultiline();
+        text.addToPage(page, options(sourceText[slot].rect));
+        text.setFontSize(11);
+        fieldsByName.set(textName, text);
+        recoTextFields.push(textName);
+        const imageName = `Illustration supplémentaire ${index + 1}`;
+        const image = form.createButton(imageName);
+        image.addToPage('', page, options(sourceImage[slot].rect));
+        fieldsByName.set(imageName, image);
+        recoImageFields.push(imageName);
+      }
+    }
+  }
   const recoImageTasks = [];
   for (let i = 0; i < recommendations.length; i += 1) {
-    if (i >= RECO_TEXT_FIELDS.length) {
-      stats.recoOverflow += 1;
-      continue;
-    }
     const reco = recommendations[i];
-    const textFieldName = RECO_TEXT_FIELDS[i];
+    const textFieldName = recoTextFields[i];
     const textField = fieldsByName.get(textFieldName);
     if (textField instanceof PDFTextField) {
       try {
@@ -3946,7 +3947,7 @@ export async function generateVisitReport({
     // la position de cette reco (haut OU bas de page). Permet de garder
     // l'image alignée avec son texte même quand l'ergo permute / ajoute
     // / retire des préconisations dans l'app.
-    const imageFieldName = RECO_IMAGE_FIELDS[i];
+    const imageFieldName = recoImageFields[i];
     const wikiUrl = String(reco?.wikiImageUrl || '').trim();
     if (imageFieldName && wikiUrl) {
       recoImageTasks.push(setImageInField(
@@ -3965,7 +3966,7 @@ export async function generateVisitReport({
   // de préconisations ajoutées… il ne doit pas y'avoir de cases
   // vides, elles doivent êtes retirées visuellement").
   //
-  // Le template PDF a 4 pages × 2 cases (TOP + BOT) = 8 slots fixes.
+  // Chaque page contient deux cases (TOP + BOT), y compris les pages ajoutées.
   // On distingue 3 situations par page :
   //   - les 2 cases utilisées      → garder la page intacte
   //   - seule la case TOP utilisée → garder la page mais blanchir
@@ -3996,19 +3997,19 @@ export async function generateVisitReport({
   const emptyPageIndices = []; // pages reco entièrement vides à retirer
   const pendingBotCovers = []; // { pageIdx, botRect, topRect } — partielles
   stats.recoPagesRemoved = 0;
-  for (let pageOffset = 3; pageOffset >= 0; pageOffset -= 1) {
+  for (let pageOffset = recoTextFields.length / 2 - 1; pageOffset >= 0; pageOffset -= 1) {
     const topRecoIdx = pageOffset * 2;
     const botRecoIdx = pageOffset * 2 + 1;
     const topUsed = topRecoIdx < recoCount;
     const botUsed = botRecoIdx < recoCount;
-    const topField = fieldsByName.get(RECO_TEXT_FIELDS[topRecoIdx]);
+    const topField = fieldsByName.get(recoTextFields[topRecoIdx]);
     const pageIdx = findPageIndexForField(pdfDoc, topField);
     if (pageIdx === -1) continue;
     if (!topUsed && !botUsed) {
       emptyPageIndices.push(pageIdx);
     } else if (topUsed && !botUsed) {
-      const botRect = getRecoCaseBoundingBox(fieldsByName, botRecoIdx);
-      const topRect = getRecoCaseBoundingBox(fieldsByName, topRecoIdx);
+      const botRect = getRecoCaseBoundingBox(fieldsByName, botRecoIdx, recoTextFields, recoImageFields);
+      const topRect = getRecoCaseBoundingBox(fieldsByName, topRecoIdx, recoTextFields, recoImageFields);
       pendingBotCovers.push({ pageIdx, botRect, topRect });
     }
   }
@@ -4060,7 +4061,18 @@ export async function generateVisitReport({
   // Les tailles restent pilotées champ par champ via les DA (`/Helv 11 Tf`,
   // `/Helv 14 Tf`, etc.), mais le rendu final utilise la même Helvetica
   // que les textes dessinés manuellement (`drawWrappedText`).
+  const mobilityText = printableMobilityAidsForReport(
+    sanitizeForPdfFont(dossier?.patient?.dependenceTxt), reportTextFont,
+  );
+  form.getTextField('dépendance').setText(mobilityText);
   form.updateFieldAppearances(reportTextFont);
+  const mobilityLayout = applyMobilityAidsToReport({
+    pdfDoc,
+    field: form.getTextField('dépendance'),
+    font: reportTextFont,
+    rawValue: mobilityText,
+  });
+  stats.mobilityAppendixPages = mobilityLayout.addedPages;
 
   // Aplatissement final : convertit chaque champ en contenu fixe (le
   // texte/cocheur devient un objet graphique inerte). Le résultat n'est
@@ -4252,7 +4264,7 @@ export async function generateVisitReport({
   if (isFlat2026Template && flat2026ExtraStaticRecoPageRef) {
     // Le template 2026 contient une page préconisation statique
     // supplémentaire juste avant "Descriptif des aides prévisionnelles".
-    // Elle ne reçoit aucun slot dynamique (v1.1 limite les recos à 8).
+    // Les pages supplémentaires sont créées depuis le gabarit dynamique.
     // On garde sa référence de page dès le chargement du template, puis
     // on retrouve son index courant ici : les pages bonus photos/plans
     // peuvent sinon décaler les numéros avant suppression.
@@ -4295,6 +4307,7 @@ export async function generateVisitReport({
     await insertMorbihanEligibleWorks(numberedDoc, accessibilityNormsPageIndex);
     stats.morbihanWorksPageAdded = true;
   }
+  stats.sanitaryAppendixPages = await appendSanitaryRoomsAppendix({ pdfDoc: numberedDoc, sanitaires });
   await drawGeneratedPageNumbers(numberedDoc);
 
   const bytes = await numberedDoc.save({

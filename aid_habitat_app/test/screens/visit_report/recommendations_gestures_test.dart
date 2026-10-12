@@ -65,7 +65,7 @@ void main() {
   });
 
   testWidgets(
-    'description stays two lines and drag is confined to the image and tab',
+    'description grows with text and drag is confined to the image and tab',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -88,7 +88,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       final description = find.byWidgetPredicate(
-        (w) => w is TextField && w.maxLines == 2 && w.minLines == 2,
+        (w) => w is TextField && w.maxLines == null && w.minLines == 2,
       );
       expect(description, findsOneWidget);
       expect(
@@ -104,7 +104,7 @@ void main() {
         List.filled(12, 'More text').join('\n'),
       );
       await tester.pump();
-      expect(tester.getSize(description).height, height);
+      expect(tester.getSize(description).height, greaterThan(height));
       final image = find.byType(LongPressDraggable<String>);
       expect(image, findsOneWidget);
       final gesture = await tester.startGesture(tester.getCenter(image));
@@ -119,6 +119,49 @@ void main() {
       expect(find.byType(TextField), findsNothing);
       await gesture.up();
       await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'more than eight cards keep the add button and fit the tallest description',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final repository = _Repository(
+        items: List.generate(
+          12,
+          (index) => VisitRecommendationItem(
+            id: 'item-$index',
+            wikiTitle: 'Item $index',
+            note: index == 0
+                ? List.filled(20, 'Description longue').join('\n')
+                : 'Description courte',
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: RecommendationsTab(
+              dossier: _Dossier(),
+              repository: repository,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Ajouter une\npréconisation'), findsOneWidget);
+      final cards = find.byType(DragTarget<String>);
+      expect(cards, findsNWidgets(12));
+      expect(
+        tester.getSize(cards.at(0)).height,
+        tester.getSize(cards.at(1)).height,
+      );
+      expect(
+        tester.getRect(cards.at(3)).top,
+        greaterThan(tester.getRect(cards.at(0)).bottom),
+      );
       expect(tester.takeException(), isNull);
     },
   );

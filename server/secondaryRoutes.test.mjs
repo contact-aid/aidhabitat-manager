@@ -152,6 +152,12 @@ async function runRoutes() {
   await once(server, 'listening');
   apiOrigin = `http://127.0.0.1:${server.address().port}`;
   const request = async (pathname, token, body, method = body === undefined ? 'GET' : 'PUT') => {
+    // This suite isolates legacy timestamp/readback behavior. Collection callers
+    // are current clients; exact64 rejection is covered in sanitaryRoomsBuild64.
+    if (body && (Object.hasOwn(body, 'sdbInstances') || Object.hasOwn(body, 'wcInstances'))) {
+      body = { ...body, ...(body.concurrency === undefined ? { expectedUpdatedAt: body.expectedUpdatedAt ?? before } : {}),
+        concurrency: { ...(body.concurrency === undefined ? { version: 1 } : body.concurrency), collectionContract: 'collections-v2' } };
+    }
     const response = await fetch(apiOrigin + pathname, {
       method, headers: { 'content-type': 'application/json', ...(token ? { 'x-app-session': token } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(8000),
@@ -309,6 +315,11 @@ async function runRoutes() {
       });
       await check('legacy create without timestamp remains supported', async () => {
         rows.set(table, []);
+        if (route === 'diagnostic-sanitaires') {
+          expect(await request(pathname, owner, definition.update), 409);
+          assert.equal(writes().length, 0);
+          return;
+        }
         const result = expect(await request(pathname, owner, definition.update), 200);
         assert.equal(result.success, true);
         assert.equal(result.data.updatedAt, after);
@@ -335,6 +346,12 @@ async function runRoutes() {
         assert.equal(writes().length, 1);
       });
       await check('legacy create with missing or incomplete readback returns 503', async () => {
+        if (route === 'diagnostic-sanitaires') {
+          rows.set(table, []);
+          expect(await request(pathname, owner, definition.update), 409);
+          assert.equal(writes().length, 0);
+          return;
+        }
         for (const missing of [true, false]) {
           rows.set(table, []); didWrite = false;
           hideReadback = missing; staleReadback = !missing;

@@ -4,3 +4,5 @@ Future<String> rewriteLocalAi(String text, String mode) async =>
     throw UnsupportedError('Web only');
 double localAiProgress() => 0;
 void cancelLocalAi() {}
+
+String localAiPhase() => '';

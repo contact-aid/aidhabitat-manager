@@ -101,11 +101,11 @@ async function run() {
           porte_sdb_largeur_suffisante: null, porte_sdb_dimension: null, porte_sdb_sens_adapte: null,
         } : {}),
       }); };
-      const body = () => ({ [c.key]: c.value, concurrency: { version: 1, writeId: randomUUID(),
+      const body = () => ({ [c.key]: c.value, concurrency: { version: 1, collectionContract: 'collections-v2', writeId: randomUUID(),
         baseValues: { [c.key]: c.key === 'sdbInstances' ? [] : c.before ?? 'old' } } });
       const path = `/api/${c.route}/${dossierId}`;
       reset();
-      assert.equal((await request(path, { [c.key]: c.value }, token)).status, 428);
+      assert.equal((await request(path, { [c.key]: c.value }, token)).status, c.key === 'sdbInstances' ? 409 : 428);
       assert.equal(writes, 0);
       const mutation = body();
       const saved = await request(path, mutation, token);
@@ -123,8 +123,8 @@ async function run() {
       const loser = results.findIndex(r => r.status !== 200);
       assert([409, 503].includes(results[loser].status), JSON.stringify(results));
       // A mismatched post-write read is deliberately uncertain, not a false ACK.
-      assert.equal((await request(path, mutations[loser], token)).status, 200);
-      assert.equal(writes, 2);
+      assert.equal((await request(path, mutations[loser], token)).status, c.key === 'sdbInstances' ? 409 : 200);
+      assert.equal(writes, c.key === 'sdbInstances' ? 1 : 2);
       reset(); rows.delete(c.table);
       const creationReady = process.env.AIDHABITAT_UNIQUE_CHILDREN_READY === '1';
       const create = { ...body(), concurrency: { ...body().concurrency, createIfAbsent: true } };
@@ -161,7 +161,7 @@ async function run() {
     const edited = structuredClone(pulled.body.sdbInstances);
     edited[0].sdbBaignoireHauteur = 60;
     const legacyMutation = { sdbInstances: edited, concurrency: {
-      version: 1, writeId: randomUUID(), baseValues: { sdbInstances: pulled.body.sdbInstances },
+      version: 1, collectionContract: 'collections-v2', writeId: randomUUID(), baseValues: { sdbInstances: pulled.body.sdbInstances },
     } };
     const writesBeforeLegacy = writes;
     const legacySaved = await request(sanitaryPath, legacyMutation, token);
@@ -179,11 +179,11 @@ async function run() {
     competing[0].sdbBaignoireHauteur = 65;
     const writesBeforeConflict = writes;
     const sanitaryConflict = await request(sanitaryPath, { sdbInstances: competing, concurrency: {
-      version: 1, writeId: randomUUID(), baseValues: { sdbInstances: stalePull.body.sdbInstances },
+      version: 1, collectionContract: 'collections-v2', writeId: randomUUID(), baseValues: { sdbInstances: stalePull.body.sdbInstances },
     } }, token);
-    assert.equal(sanitaryConflict.status, 200, JSON.stringify(sanitaryConflict));
-    assert.equal(JSON.parse(rows.get(sanitaryTable).sdb_instances_json)[0].sdbBaignoireHauteur, 65);
-    assert.equal(writes, writesBeforeConflict + 1);
+    assert.equal(sanitaryConflict.status, 409, JSON.stringify(sanitaryConflict));
+    assert.equal(JSON.parse(rows.get(sanitaryTable).sdb_instances_json)[0].sdbBaignoireHauteur, 70);
+    assert.equal(writes, writesBeforeConflict);
 
     rows.set(sanitaryTable, legacySanitaryRow());
     const corruptBaseline = await request(sanitaryPath, undefined, token, 'GET');
@@ -191,7 +191,7 @@ async function run() {
     const corruptWriteCount = writes;
     const corruptResult = await request(sanitaryPath, {
       sdbInstances: corruptBaseline.body.sdbInstances,
-      concurrency: { version: 1, writeId: randomUUID(),
+      concurrency: { version: 1, collectionContract: 'collections-v2', writeId: randomUUID(),
         baseValues: { sdbInstances: corruptBaseline.body.sdbInstances } },
     }, token);
     assert.equal(corruptResult.status, 409, JSON.stringify(corruptResult));

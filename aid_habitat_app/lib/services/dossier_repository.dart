@@ -4,11 +4,13 @@ import 'dart:math';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/types.dart';
+import '../models/housing_rooms.dart';
 import 'local_database.dart';
 import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
+import 'collection_mutation_contract.dart';
 import 'context_sync_protocol.dart';
 import 'visit_recommendations_publication.dart';
 
@@ -26,6 +28,8 @@ class SyncConflictReview {
     required this.table,
     required this.remoteExists,
     this.contextReferenceJson,
+    this.recommendationsRevision,
+    this.recommendationsLocalJson,
   });
 
   final String operationId;
@@ -45,6 +49,8 @@ class SyncConflictReview {
   final String table;
   final bool remoteExists;
   final String? contextReferenceJson;
+  final String? recommendationsRevision;
+  final String? recommendationsLocalJson;
 }
 
 class DossierRepository {
@@ -404,6 +410,80 @@ class DossierRepository {
     });
   }
 
+  /// Read-only comparison for both legacy and versioned publications.
+  /// Capture the current row as well as the queue, so a form edit invalidates
+  /// the review even when a wiki follow-up uses a separate operation id.
+  Future<List<SyncConflictReview>> reviewVisitRecommendationsConflict(
+    String dossierId,
+    Map<String, dynamic> snapshot,
+  ) async {
+    final exists = snapshot['snapshotExists'];
+    final revision = snapshot['revision']?.toString();
+    final remoteItems = snapshot['items'];
+    if (exists is! bool ||
+        remoteItems is! List ||
+        remoteItems.any((item) => item is! Map) ||
+        (exists
+            ? revision == null ||
+                  !RegExp(
+                    r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+                    caseSensitive: false,
+                  ).hasMatch(revision)
+            : revision != null || remoteItems.isNotEmpty)) {
+      throw StateError('Version distante des préconisations indisponible.');
+    }
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'visit_recommendations',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+      );
+      final operations = await txn.query(
+        'sync_operations',
+        where:
+            "entity_type = 'visit_recommendations' AND entity_local_id = ? AND status = 'conflict'",
+        whereArgs: [dossierId],
+      );
+      if (operations.isEmpty) return <SyncConflictReview>[];
+      if (rows.length != 1 || operations.length != 1) {
+        throw StateError(
+          'Plusieurs modifications attendent sur les préconisations.',
+        );
+      }
+      final localJson = rows.single['items_json'] as String;
+      final localItems = (jsonDecode(localJson) as List)
+          .map((item) => (item as Map).cast<String, dynamic>())
+          .toList();
+      final merged = mergePublishedRecommendationsWithLocalDrafts(
+        remotePublishedItems: remoteItems
+            .map((item) => (item as Map).cast<String, dynamic>())
+            .toList(),
+        localItems: localItems,
+      );
+      final op = operations.single;
+      return [
+        SyncConflictReview._(
+          operationId: op['id'] as String,
+          entityType: 'visit_recommendations',
+          entityLocalId: dossierId,
+          payloadJson: await OfflineVault.instance.openString(
+            op['payload_json'] as String,
+          ),
+          remoteUpdatedAt: snapshot['updatedAt']?.toString(),
+          localValues: {'items': localItems},
+          remoteValues: {'items': remoteItems},
+          remoteColumns: {'items_json': jsonEncode(merged)},
+          localRowId: rows.single['local_id'] as String,
+          table: 'visit_recommendations',
+          remoteExists: exists,
+          recommendationsRevision: revision,
+          recommendationsLocalJson: localJson,
+        ),
+      ];
+    });
+  }
+
   Future<void> resolveReviewedConflict(
     SyncConflictReview review, {
     required bool keepLocal,
@@ -443,6 +523,17 @@ class DossierRepository {
       if (others.isNotEmpty) {
         throw StateError('Une autre modification attend sur cette fiche.');
       }
+      if (review.entityType == 'visit_recommendations') {
+        final local = await txn.query(
+          'visit_recommendations',
+          where: 'local_id = ?',
+          whereArgs: [review.localRowId],
+        );
+        if (local.length != 1 ||
+            local.single['items_json'] != review.recommendationsLocalJson) {
+          throw StateError('La saisie a changé. Rechargez la comparaison.');
+        }
+      }
       if (!review.remoteExists && !keepLocal) {
         throw StateError('Aucune fiche serveur ne peut etre restauree.');
       }
@@ -456,11 +547,77 @@ class DossierRepository {
           jsonEncode({
             'mutation': jsonDecode(review.payloadJson),
             'remoteValues': review.remoteValues,
+            if (review.entityType == 'visit_recommendations') ...{
+              'localValues': review.localValues,
+              'remoteRevision': review.recommendationsRevision,
+            },
             'remoteUpdatedAt': review.remoteUpdatedAt,
           }),
         ),
         'created_at': now,
       });
+      if (review.entityType == 'visit_recommendations') {
+        final localItems = (review.localValues['items'] as List)
+            .map((item) => (item as Map).cast<String, dynamic>())
+            .toList();
+        final plan = planVisitRecommendationsPublication(
+          items: localItems,
+          hadPublishedItems: true,
+          hasPendingPublication: true,
+          remoteSnapshotExists: review.remoteExists,
+          remoteRevision: review.recommendationsRevision,
+          writeId: newSyncWriteId(),
+        );
+        final payload = {
+          'dossierId': review.entityLocalId,
+          'items': plan.publishedItems,
+          'updates': {'items': plan.publishedItems},
+          'envelope': plan.envelope,
+        };
+        await txn.update(
+          'sync_operations',
+          {
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+            'status': keepLocal ? 'pending' : 'completed',
+            'last_error': null,
+            'attempt_count': 0,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [review.operationId],
+        );
+        final chosen = keepLocal
+            ? localItems
+            : (jsonDecode(review.remoteColumns['items_json'] as String)
+                  as List);
+        await txn.update(
+          'visit_recommendations',
+          {
+            if (!keepLocal) ...review.remoteColumns,
+            'remote_revision': review.recommendationsRevision,
+            'remote_snapshot_exists': review.remoteExists ? 1 : 0,
+            'updated_at': now,
+            'sync_state':
+                keepLocal ||
+                    chosen.any(
+                      (item) =>
+                          (item['wikiItemId']?.toString() ?? '')
+                              .trim()
+                              .isEmpty ||
+                          (item['wikiItemId']?.toString() ?? '').startsWith(
+                            'local_draft_',
+                          ),
+                    )
+                ? 'pendingSync'
+                : 'synced',
+          },
+          where: 'local_id = ?',
+          whereArgs: [review.localRowId],
+        );
+        return;
+      }
       final payload = jsonDecode(review.payloadJson) as Map<String, dynamic>;
       payload.remove('conflict');
       payload.remove('localReference');
@@ -480,6 +637,8 @@ class DossierRepository {
         if (review.contextReferenceJson != null)
           'reference': jsonDecode(review.contextReferenceJson!),
       };
+      // Only this explicit reviewed decision upgrades a legacy queued edit.
+      stampNewCollectionMutation(review.entityType, payload, null);
       await txn.update(
         'sync_operations',
         {
@@ -1843,24 +2002,24 @@ class DossierRepository {
       } catch (_) {}
     }
     if (map == null) return const {};
-    String encodeList(dynamic value) {
-      if (value is List) {
+    String encodeList(dynamic value, String level) {
+      if (value is! List) return jsonEncode(value ?? <dynamic>[]);
+      final identities = map!['_roomIds'];
+      final ids = identities is Map ? identities[level] : null;
+      if (ids is List && ids.length == value.length) {
         return jsonEncode(
-          value
-              .map((e) => e?.toString() ?? '')
-              .where((s) => s.isNotEmpty)
-              .toList(),
+          List.generate(value.length, (i) => {'id': ids[i], 'label': value[i]}),
         );
       }
-      return jsonEncode(const <String>[]);
+      return jsonEncode(value);
     }
 
     return {
-      'basement_rooms_json': encodeList(map['basement']),
-      'rdc_rooms_json': encodeList(map['rdc']),
-      'floor_rooms_json': encodeList(map['floor']),
-      'second_floor_rooms_json': encodeList(map['secondFloor']),
-      'third_floor_rooms_json': encodeList(map['thirdFloor']),
+      'basement_rooms_json': encodeList(map['basement'], 'basement'),
+      'rdc_rooms_json': encodeList(map['rdc'], 'rdc'),
+      'floor_rooms_json': encodeList(map['floor'], 'floor'),
+      'second_floor_rooms_json': encodeList(map['secondFloor'], 'secondFloor'),
+      'third_floor_rooms_json': encodeList(map['thirdFloor'], 'thirdFloor'),
     };
   }
 
@@ -2119,6 +2278,7 @@ class DossierRepository {
       expectedUpdatedAt: expectedUpdatedAt,
       previous: previous,
     );
+    stampNewCollectionMutation(entityType, payloadMap, previous);
     if (localConflict != null) {
       payloadMap['conflict'] = {
         ...localConflict,
@@ -2214,6 +2374,7 @@ class DossierRepository {
                 'concurrency': previous['localReference'],
             },
     );
+    stampNewCollectionMutation(entityType, payload, previous);
     if (previous?['concurrency'] == null && !canCaptureVersion) {
       payload['localReference'] = payload.remove('concurrency');
     }
@@ -2461,6 +2622,29 @@ class DossierRepository {
       beneficiaryPrepared:
           (row['dossier_beneficiary_prepared'] as int? ?? 0) == 1,
       housing: Housing(
+        roomIdentityErrors: _housingRoomErrors(row),
+        roomsByLevel: {
+          'basement': _displayHousingRooms(
+            row['housing_basement_rooms'] as String?,
+            'basement',
+          ),
+          'rdc': _displayHousingRooms(
+            row['housing_rdc_rooms'] as String?,
+            'rdc',
+          ),
+          'floor': _displayHousingRooms(
+            row['housing_floor_rooms'] as String?,
+            'floor',
+          ),
+          'secondFloor': _displayHousingRooms(
+            row['housing_second_floor_rooms'] as String?,
+            'secondFloor',
+          ),
+          'thirdFloor': _displayHousingRooms(
+            row['housing_third_floor_rooms'] as String?,
+            'thirdFloor',
+          ),
+        },
         type: HousingType.values.byName(row['housing_type'] as String),
         year: row['housing_year_value'] as int?,
         surface: (row['housing_surface'] as num?)?.toDouble(),
@@ -2569,12 +2753,41 @@ class DossierRepository {
     return SyncState.synced;
   }
 
+  List<HousingRoom> _displayHousingRooms(String? raw, String level) {
+    try {
+      return parseHousingRooms(raw, level);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Map<String, String> _housingRoomErrors(Map<String, Object?> row) {
+    final errors = <String, String>{};
+    for (final entry in const {
+      'basement': 'housing_basement_rooms',
+      'rdc': 'housing_rdc_rooms',
+      'floor': 'housing_floor_rooms',
+      'secondFloor': 'housing_second_floor_rooms',
+      'thirdFloor': 'housing_third_floor_rooms',
+    }.entries) {
+      try {
+        parseHousingRooms(row[entry.value] as String?, entry.key);
+      } catch (_) {
+        errors[entry.key] =
+            'Liste de pièces illisible : données conservées, revue nécessaire.';
+      }
+    }
+    return errors;
+  }
+
   List<String> _decodeRoomsJson(String? raw) {
     if (raw == null || raw.trim().isEmpty) return const [];
     try {
       final decoded = jsonDecode(raw);
       if (decoded is List) {
-        return decoded.map((e) => e.toString()).toList(growable: false);
+        return decoded
+            .map((e) => e is Map ? e['label'].toString() : e.toString())
+            .toList(growable: false);
       }
     } catch (_) {
       /* fall through */
@@ -2870,6 +3083,104 @@ class DossierRepository {
     }
   }
 
+  Future<void> _bindLegacyDiagnosticRoomsBeforeHousingEdit(
+    DatabaseExecutor txn,
+    String dossierId,
+    Map<String, dynamic> housing,
+    String now,
+  ) async {
+    final rows = await txn.query(
+      'diagnostic_sanitaires',
+      where: 'dossier_local_id = ?',
+      whereArgs: [dossierId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final row = rows.single;
+    final before = <String, dynamic>{};
+    final updates = <String, dynamic>{};
+    var changed = false;
+    const levels = {
+      'basement': 'basement_rooms_json',
+      'rdc': 'rdc_rooms_json',
+      'floor': 'floor_rooms_json',
+      'second_floor': 'second_floor_rooms_json',
+      'third_floor': 'third_floor_rooms_json',
+    };
+    for (final family in const {
+      'sdbInstances': 'sdb_instances_json',
+      'wcInstances': 'wc_instances_json',
+    }.entries) {
+      final raw = row[family.value] as String?;
+      final original = raw == null ? <dynamic>[] : jsonDecode(raw) as List;
+      before[family.key] = original;
+      final instances = original
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      final label = family.key == 'sdbInstances' ? 'Salle de bain' : 'WC';
+      for (final level in levels.entries) {
+        final rooms = parseHousingRooms(
+          housing[level.value] as String?,
+          level.key,
+        ).where((r) => r.label == label).toList();
+        final diagnostics = instances
+            .where(
+              (r) =>
+                  r['levelField'] == level.key ||
+                  (level.key == 'second_floor' &&
+                      r['levelField'] == 'secondFloor') ||
+                  (level.key == 'third_floor' &&
+                      r['levelField'] == 'thirdFloor'),
+            )
+            .toList();
+        final linked = diagnostics
+            .where((r) => (r['housingRoomId']?.toString() ?? '').isNotEmpty)
+            .toList();
+        final linkedIds = linked.map((r) => r['housingRoomId']).toSet();
+        if (linkedIds.length != linked.length ||
+            linkedIds.any((id) => !rooms.any((r) => r.id == id))) {
+          continue;
+        }
+        final unlinked = diagnostics
+            .where((r) => (r['housingRoomId']?.toString() ?? '').isEmpty)
+            .toList();
+        final available = rooms
+            .where((r) => !linkedIds.contains(r.id))
+            .toList();
+        // Unequal counts are ambiguous; never infer which data was deleted.
+        if (unlinked.length != available.length) continue;
+        for (var i = 0; i < unlinked.length; i++) {
+          unlinked[i]['housingRoomId'] = available[i].id;
+          changed = true;
+        }
+      }
+      updates[family.key] = instances;
+    }
+    if (!changed) return;
+    await txn.update(
+      'diagnostic_sanitaires',
+      {
+        'sdb_instances_json': jsonEncode(updates['sdbInstances']),
+        'wc_instances_json': jsonEncode(updates['wcInstances']),
+        'updated_at': now,
+        'sync_state': SyncState.pendingSync.name,
+      },
+      where: 'local_id = ?',
+      whereArgs: [row['local_id']],
+    );
+    await _enqueueChildUpdate(
+      txn,
+      operationId: 'diag_update_$dossierId',
+      entityType: 'diagnostic_sanitaires',
+      dossierId: dossierId,
+      updates: updates,
+      baseValues: before,
+      existingRow: row,
+      rootFields: const ['sdbInstances', 'wcInstances'],
+      now: now,
+    );
+  }
+
   Future<void> updateHousing(
     String dossierId,
     Map<String, dynamic> fields,
@@ -2904,6 +3215,24 @@ class DossierRepository {
 
       final changedFields = _diffAgainstRow(existingRow, fields);
       _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
+      if (changedFields.keys.any(
+        (key) =>
+            _kHousingRoomBreakdownColumns.contains(key) ||
+            const {
+              'basement',
+              'rdc',
+              'floor',
+              'second_floor',
+              'third_floor',
+            }.contains(key),
+      )) {
+        for (final column in _kHousingRoomBreakdownColumns) {
+          parseHousingRooms(
+            (fields[column] ?? existingRow?[column]) as String?,
+            column,
+          );
+        }
+      }
 
       if (changedFields.isEmpty) {
         return; // rien n'a vraiment changé → no-op
@@ -2922,6 +3251,14 @@ class DossierRepository {
       // dans une seule transaction atomique. Si l'app crash entre les
       // deux writes, SQLite rollback complet → pas d'état orphelin.
       final apiUpdates = _mapHousingFieldsToApi(changedFields);
+      if (existingRow != null && hasCollectionUpdates('housing', apiUpdates)) {
+        await _bindLegacyDiagnosticRoomsBeforeHousingEdit(
+          txn,
+          dossierId,
+          existingRow,
+          now,
+        );
+      }
       await txn.update(
         'housings',
         localFields,
@@ -3029,7 +3366,8 @@ class DossierRepository {
       'second_floor_rooms_json': 'secondFloor',
       'third_floor_rooms_json': 'thirdFloor',
     };
-    final roomsBreakdown = <String, List<String>>{};
+    final roomsBreakdown = <String, dynamic>{};
+    final roomIds = <String, List<String>>{};
     final out = <String, dynamic>{};
     fields.forEach((key, value) {
       if (key == 'updated_at' || key == 'sync_state') return;
@@ -3043,13 +3381,20 @@ class DossierRepository {
           try {
             final decoded = jsonDecode(value);
             if (decoded is List) {
-              roomsBreakdown[breakdownKey] = decoded
-                  .map((e) => e?.toString() ?? '')
-                  .where((s) => s.isNotEmpty)
+              final rooms = parseHousingRooms(value, breakdownKey);
+              roomsBreakdown[breakdownKey] = rooms
+                  .map((room) => room.label)
                   .toList();
+              if (decoded.any((room) => room is Map)) {
+                roomIds[breakdownKey] = rooms.map((room) => room.id).toList();
+              }
+            } else {
+              throw const FormatException('Liste de pièces invalide');
             }
           } catch (_) {
-            // JSON malformé → on n'ajoute pas cette clé.
+            throw const FormatException(
+              'Liste de pièces illisible : sauvegarde suspendue, données conservées.',
+            );
           }
         } else {
           // Valeur vide / null → niveau désactivé, on transmet une
@@ -3119,6 +3464,7 @@ class DossierRepository {
     // toutes les listes sont vides — c'est le moyen explicite de
     // « vider » les pièces côté serveur (ex. niveau désactivé).
     if (roomsBreakdown.isNotEmpty) {
+      if (roomIds.isNotEmpty) roomsBreakdown['_roomIds'] = roomIds;
       out['roomsBreakdown'] = roomsBreakdown;
     }
     return out;
@@ -3316,6 +3662,67 @@ class DossierRepository {
           if (row?['wc_instances_json'] != null)
             'wcInstances': jsonDecode(row!['wc_instances_json'] as String),
         },
+        existingRow: row,
+        rootFields: const ['sdbInstances', 'wcInstances'],
+        now: now,
+      );
+    });
+    SyncEngine().notify();
+  }
+
+  /// Explicit removal by diagnostic identity, never by count or position.
+  Future<void> removeDiagnosticRooms(
+    String dossierId, {
+    required Set<String> bathroomIds,
+    required Set<String> wcIds,
+  }) async {
+    final db = await _database.database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'diagnostic_sanitaires',
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+      final row = rows.single;
+      final before = <String, dynamic>{};
+      final updates = <String, dynamic>{};
+      var changed = false;
+      for (final entry in const {
+        'sdbInstances': 'sdb_instances_json',
+        'wcInstances': 'wc_instances_json',
+      }.entries) {
+        final raw = row[entry.value] as String?;
+        final items = raw == null ? <dynamic>[] : jsonDecode(raw) as List;
+        final removed = entry.key == 'sdbInstances' ? bathroomIds : wcIds;
+        final retained = items
+            .where((item) => !removed.contains((item as Map)['id']))
+            .toList();
+        before[entry.key] = items;
+        updates[entry.key] = retained;
+        changed = changed || retained.length != items.length;
+      }
+      if (!changed) return;
+      final now = DateTime.now().toIso8601String();
+      await txn.update(
+        'diagnostic_sanitaires',
+        {
+          'sdb_instances_json': jsonEncode(updates['sdbInstances']),
+          'wc_instances_json': jsonEncode(updates['wcInstances']),
+          'updated_at': now,
+          'sync_state': SyncState.pendingSync.name,
+        },
+        where: 'local_id = ?',
+        whereArgs: [row['local_id']],
+      );
+      await _enqueueChildUpdate(
+        txn,
+        operationId: 'diag_update_$dossierId',
+        entityType: 'diagnostic_sanitaires',
+        dossierId: dossierId,
+        updates: updates,
+        baseValues: before,
         existingRow: row,
         rootFields: const ['sdbInstances', 'wcInstances'],
         now: now,
@@ -3600,149 +4007,164 @@ class DossierRepository {
     bool forceSync = false,
   }) async {
     final db = await _database.database;
+    await db.transaction(
+      (txn) => saveVisitRecommendationsInTransaction(
+        txn,
+        dossierId,
+        items,
+        forceSync: forceSync,
+      ),
+    );
+    SyncEngine().notify();
+  }
+
+  /// Shared atomic write path for report edits and library propagation.
+  Future<void> saveVisitRecommendationsInTransaction(
+    Transaction txn,
+    String dossierId,
+    List<VisitRecommendationItem> items, {
+    bool forceSync = false,
+  }) async {
     final now = DateTime.now().toIso8601String();
-    await db.transaction((txn) async {
-      final existing = await txn.query(
+    final existing = await txn.query(
+      'visit_recommendations',
+      where: 'dossier_local_id = ?',
+      whereArgs: [dossierId],
+      limit: 1,
+    );
+    // EN LOCAL : on persiste TOUS les items (y compris ceux sans fiche
+    // wiki liée) → une préconisation "vide" en cours de saisie n'est pas
+    // perdue si l'app redémarre avant que l'utilisateur ait choisi
+    // l'item bibliothèque.
+    final itemsJson = items.map((e) => e.toJson()).toList();
+    final newItemsJsonString = jsonEncode(itemsJson);
+
+    // Optimisation 2026-05-13 : diff avec la liste existante. Si le
+    // JSON sérialisé est strictement identique à ce qui est en SQLite,
+    // c'est un no-op (pas de save SQLite, pas de push serveur). Cas
+    // typique : `recommendations_tab._save()` se déclenche au save
+    // debounce après n'importe quel rebuild même quand rien n'a
+    // vraiment changé (ex. focus/blur sur un champ texte).
+    if (existing.isNotEmpty) {
+      final existingItemsJson = existing.first['items_json'] as String?;
+      if (!forceSync && existingItemsJson == newItemsJsonString) {
+        return; // rien changé → no-op total
+      }
+    }
+
+    final data = <String, dynamic>{
+      'dossier_local_id': dossierId,
+      'items_json': newItemsJsonString,
+      'updated_at': now,
+      'sync_state': SyncState.pendingSync.name,
+    };
+
+    final opId = 'visitrec_update_$dossierId';
+    final row = existing.isEmpty ? null : existing.first;
+    final queuedPublications = await txn.query(
+      'sync_operations',
+      columns: const ['id'],
+      where: 'id = ? AND status IN (?, ?, ?, ?)',
+      whereArgs: [
+        opId,
+        SyncOperationStatus.pending.name,
+        SyncOperationStatus.running.name,
+        SyncOperationStatus.failed.name,
+        'conflict',
+      ],
+      limit: 1,
+    );
+    // Keep observed linked items in the reference even if the current
+    // library cache no longer contains them. Drafts were never published.
+    final previousLinkedItems = row?['items_json'] == null
+        ? <dynamic>[]
+        : (jsonDecode(row!['items_json'] as String) as List)
+              .where(
+                (item) =>
+                    (item['wikiItemId'] as String? ?? '').trim().isNotEmpty,
+              )
+              .toList();
+    final plan = planVisitRecommendationsPublication(
+      items: itemsJson,
+      hadPublishedItems: previousLinkedItems.isNotEmpty,
+      hasPendingPublication: queuedPublications.isNotEmpty,
+      remoteSnapshotExists: row?['remote_snapshot_exists'] == 1,
+      remoteRevision: row?['remote_revision'] as String?,
+      writeId: newSyncWriteId(),
+    );
+    if (existing.isEmpty) {
+      data['local_id'] = 'rec_${dossierId}_${_uuid()}';
+      await txn.insert('visit_recommendations', data);
+    } else {
+      await txn.update(
         'visit_recommendations',
+        data,
         where: 'dossier_local_id = ?',
         whereArgs: [dossierId],
-        limit: 1,
       );
-      // EN LOCAL : on persiste TOUS les items (y compris ceux sans fiche
-      // wiki liée) → une préconisation "vide" en cours de saisie n'est pas
-      // perdue si l'app redémarre avant que l'utilisateur ait choisi
-      // l'item bibliothèque.
-      final itemsJson = items.map((e) => e.toJson()).toList();
-      final newItemsJsonString = jsonEncode(itemsJson);
+    }
 
-      // Optimisation 2026-05-13 : diff avec la liste existante. Si le
-      // JSON sérialisé est strictement identique à ce qui est en SQLite,
-      // c'est un no-op (pas de save SQLite, pas de push serveur). Cas
-      // typique : `recommendations_tab._save()` se déclenche au save
-      // debounce après n'importe quel rebuild même quand rien n'a
-      // vraiment changé (ex. focus/blur sur un champ texte).
-      if (existing.isNotEmpty) {
-        final existingItemsJson = existing.first['items_json'] as String?;
-        if (!forceSync && existingItemsJson == newItemsJsonString) {
-          return; // rien changé → no-op total
-        }
-      }
-
-      final data = <String, dynamic>{
-        'dossier_local_id': dossierId,
-        'items_json': newItemsJsonString,
-        'updated_at': now,
-        'sync_state': SyncState.pendingSync.name,
-      };
-
-      final opId = 'visitrec_update_$dossierId';
-      final row = existing.isEmpty ? null : existing.first;
-      final queuedPublications = await txn.query(
+    if (plan.shouldEnqueue) {
+      // Keep the established conflict/reference payload for review screens,
+      // while adding the atomic publication envelope consumed by the API.
+      await _enqueueChildUpdate(
+        txn,
+        operationId: opId,
+        entityType: 'visit_recommendations',
+        dossierId: dossierId,
+        updates: {'items': plan.publishedItems},
+        baseValues: {
+          if (row?['items_json'] != null) 'items': previousLinkedItems,
+        },
+        existingRow: row,
+        rootFields: const ['items'],
+        now: now,
+      );
+      final queued = await txn.query(
         'sync_operations',
-        columns: const ['id'],
-        where: 'id = ? AND status IN (?, ?, ?, ?)',
-        whereArgs: [
-          opId,
-          SyncOperationStatus.pending.name,
-          SyncOperationStatus.running.name,
-          SyncOperationStatus.failed.name,
-          'conflict',
-        ],
+        columns: const ['payload_json'],
+        where: 'id = ?',
+        whereArgs: [opId],
         limit: 1,
       );
-      // Keep observed linked items in the reference even if the current
-      // library cache no longer contains them. Drafts were never published.
-      final previousLinkedItems = row?['items_json'] == null
-          ? <dynamic>[]
-          : (jsonDecode(row!['items_json'] as String) as List)
-                .where(
-                  (item) =>
-                      (item['wikiItemId'] as String? ?? '').trim().isNotEmpty,
-                )
-                .toList();
-      final plan = planVisitRecommendationsPublication(
-        items: itemsJson,
-        hadPublishedItems: previousLinkedItems.isNotEmpty,
-        hasPendingPublication: queuedPublications.isNotEmpty,
-        remoteSnapshotExists: row?['remote_snapshot_exists'] == 1,
-        remoteRevision: row?['remote_revision'] as String?,
-        writeId: newSyncWriteId(),
+      if (queued.length != 1) {
+        throw StateError('Publication des préconisations introuvable');
+      }
+      final payload =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  queued.single['payload_json'] as String,
+                ),
+              )
+              as Map<String, dynamic>;
+      final guardValue = payload['concurrency'] ?? payload['localReference'];
+      final guard = (guardValue as Map?)?.cast<String, dynamic>();
+      final queuedWriteId = guard?['writeId']?.toString();
+      if (queuedWriteId == null || queuedWriteId.isEmpty) {
+        throw StateError('Identifiant de publication manquant');
+      }
+      payload['envelope'] = <String, dynamic>{
+        ...plan.envelope!,
+        'writeId': queuedWriteId,
+      };
+      await txn.update(
+        'sync_operations',
+        {
+          'payload_json': await OfflineVault.instance.sealString(
+            jsonEncode(payload),
+          ),
+        },
+        where: 'id = ?',
+        whereArgs: [opId],
       );
-      if (existing.isEmpty) {
-        data['local_id'] = 'rec_${dossierId}_${_uuid()}';
-        await txn.insert('visit_recommendations', data);
-      } else {
-        await txn.update(
-          'visit_recommendations',
-          data,
-          where: 'dossier_local_id = ?',
-          whereArgs: [dossierId],
-        );
-      }
-
-      if (plan.shouldEnqueue) {
-        // Keep the established conflict/reference payload for review screens,
-        // while adding the atomic publication envelope consumed by the API.
-        await _enqueueChildUpdate(
-          txn,
-          operationId: opId,
-          entityType: 'visit_recommendations',
-          dossierId: dossierId,
-          updates: {'items': plan.publishedItems},
-          baseValues: {
-            if (row?['items_json'] != null) 'items': previousLinkedItems,
-          },
-          existingRow: row,
-          rootFields: const ['items'],
-          now: now,
-        );
-        final queued = await txn.query(
-          'sync_operations',
-          columns: const ['payload_json'],
-          where: 'id = ?',
-          whereArgs: [opId],
-          limit: 1,
-        );
-        if (queued.length != 1) {
-          throw StateError('Publication des préconisations introuvable');
-        }
-        final payload =
-            jsonDecode(
-                  await OfflineVault.instance.openString(
-                    queued.single['payload_json'] as String,
-                  ),
-                )
-                as Map<String, dynamic>;
-        final guardValue = payload['concurrency'] ?? payload['localReference'];
-        final guard = (guardValue as Map?)?.cast<String, dynamic>();
-        final queuedWriteId = guard?['writeId']?.toString();
-        if (queuedWriteId == null || queuedWriteId.isEmpty) {
-          throw StateError('Identifiant de publication manquant');
-        }
-        payload['envelope'] = <String, dynamic>{
-          ...plan.envelope!,
-          'writeId': queuedWriteId,
-        };
-        await txn.update(
-          'sync_operations',
-          {
-            'payload_json': await OfflineVault.instance.sealString(
-              jsonEncode(payload),
-            ),
-          },
-          where: 'id = ?',
-          whereArgs: [opId],
-        );
-      } else if (row?['sync_state'] == SyncState.conflict.name) {
-        await txn.update(
-          'visit_recommendations',
-          {'sync_state': SyncState.conflict.name},
-          where: 'dossier_local_id = ?',
-          whereArgs: [dossierId],
-        );
-      }
-    });
-    SyncEngine().notify();
+    } else if (row?['sync_state'] == SyncState.conflict.name) {
+      await txn.update(
+        'visit_recommendations',
+        {'sync_state': SyncState.conflict.name},
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+      );
+    }
   }
 
   /// Met en file d'attente la génération du rapport PDF pour [dossierId].
@@ -4100,6 +4522,14 @@ class DossierRepository {
       );
       if (localAt == null || localAt.isAtSameMomentAs(remoteAt)) return false;
       final op = operations.single;
+      final queued =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  op['payload_json'] as String,
+                ),
+              )
+              as Map;
+      if (queued['envelope'] is! Map) return false;
       final now = DateTime.now().toIso8601String();
       if (localAt.isAfter(remoteAt)) {
         final payload =

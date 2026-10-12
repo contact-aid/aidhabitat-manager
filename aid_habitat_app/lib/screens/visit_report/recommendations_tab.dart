@@ -74,7 +74,6 @@ class RecommendationsTabController {
 
 class _RecommendationsTabState extends State<RecommendationsTab>
     with AutomaticKeepAliveClientMixin {
-  static const int _maxRecommendations = 8;
   static const Color _recommendationCardBackground = Color(0xFFF2ECF5);
 
   @override
@@ -266,10 +265,6 @@ class _RecommendationsTabState extends State<RecommendationsTab>
   // ---------------------------------------------------------------------------
 
   Future<void> _addItem() async {
-    if (_items.length >= _maxRecommendations) {
-      _showMaxRecommendationsReached();
-      return;
-    }
     final now = DateTime.now().toIso8601String();
     final id = 'rec_${DateTime.now().millisecondsSinceEpoch}_${_items.length}';
     final draft = VisitRecommendationItem(
@@ -283,16 +278,6 @@ class _RecommendationsTabState extends State<RecommendationsTab>
       _items = [..._items, selected];
     });
     _scheduleSave();
-  }
-
-  void _showMaxRecommendationsReached() {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        const SnackBar(
-          content: Text('Maximum 8 préconisations dans le rapport.'),
-        ),
-      );
   }
 
   void _updateItem(int index, VisitRecommendationItem updated) {
@@ -490,77 +475,66 @@ class _RecommendationsTabState extends State<RecommendationsTab>
         final available = constraints.maxWidth;
         final columns = recommendationGridColumns(available, isWeb: kIsWeb);
         final cardWidth = (available - gap * (columns - 1)) / columns;
-        final cardHeight = _recommendationCardHeight(cardWidth);
-        final totalItems =
-            _items.length + (_items.length < _maxRecommendations ? 1 : 0);
-        final rows = totalItems == 0 ? 0 : ((totalItems - 1) ~/ columns) + 1;
-        final gridHeight = rows * cardHeight + (rows - 1) * gap;
-
-        return SizedBox(
-          height: gridHeight,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              for (int i = 0; i < _items.length; i++)
-                AnimatedPositioned(
-                  key: ValueKey('reco_position_${_items[i].id}'),
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
-                  left: (i % columns) * (cardWidth + gap),
-                  top: (i ~/ columns) * (cardHeight + gap),
-                  width: cardWidth,
-                  height: cardHeight,
-                  child: _DraggableRecoSlot(
-                    key: ValueKey('slot-${_items[i].id}'),
-                    itemId: _items[i].id,
-                    cardWidth: cardWidth,
-                    immediateDrag: widget.immediateReorder,
-                    onDragStarted: _startReorderPreview,
-                    onPreviewReorder: _previewReorderItem,
-                    onCommitReorder: _commitReorderPreview,
-                    feedback: _RecommendationCard(
-                      key: ValueKey(_items[i].id),
-                      item: _items[i],
-                      index: i,
-                      reorderable: false,
-                      onChange: (updated) => _updateItem(i, updated),
-                      onRemove: () => unawaited(_confirmRemoveItem(i)),
-                      onPickWiki: () => _openPicker(i),
-                    ),
-                    builder: (dragImage) => _RecommendationCard(
-                      key: ValueKey(_items[i].id),
-                      item: _items[i],
-                      index: i,
-                      reorderable: false,
-                      imageDragBuilder: dragImage,
-                      onChange: (updated) => _updateItem(i, updated),
-                      onRemove: () => unawaited(_confirmRemoveItem(i)),
-                      onPickWiki: () => _openPicker(i),
-                    ),
+        final slots = <Widget>[
+          for (int i = 0; i < _items.length; i++)
+            SizedBox(
+              key: ValueKey('slot-${_items[i].id}'),
+              width: cardWidth,
+              child: _DraggableRecoSlot(
+                key: ValueKey('drag-${_items[i].id}'),
+                itemId: _items[i].id,
+                cardWidth: cardWidth,
+                immediateDrag: widget.immediateReorder,
+                onDragStarted: _startReorderPreview,
+                onPreviewReorder: _previewReorderItem,
+                onCommitReorder: _commitReorderPreview,
+                feedback: _RecommendationCard(
+                  item: _items[i],
+                  index: i,
+                  reorderable: false,
+                  onChange: (updated) => _updateItem(i, updated),
+                  onRemove: () => unawaited(_confirmRemoveItem(i)),
+                  onPickWiki: () => _openPicker(i),
+                ),
+                builder: (dragImage) => _RecommendationCard(
+                  key: ValueKey(_items[i].id),
+                  item: _items[i],
+                  index: i,
+                  reorderable: false,
+                  imageDragBuilder: dragImage,
+                  onChange: (updated) => _updateItem(i, updated),
+                  onRemove: () => unawaited(_confirmRemoveItem(i)),
+                  onPickWiki: () => _openPicker(i),
+                ),
+              ),
+            ),
+          SizedBox(width: cardWidth, child: _buildAddRecommendationCard()),
+        ];
+        return Column(
+          children: [
+            for (int start = 0; start < slots.length; start += columns)
+              Padding(
+                padding: EdgeInsets.only(bottom: gap),
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (
+                        int j = start;
+                        j < slots.length && j < start + columns;
+                        j++
+                      ) ...[
+                        if (j > start) const SizedBox(width: gap),
+                        slots[j],
+                      ],
+                    ],
                   ),
                 ),
-              if (_items.length < _maxRecommendations)
-                AnimatedPositioned(
-                  key: const ValueKey('reco_add_position'),
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
-                  left: (_items.length % columns) * (cardWidth + gap),
-                  top: (_items.length ~/ columns) * (cardHeight + gap),
-                  width: cardWidth,
-                  height: cardHeight,
-                  child: _buildAddRecommendationCard(),
-                ),
-            ],
-          ),
+              ),
+          ],
         );
       },
     );
-  }
-
-  double _recommendationCardHeight(double cardWidth) {
-    final imageHeight = (cardWidth - 24) / 1.5;
-    // Leave room for the two-line description and 16 px field labels.
-    return imageHeight + 210;
   }
 
   Widget _buildAddRecommendationCard() {
@@ -667,6 +641,7 @@ class _RecommendationCard extends StatelessWidget {
         ],
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // ----------------------------------------------------------
@@ -794,11 +769,11 @@ class _RecommendationCard extends StatelessWidget {
             onChanged: (v) => onChange(item.copyWith(customTitle: v)),
           ),
           const SizedBox(height: 4),
-          // Deux lignes visibles ; le texte restant defile dans le champ.
+          // Le champ grandit avec le texte et détermine la hauteur de la ligne.
           FormTextField(
             label: '',
             value: descriptionValue,
-            maxLines: 2,
+            maxLines: null,
             minLines: 2,
             valueSize: 14,
             valueWeight: FontWeight.w700,

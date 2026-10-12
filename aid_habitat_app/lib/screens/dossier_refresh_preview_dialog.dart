@@ -20,7 +20,8 @@ const _fieldLabels = <String, String>{
   'type_de_logement_id': 'Type de logement',
   'annee_construction': 'Année de construction',
   'annee_habitation': 'Année d’achat du logement',
-  'note': 'Note écrite',
+  'note': 'Note du dossier',
+  'noteBeneficiaire': 'Note Bénéficiaire',
 };
 
 String _summary(Map<String, dynamic> item) {
@@ -28,10 +29,14 @@ String _summary(Map<String, dynamic> item) {
   if (fields is! Map) return '';
   final labels = <String>[];
   for (final entry in fields.entries) {
-    if (entry.key == 'note') {
+    if (entry.key == 'note' || entry.key == 'noteBeneficiaire') {
       final note = entry.value.toString().replaceAll(RegExp(r'\s+'), ' ');
       labels.add(
-        'Note écrite : ${note.length > 70 ? '${note.substring(0, 70)}…' : note}',
+        '${_fieldLabels[entry.key]} : ${note.isEmpty
+            ? '(vide)'
+            : note.length > 70
+            ? '${note.substring(0, 70)}…'
+            : note}',
       );
       continue;
     }

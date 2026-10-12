@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { planIndependentNotes, DOSSIER_NOTE } from './independentNotes.mjs';
 import { isCurrentAdaptationDossier, projectAirtableDossier } from './airtableAdaptation.mjs';
 
 const value = (row, key) => row?.fields?.[key] ?? row?.[key];
@@ -10,8 +11,8 @@ export const importedNoteId = (airtableRecordId) => {
     .update(`aidhabitat:airtable-note:${airtableRecordId}`).digest('hex');
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 };
-// The current dossier note and the beneficiary visit note share one canonical
-// page. Airtable only fills an empty note; later user edits take precedence.
+// Initialize two independent pages once. Later edits and intentional blanks
+// belong to the user, never to the Airtable refresh.
 export async function importCurrentProfileNotes({
   ergoLabel,
   sourceRows, dossierRows, beneficiaryRows, listNotePages, upsertNotePage,
@@ -29,7 +30,6 @@ export async function importCurrentProfileNotes({
 
   for (const source of eligible) {
     if (selectedIds && !selectedIds.has(source.airtableRecordId)) continue;
-    if (!plain(source.workDescription)) continue;
     const dossierId = `airtable:${source.airtableRecordId}`;
     const dossier = dossiers.get(dossierId);
     if (!dossier && dryRun && pendingCreateIds?.has(source.airtableRecordId)) {
@@ -50,63 +50,42 @@ export async function importCurrentProfileNotes({
     }
     const patientId = `nocodb-beneficiaire-${beneficiary.id}`;
     const allPages = await listNotePages(patientId);
-    const pages = allPages.filter((page) => page.scopeType === 'dossier_detail'
-      && page.scopeId === dossierId && page.tabKey === 'notes_rapides'
-      && !plain(page.subTabKey));
-    const firstPage = pages.find((page) => Number(page.pageNumber) === 0);
-    if (firstPage && !plain(firstPage.revision)) {
-      skipped.push({ id: source.airtableRecordId, reason: 'révision de note absente' });
-      continue;
-    }
-    let drawing = { version: 1, text: '', strokes: [] };
-    try {
-      if (plain(firstPage?.drawingJson)) drawing = JSON.parse(firstPage.drawingJson);
-      if (!drawing || typeof drawing !== 'object' || Array.isArray(drawing)) throw new Error();
-    } catch {
-      skipped.push({ id: source.airtableRecordId, reason: 'dessin de note illisible' });
-      continue;
-    }
-    const previousText = plain(drawing.text) || plain(firstPage?.textContent);
-    const desiredText = plain(source.workDescription);
-    if (previousText) {
-      alreadyPresent += 1;
-      continue;
-    }
     const firstName = plain(value(beneficiary, 'prenom'));
     const lastName = plain(value(beneficiary, 'nom'));
-    operations.push({ sourceId: source.airtableRecordId,
-      displayName: [firstName, lastName].filter(Boolean).join(' '),
-      noteId: firstPage?.id ?? importedNoteId(source.airtableRecordId),
-      patientId, dossierId, pageNumber: 0,
-      textContent: desiredText,
-      drawingJson: JSON.stringify({ ...drawing, text: desiredText }),
-      previewDataUrl: firstPage?.previewDataUrl ?? '',
-      layoutKind: firstPage?.layoutKind ?? 'freeform',
-      expectedRevision: firstPage?.revision ?? null,
-      firstName, lastName });
+    try {
+      const writes = planIndependentNotes({
+        pages: allPages, patientId, dossierId, initialText: plain(source.workDescription),
+        metadata: { patientFirstName: firstName, patientLastName: lastName,
+          patientDisplayName: [firstName, lastName].filter(Boolean).join(' '),
+          dossierLabel: [firstName, lastName].filter(Boolean).join(' ') },
+      });
+      // Retain the historical deterministic import ID for the dossier page.
+      for (const write of writes) {
+        if (write.tabKey === DOSSIER_NOTE && write.expectedRevision === null) {
+          write.notePageId = importedNoteId(source.airtableRecordId);
+        }
+      }
+      if (!writes.length) { alreadyPresent += 1; continue; }
+      operations.push({ sourceId: source.airtableRecordId, dossierId,
+        displayName: [firstName, lastName].filter(Boolean).join(' '), writes });
+    } catch (error) {
+      skipped.push({ id: source.airtableRecordId, reason: error.message });
+    }
   }
 
   const changes = operations.map((item) => ({ id: item.sourceId,
     profile: ergoLabel, name: item.displayName, kind: 'note',
-    fields: { note: item.textContent } }));
+    fields: item.pendingCreate
+      ? { note: item.textContent, noteBeneficiaire: item.textContent }
+      : Object.fromEntries(item.writes.map((write) => [
+        write.tabKey === DOSSIER_NOTE ? 'note' : 'noteBeneficiaire', write.textContent,
+      ])) }));
   if (dryRun) return { eligible: eligible.length, imported: 0,
     alreadyPresent, remaining: 0, skipped, changes };
   for (const item of operations.slice(0, maxChanges)) {
-    await upsertNotePage({
-      notePageId: item.noteId,
-      patientId: item.patientId,
-      dossierId: item.dossierId,
-      scopeType: 'dossier_detail', scopeId: item.dossierId,
-      tabKey: 'notes_rapides', subTabKey: '',
-      pageNumber: item.pageNumber,
-      textContent: item.textContent,
-      drawingJson: item.drawingJson, previewDataUrl: item.previewDataUrl,
-      layoutKind: item.layoutKind,
-      patientFirstName: item.firstName, patientLastName: item.lastName,
-      patientDisplayName: [item.firstName, item.lastName].filter(Boolean).join(' '),
-      dossierLabel: [item.firstName, item.lastName].filter(Boolean).join(' '),
-      expectedRevision: item.expectedRevision, writeId: crypto.randomUUID(),
-    });
+    // Deliberately no transaction claim: a failed second write is retried
+    // independently, without resetting the first page on a later refresh.
+    for (const write of item.writes) await upsertNotePage(write);
   }
   return { eligible: eligible.length, imported: Math.min(operations.length, maxChanges),
     alreadyPresent, remaining: Math.max(0, operations.length - maxChanges), skipped, changes };

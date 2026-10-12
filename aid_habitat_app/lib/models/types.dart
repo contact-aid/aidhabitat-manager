@@ -1,6 +1,7 @@
 // ignore_for_file: constant_identifier_names
 
 import 'dart:convert' show jsonDecode, jsonEncode;
+import 'housing_rooms.dart';
 
 enum DossierStatus {
   TO_VISIT,
@@ -333,8 +334,12 @@ class TrustedPerson {
 class Occupant {
   final String firstName;
   final String lastName;
-  /// Null means absent on legacy records; an empty string clears the choice.
+
+  /// Null means absent on legacy clients; an empty string is an explicit clear.
   final String? gender;
+
+  /// Null means absent on older records; an empty string is an explicit clear.
+  final String? maidenName;
   final String birthDate;
   final bool apa;
   final bool invalidity;
@@ -360,6 +365,7 @@ class Occupant {
     this.firstName = '',
     this.lastName = '',
     this.gender,
+    this.maidenName,
     this.birthDate = '',
     this.apa = false,
     this.invalidity = false,
@@ -382,6 +388,7 @@ class Occupant {
         : (const ['Homme', 'Femme'].contains(json['gender'])
               ? json['gender'] as String
               : ''),
+    maidenName: json['maidenName'] as String?,
     birthDate: json['birthDate'] as String? ?? '',
     apa: json['apa'] as bool? ?? false,
     invalidity: json['invalidity'] as bool? ?? false,
@@ -401,6 +408,7 @@ class Occupant {
     'firstName': firstName,
     'lastName': lastName,
     if (gender != null) 'gender': gender,
+    if (maidenName != null) 'maidenName': maidenName,
     'birthDate': birthDate,
     'apa': apa,
     'invalidity': invalidity,
@@ -419,6 +427,7 @@ class Occupant {
     String? firstName,
     String? lastName,
     String? gender,
+    String? maidenName,
     String? birthDate,
     bool? apa,
     bool? invalidity,
@@ -437,6 +446,7 @@ class Occupant {
       firstName: firstName ?? this.firstName,
       lastName: lastName ?? this.lastName,
       gender: gender ?? this.gender,
+      maidenName: maidenName ?? this.maidenName,
       birthDate: birthDate ?? this.birthDate,
       apa: apa ?? this.apa,
       invalidity: invalidity ?? this.invalidity,
@@ -552,6 +562,20 @@ class Patient {
 }
 
 class Housing {
+  final Map<String, String> roomIdentityErrors;
+  final Map<String, List<HousingRoom>> _roomsByLevel;
+  Map<String, List<HousingRoom>> get roomsByLevel => {
+    for (final entry in <String, List<String>>{
+      'basement': basementRooms,
+      'rdc': rdcRooms,
+      'floor': floorRooms,
+      'secondFloor': secondFloorRooms,
+      'thirdFloor': thirdFloorRooms,
+    }.entries)
+      entry.key:
+          _roomsByLevel[entry.key] ??
+          parseHousingRooms(jsonEncode(entry.value), entry.key),
+  };
   final HousingType type;
   final int? year;
   final double? surface;
@@ -607,6 +631,8 @@ class Housing {
   final String accessObservation;
 
   Housing({
+    this.roomIdentityErrors = const {},
+    Map<String, List<HousingRoom>> roomsByLevel = const {},
     required this.type,
     this.year,
     this.surface,
@@ -660,7 +686,7 @@ class Housing {
     this.easyAccess = true,
     this.comments = '',
     this.accessObservation = '',
-  });
+  }) : _roomsByLevel = roomsByLevel;
 
   Housing copyWith({
     HousingType? type,
@@ -824,6 +850,7 @@ class AutonomyData {
 
 class BathroomInstance {
   final String id;
+  final String housingRoomId;
   final String levelField;
   final String levelLabel;
   final bool sdbBaignoire;
@@ -858,6 +885,7 @@ class BathroomInstance {
 
   const BathroomInstance({
     required this.id,
+    this.housingRoomId = '',
     this.levelField = '',
     this.levelLabel = '',
     this.sdbBaignoire = false,
@@ -885,6 +913,7 @@ class BathroomInstance {
   factory BathroomInstance.fromJson(Map<String, dynamic> json) =>
       BathroomInstance(
         id: json['id'] as String? ?? '',
+        housingRoomId: json['housingRoomId'] as String? ?? '',
         levelField: json['levelField'] as String? ?? '',
         levelLabel: json['levelLabel'] as String? ?? '',
         sdbBaignoire: json['sdbBaignoire'] as bool? ?? false,
@@ -916,6 +945,7 @@ class BathroomInstance {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    if (housingRoomId.isNotEmpty) 'housingRoomId': housingRoomId,
     'levelField': levelField,
     'levelLabel': levelLabel,
     'sdbBaignoire': sdbBaignoire,
@@ -943,6 +973,7 @@ class BathroomInstance {
 
 class WcInstance {
   final String id;
+  final String housingRoomId;
   final String levelField;
   final String levelLabel;
   // Trois états mutuellement exclusifs pour la hauteur de la cuvette :
@@ -972,6 +1003,7 @@ class WcInstance {
 
   const WcInstance({
     required this.id,
+    this.housingRoomId = '',
     this.levelField = '',
     this.levelLabel = '',
     this.wcCuvetteBonneHauteur = true,
@@ -987,6 +1019,7 @@ class WcInstance {
 
   factory WcInstance.fromJson(Map<String, dynamic> json) => WcInstance(
     id: json['id'] as String? ?? '',
+    housingRoomId: json['housingRoomId'] as String? ?? '',
     levelField: json['levelField'] as String? ?? '',
     levelLabel: json['levelLabel'] as String? ?? '',
     wcCuvetteBonneHauteur: json['wcCuvetteBonneHauteur'] as bool? ?? true,
@@ -1003,6 +1036,7 @@ class WcInstance {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    if (housingRoomId.isNotEmpty) 'housingRoomId': housingRoomId,
     'levelField': levelField,
     'levelLabel': levelLabel,
     'wcCuvetteBonneHauteur': wcCuvetteBonneHauteur,

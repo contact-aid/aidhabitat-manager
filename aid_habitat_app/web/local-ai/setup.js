@@ -1,0 +1,35 @@
+(() => {
+  const status = document.getElementById('status'), result = document.getElementById('result');
+  const install = document.getElementById('install'), cancel = document.getElementById('cancel'), progress = document.getElementById('progress');
+  let timer, busy = false;
+  const finish = () => { clearInterval(timer); busy = false; cancel.hidden = true; install.disabled = false; };
+  install.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true; install.disabled = true; cancel.hidden = false; progress.hidden = false; progress.removeAttribute('value');
+    status.textContent = 'Démarrage du téléchargement…'; result.textContent = '';
+    timer = setInterval(() => {
+      status.textContent = window.aidHabitatLocalAiPhase?.() || 'Préparation du modèle…';
+      const value = window.aidHabitatLocalAiProgress?.() || 0;
+      if (value > 0 && value < 1) progress.value = value; else progress.removeAttribute('value');
+    }, 500);
+    try {
+      const state = JSON.parse(await aidHabitatLocalAiPrepare());
+      finish(); install.hidden = true; progress.value = 1;
+      status.textContent = 'Installation terminée. Vous pouvez revenir à votre rapport.';
+      if (state.warning) {
+        result.textContent = state.warning;
+        install.hidden = false;
+        install.textContent = 'Réessayer l’accès hors ligne (facultatif)';
+      }
+    } catch (_) {
+      finish(); progress.hidden = true; status.textContent = 'Installation interrompue';
+      result.textContent = window.aidHabitatLocalAiLastError?.() || 'Le moteur d’installation ne répond pas. Rouvrez cette page dans un nouvel onglet. Les notes de votre dossier sont conservées. [INSTALLER_UNAVAILABLE]';
+    }
+  });
+  cancel.addEventListener('click', () => aidHabitatLocalAiCancel());
+  aidHabitatLocalAiStatus().then(raw => {
+    const state = JSON.parse(raw);
+    install.disabled = !state.supported;
+    status.textContent = !state.supported ? (state.message || 'Ce navigateur ne propose pas WebGPU. Vérifiez l’accélération graphique dans votre navigateur.') : state.installed ? 'Le modèle est déjà installé dans ce navigateur.' : 'Le navigateur est compatible. Cliquez sur Télécharger.';
+  }).catch(() => { install.disabled = false; status.textContent = 'Cliquez sur Télécharger pour vérifier et installer le modèle.'; });
+})();

@@ -18,7 +18,9 @@ Future<Database> openTestDatabase() async {
       dossier_local_id TEXT NOT NULL UNIQUE,
       items_json TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      sync_state TEXT NOT NULL
+      sync_state TEXT NOT NULL,
+      remote_revision TEXT,
+      remote_snapshot_exists INTEGER NOT NULL DEFAULT 0
     )
   ''');
   await db.execute('''
@@ -96,6 +98,32 @@ void main() {
 
   tearDown(() async {
     await db.close();
+  });
+
+  test('new wiki publication uses the known remote revision', () async {
+    await insertRecommendations(db, [
+      recommendation('pending-wiki', oldWikiId),
+    ]);
+    await db.update('visit_recommendations', {
+      'remote_revision': oldWriteId,
+      'remote_snapshot_exists': 1,
+    });
+    await db.transaction(
+      (txn) => remapVisitRecommendationReferencesInTransaction(
+        txn,
+        oldWikiId,
+        newWikiId,
+        openPayload: identity,
+        sealPayload: identity,
+        createWriteId: () => newWriteId,
+      ),
+    );
+    final payload = jsonDecode(
+      (await db.query('sync_operations')).single['payload_json'] as String,
+    );
+    expect(payload['envelope']['expectedRevision'], oldWriteId);
+    expect(payload['envelope']['items'].single['wikiItemId'], newWikiId);
+    expect(payload['envelope']['writeId'], newWriteId);
   });
 
   test('agent2 remap and pending publication are committed together', () async {
@@ -231,6 +259,9 @@ void main() {
         'wiki-existing',
       ]);
       expect(payload['localReference']['writeId'], newWriteId);
+      expect(payload['envelope']['protocolVersion'], 1);
+      expect(payload['envelope']['writeId'], newWriteId);
+      expect(payload['envelope']['expectedRevision'], isNull);
       expect(payload.containsKey('concurrency'), isFalse);
       expect(result.operationsCreated, 1);
     },
