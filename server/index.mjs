@@ -1,3 +1,4 @@
+import { registerNoteBackupRoutes } from './noteBackupRoutes.mjs';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import fs from 'node:fs/promises';
@@ -8696,6 +8697,8 @@ app.get('/public/note-pages/:notePageId/preview', requireAuth, async (req, res, 
     next(error);
   }
 });
+
+registerNoteBackupRoutes(app, { requireAuth, resolveBeneficiaryAccess });
 
 app.get('/api/note-pages/:patientId', requireAuth, async (req, res, next) => {
   try {
