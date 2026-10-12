@@ -93,3 +93,30 @@ test('a JPEG in a pooled Buffer slice is embedded from its own first byte', asyn
   assert.equal(stats.recoImagesApplied, 1);
   assert.equal(stats.imagesFailedEmbed, 0);
 });
+
+for (const count of [0, 1, 8, 9, 10, 17, 40]) {
+  test(`${count} recommendations retain every text and image with dynamic pages`, async () => {
+    const image = await sharp({ create: { width: 24, height: 24, channels: 3,
+      background: '#ef713e' } }).png().toBuffer();
+    const { bytes, stats } = await generateVisitReport({
+      dossier: { id: `dynamic-${count}`, patient: { firstName: 'Test', lastName: 'Pagination' }, housing: {} },
+      recommendations: Array.from({ length: count }, (_, index) => ({
+        wikiTitle: `Préconisation unique ${index + 1}`, note: `Argumentaire unique ${index + 1}`,
+        wikiImageUrl: `image-${index + 1}`,
+      })),
+      documents: [], notePages: [], flatten: false,
+      fetchImageBytes: async () => ({ buffer: image, mimeType: 'image/png' }),
+    });
+    assert.equal(stats.recoTextApplied, count);
+    assert.equal(stats.recoImagesApplied, count);
+    assert.equal(stats.recoOverflow, 0);
+    assert.equal(stats.recoPagesAdded, Math.max(0, Math.ceil((count - 8) / 2)));
+    assert.equal(stats.descriptifMerged, count > 0 && count % 2 === 1);
+    const pdf = await PDFDocument.load(bytes);
+    const fields = pdf.getForm().getFields();
+    for (let index = 0; index < count; index++) {
+      assert.ok(fields.some((field) => field.getText?.() ===
+        `Préconisation unique ${index + 1}\n\nArgumentaire unique ${index + 1}`));
+    }
+  });
+}
