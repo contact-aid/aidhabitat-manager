@@ -25,6 +25,6 @@
   aidHabitatLocalAiStatus().then(raw => {
     const state = JSON.parse(raw);
     install.disabled = !state.supported;
-    status.textContent = !state.supported ? 'Ce navigateur ne propose pas WebGPU. Vérifiez l’accélération graphique dans Chrome.' : state.installed ? 'Le modèle est déjà installé dans ce navigateur.' : 'Le navigateur est compatible. Cliquez sur Télécharger.';
+    status.textContent = !state.supported ? (state.message || 'Ce navigateur ne propose pas WebGPU. Vérifiez l’accélération graphique dans votre navigateur.') : state.installed ? 'Le modèle est déjà installé dans ce navigateur.' : 'Le navigateur est compatible. Cliquez sur Télécharger.';
   }).catch(() => { install.disabled = false; status.textContent = 'Cliquez sur Télécharger pour vérifier et installer le modèle.'; });
 })();

@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' show PointerDeviceKind;
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -4122,6 +4122,8 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
     with WidgetsBindingObserver {
   bool _available = false;
   bool _loading = false;
+  String _rewritePhase = '';
+  Timer? _rewritePhaseTimer;
 
   @override
   void initState() {
@@ -4132,6 +4134,7 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
 
   @override
   void dispose() {
+    _rewritePhaseTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -4183,6 +4186,18 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
         );
         if (prepared != true || !mounted) return;
       }
+      if (kIsWeb) {
+        _rewritePhase = 'Préparation de la reformulation…';
+        _rewritePhaseTimer = Timer.periodic(const Duration(milliseconds: 500), (
+          _,
+        ) {
+          if (mounted) {
+            setState(
+              () => _rewritePhase = AiRewriteService.instance.preparationPhase,
+            );
+          }
+        });
+      }
       final rewrittenText = await AiRewriteService.instance.rewrite(
         text: originalText,
       );
@@ -4219,6 +4234,8 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
     } catch (error) {
       if (mounted) _showMessage(_errorMessage(error));
     } finally {
+      _rewritePhaseTimer?.cancel();
+      _rewritePhaseTimer = null;
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -4228,9 +4245,13 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
     if (!_available) return const SizedBox.shrink();
 
     return Tooltip(
-      message: 'Reformuler avec l’IA',
+      message: _loading && kIsWeb
+          ? '${_rewritePhase.isEmpty ? 'Reformulation en cours' : _rewritePhase} Cliquez pour annuler.'
+          : 'Reformuler avec l’IA',
       child: IconButton(
-        onPressed: _loading ? null : _rewrite,
+        onPressed: _loading
+            ? (kIsWeb ? AiRewriteService.instance.cancelPreparation : null)
+            : _rewrite,
         icon: _loading
             ? const SizedBox.square(
                 dimension: 15,

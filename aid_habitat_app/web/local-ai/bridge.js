@@ -11,12 +11,13 @@
   const messages = {
     storage: 'Le navigateur ne répond pas à la vérification du stockage. Fermez cette fenêtre et réessayez.',
     space: 'Espace insuffisant : prévoyez au moins 1,3 Go libres.',
-    unsupported: 'L’IA locale nécessite WebGPU. Vérifiez que l’accélération graphique est activée dans Chrome.',
+    unsupported: 'L’IA locale nécessite WebGPU. Vérifiez que l’accélération graphique est activée dans votre navigateur.',
+    gpu_limits: 'Ce navigateur ne fournit pas les capacités graphiques nécessaires au moteur d’IA local. Utilisez Google Chrome à jour pour installer et utiliser l’IA. Gardez votre rapport ouvert et vérifiez sa synchronisation avant de changer de navigateur. [GPU_LIMITS]',
     download: 'Le téléchargement ne répond pas. Vérifiez la connexion puis réessayez. Les notes sont conservées.',
     offline: 'Le modèle est prêt, mais la préparation hors ligne a échoué. Réessayez sans effacer les données du navigateur.',
-    model_network: 'Chrome n’a pas pu récupérer un fichier du modèle. Vérifiez la connexion et l’accès à Hugging Face, puis réessayez. [MODEL_NETWORK]',
-    model_storage: 'Chrome n’a pas pu enregistrer le modèle dans son stockage local. Vérifiez l’espace libre et les autorisations de stockage du site. [MODEL_STORAGE]',
-    model_gpu: 'Le moteur graphique du Mac n’a pas pu charger le modèle. Vérifiez la version de Chrome et l’accélération graphique. [MODEL_GPU]',
+    model_network: 'Le navigateur n’a pas pu récupérer un fichier du modèle. Vérifiez la connexion et l’accès à Hugging Face, puis réessayez. [MODEL_NETWORK]',
+    model_storage: 'Le navigateur n’a pas pu enregistrer le modèle dans son stockage local. Vérifiez l’espace libre et les autorisations de stockage du site. [MODEL_STORAGE]',
+    model_gpu: 'Le moteur graphique n’a pas pu charger le modèle. Vérifiez la version du navigateur et l’accélération graphique. [MODEL_GPU]',
     model_runtime: 'Le moteur local n’a pas pu charger le modèle. Le téléchargement peut être partiel. Réessayez sans effacer les données du navigateur. [MODEL_RUNTIME]',
   };
   function deadline(promise, ms, code) {
@@ -47,6 +48,7 @@
     if (!worker) {
       worker = new Worker(new URL('local-ai/worker.js', document.baseURI));
       worker.onmessage = ({data}) => {
+        if (data.phase !== undefined) { phase = data.phase; return; }
         if (data.progress !== undefined) { progress = data.progress; return; }
         const item = pending.get(data.id);
         if (!item) return;
@@ -65,7 +67,7 @@
     }
     return new Promise((resolve, reject) => {
       const id = ++nextId;
-      const timer = setTimeout(stop, method === 'prepare' ? 1800000 : method === 'status' ? 15000 : 130000);
+      const timer = setTimeout(stop, method === 'prepare' ? 1800000 : method === 'status' ? 15000 : 600000);
       pending.set(id, {resolve, reject, timer});
       worker.postMessage({id, method, ...payload});
     });
@@ -75,6 +77,7 @@
       return JSON.stringify({supported: false, installed: false});
     }
     const result = await request('status');
+    if (result.reason === 'gpu_limits') result.message = messages.gpu_limits;
     const registration = await navigator.serviceWorker.getRegistration();
     result.installed = result.installed && localStorage.getItem('appergo-local-ai-qwen3-v1') === 'complete';
     result.offlineReady = !!registration?.active?.scriptURL.endsWith('/ai_offline_worker.js');
@@ -95,7 +98,7 @@
     try {
     const state = await deadline(request('status'), 15000, 'unsupported');
     checkCancelled();
-    if (!state.supported) { const error = new Error(messages.unsupported); error.setupCode = 'unsupported'; throw error; }
+    if (!state.supported) { const code = state.reason === 'gpu_limits' ? 'gpu_limits' : 'unsupported'; const error = new Error(messages[code]); error.setupCode = code; throw error; }
     phase = 'Vérification du stockage…';
     // Persistent storage is advisory, and must never strand the download UI.
     await deadline(Promise.resolve(navigator.storage?.persist?.()), 10000, 'storage').catch(() => {});
