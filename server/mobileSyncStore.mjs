@@ -1,3 +1,4 @@
+import { selectLegacyNoteAlias } from './noteLegacyAlias.mjs';
 import crypto from 'node:crypto';
 import { createNoteContentStore, noteContentOwner, NOTE_CONTENT_PREFIX, NOTE_CONTENT_MAX_BYTES, isNoteChunkKey } from './noteContentChunks.mjs';
 import fs from 'node:fs/promises';
@@ -1765,6 +1766,18 @@ export const createNocodbStoreAdapter = ({ absoluteUrl, documentsTableId, docume
       throw new NotePageMutationError(409, 'NOTE_PAGE_DUPLICATES_REQUIRE_REVIEW', existing);
     }
     existing ??= samePage[0] ?? null;
+
+    // Preserve the exact legacy alias already supported by the live API.
+    // Revision, identity and conditional-write checks below still apply.
+    if (!existing && expectedRevision !== null && scopeId === dossierId && scopeId !== patientId
+      && !['Bénéficiaire-Notes', 'notes_rapides'].includes(tabKey)) {
+      const candidates = await queryAll(notePagesTableId, {
+        fields: notePageFields,
+        where: notePageIdentityWhere({ patientId, scopeType, scopeId: patientId, tabKey, subTabKey, pageNumber }),
+      });
+      existing = selectLegacyNoteAlias(candidates, { patientId, dossierId, scopeType, tabKey, subTabKey, pageNumber });
+      if (existing) scopeId = patientId;
+    }
     if (existing && !sameNotePageIdentity(existing.fields, {
       patientId,
       scopeType,
