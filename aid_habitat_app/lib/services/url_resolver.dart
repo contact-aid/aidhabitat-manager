@@ -37,6 +37,10 @@ String resolveMediaUrl(String url) {
 /// under `web-assets/` and declared in `pubspec.yaml`, so the native app can
 /// render them instantly without waiting for a remote cache warmup.
 String? bundledMediaAssetPath(String url) {
+  // Explicit bundled references are also usable by the web app.
+  if (url.startsWith('asset:web-assets/')) {
+    return url.substring('asset:'.length);
+  }
   if (kIsWeb) return null;
   final raw = url.trim();
   if (raw.isEmpty || raw.startsWith('data:') || raw.startsWith('blob:')) {

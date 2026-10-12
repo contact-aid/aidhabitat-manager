@@ -35,7 +35,7 @@ const withLogo = (entry) => ({
 export const RETIREMENT_FUNDS_CATALOG = {
   'agirc-arrco': withLogo({
     displayName: 'Agirc-Arrco',
-    logoUrl: '/retirement-logos/agirc-arrco.svg',
+    logoUrl: '/retirement-logos/agirc-arrco.png',
     website: 'https://www.agirc-arrco.fr',
     audience: 'Retraités et anciens salariés du privé affiliés au régime.',
     location: 'Espace personnel Agirc-Arrco ou réseau conseil retraite / CICAS.',
