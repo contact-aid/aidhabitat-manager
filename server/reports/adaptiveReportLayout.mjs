@@ -87,8 +87,8 @@ export function reportOccupants(patient = {}) {
       firstName: patient.firstName, lastName: patient.lastName,
       birthDate: patient.birthDate ?? patient.birthDateMr,
       dependenceTxt: patient.dependenceTxt,
-      apa: patient.apa, apaGir: patient.apaGir ?? patient.gir,
-      invalidity: patient.invalidity, invalidityTxt: patient.invalidityTxt,
+      apa: patient.apa, apaGir: patient.apaGir ?? patient.gir, apaDetails: patient.apaDetails,
+      invalidity: patient.invalidity, invalidityTxt: patient.invalidityTxt, invalidityDetails: patient.invalidityDetails,
     } : index === 1 ? {
       firstName: patient.secondFirstName, lastName: patient.secondLastName,
       birthDate: patient.birthDateMme,
@@ -106,8 +106,10 @@ export function reportOccupantStatuses(patient = {}) {
   for (const [index, occupant] of reportOccupants(patient).entries()) {
     const label = `Occupant ${index + 1}`;
     const gir = String(occupant.apaGir ?? occupant.gir ?? '').trim().replace(/^GIR\s*/i, '');
-    if (enabled(occupant.apa)) apa.push(`${label} ${gir && gir.toLowerCase() !== 'non' ? `GIR ${gir}` : 'Oui'}`);
-    if (enabled(occupant.invalidity)) mdph.push(`${label} ${String(occupant.invalidityTxt ?? '').trim() || 'Oui'}`);
+    const apaDetails = String(occupant.apaDetails ?? '').trim();
+    const invalidityDetails = String(occupant.invalidityDetails ?? '').trim();
+    if (enabled(occupant.apa)) apa.push(`${label} ${gir && gir.toLowerCase() !== 'non' ? `GIR ${gir}` : 'Oui'}${apaDetails ? ` : ${apaDetails}` : ''}`);
+    if (enabled(occupant.invalidity)) mdph.push(`${label} ${String(occupant.invalidityTxt ?? '').trim() || 'Oui'}${invalidityDetails ? ` : ${invalidityDetails}` : ''}`);
   }
   return { apa: apa.join(', '), mdph: mdph.join(', ') };
 }
@@ -154,6 +156,7 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
     let x = 42;
     for (const [label, key] of items) {
       const labelWidth = regular.widthOfTextAtSize(label, 10);
+      if (x + labelWidth + 32 > 552) { x = 42; y -= 18; }
       page.drawText(label, { x, y, size: 10, font: regular });
       const boxX = x + labelWidth + 8;
       page.drawRectangle({ x: boxX, y: y - 1, width: 9, height: 9, borderWidth: .5, borderColor: black });
@@ -164,7 +167,7 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
       x = boxX + 24;
     }
   }
-  options([['Célibataire', 'Célibataire'], ['En concubinage', 'En concubinage'], ['Marié(e)', 'Mariée'], ['Veuf(ve)', 'Veufve'], ['Divorcé(e)', 'Divorcée']], view.familySituationNormalized);
+  options([['Célibataire', 'Célibataire'], ['En concubinage', 'En concubinage'], ['Marié(e)', 'Mariée'], ['Pacsé', 'Pacsé'], ['Veuf(ve)', 'Veufve'], ['Divorcé(e)', 'Divorcée']], view.familySituationNormalized);
   y -= 22; text('Statut d’occupation :');
   y -= 20; options([['Propriétaire', 'Propriétaire'], ['Locataire', 'Locataire'], ['Usufruitier(e)', 'Usufruitiere']], view.occupationStatusNormalized);
   const statuses = reportOccupantStatuses(patient);

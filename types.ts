@@ -138,6 +138,10 @@ export enum HeatingMode {
 }
 
 export interface OccupantIdentity {
+  apaGir?: string;
+  apaDetails?: string;
+  invalidityDetails?: string;
+  fiscalReferenceYear?: string;
   firstName: string;
   lastName: string;
   birthDate?: string;

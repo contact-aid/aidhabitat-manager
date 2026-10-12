@@ -105,3 +105,14 @@ test('maiden name is not transferred to an ambiguous identity', () => {
     { firstName: 'Autre', lastName: 'Personne' },
   ] }, storedWithMaidenName), { statusCode: 409 });
 });
+
+test('older clients retain health details and fiscal year while explicit clears remain authoritative', () => {
+  const stored = JSON.stringify([{firstName:'Anne',lastName:'Test',apaGir:'4',apaDetails:'Évaluation',invalidityDetails:'Décision',fiscalReferenceYear:'2025'}]);
+  const legacy = {occupants:[{firstName:'Anne',lastName:'Test'}]};
+  assert.deepEqual(preserveLegacyOccupantGender(legacy, stored).occupants[0], {
+    ...legacy.occupants[0],apaGir:'4',apaDetails:'Évaluation',invalidityDetails:'Décision',fiscalReferenceYear:'2025',
+  });
+  const clear = {occupants:[{...legacy.occupants[0],apaDetails:'',invalidityDetails:'',fiscalReferenceYear:''}]};
+  const updated = preserveLegacyOccupantGender(clear, stored).occupants[0];
+  assert.equal(updated.apaDetails,'');assert.equal(updated.invalidityDetails,'');assert.equal(updated.fiscalReferenceYear,'');
+});

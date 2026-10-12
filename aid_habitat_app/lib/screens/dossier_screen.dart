@@ -8,6 +8,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../components/beneficiary_header.dart';
 import '../components/dossier_occupants_fields.dart';
+import '../components/year_picker_field.dart';
 import '../models/dossier_occupants.dart';
 import '../components/beneficiary_palettes.dart';
 import '../components/brand_colors.dart';
@@ -1031,9 +1032,26 @@ class _DossierScreenState extends State<DossierScreen> {
                       ),
                     ],
                     if (_isBeneficiaryLocked) ...[
-                      _PlainField(
-                        label: 'RFR du foyer',
-                        value: _formatFiscalRevenue(_fiscalRevenue),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: _PlainField(
+                              label: 'RFR du foyer',
+                              value: _formatFiscalRevenue(_fiscalRevenue),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _PlainField(
+                              label: 'Année de référence',
+                              value:
+                                  _occupants.first.fiscalReferenceYear.isEmpty
+                                  ? 'Non renseignée'
+                                  : _occupants.first.fiscalReferenceYear,
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 16),
                       _PlainField(
@@ -1098,20 +1116,43 @@ class _DossierScreenState extends State<DossierScreen> {
                       // (demande utilisateur) : s'il existe, il est affiché
                       // par défaut dans la note rapide en haut à droite.
                     ] else ...[
-                      _buildKeyboardAwareInfoField(
-                        (onFocused) => FormNumberField(
-                          label: 'RFR du foyer',
-                          value: _fiscalRevenue,
-                          unit: '€',
-                          labelColor: kBrandPurple,
-                          labelSize: 16,
-                          valueSize: 16,
-                          onFocused: onFocused,
-                          onChanged: (v) {
-                            _fiscalRevenue = v;
-                            _onIncomeAffectingChanged();
-                          },
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: _buildKeyboardAwareInfoField(
+                              (onFocused) => FormNumberField(
+                                label: 'RFR du foyer',
+                                value: _fiscalRevenue,
+                                unit: '€',
+                                labelColor: kBrandPurple,
+                                labelSize: 16,
+                                valueSize: 16,
+                                onFocused: onFocused,
+                                onChanged: (v) {
+                                  _fiscalRevenue = v;
+                                  _onIncomeAffectingChanged();
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: YearPickerField(
+                              label: 'Année de référence',
+                              value: _occupants.first.fiscalReferenceYear,
+                              onChanged: (v) {
+                                setState(() {
+                                  _occupants[0] = _occupants.first.copyWith(
+                                    fiscalReferenceYear: v,
+                                  );
+                                  _identityVersion++;
+                                });
+                                _onTextChanged();
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 12),
                       // Adresse (rue / n°) — modifiable directement depuis

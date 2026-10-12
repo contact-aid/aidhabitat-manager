@@ -701,6 +701,7 @@ function normalizeFamilySituation(raw) {
   if (!s) return '';
   if (s.startsWith('célib') || s.startsWith('celib')) return 'Célibataire';
   if (s.includes('concubin')) return 'En concubinage';
+  if (s.startsWith('pacs')) return 'Pacsé';
   if (s.startsWith('mari')) return 'Mariée';
   if (s.startsWith('veuf') || s.startsWith('veuv')) return 'Veufve';
   if (s.startsWith('divorc')) return 'Divorcée';
