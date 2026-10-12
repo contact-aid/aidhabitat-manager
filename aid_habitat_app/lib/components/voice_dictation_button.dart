@@ -70,12 +70,19 @@ bool _endsWithOpeningPunctuation(String value) =>
 @visibleForTesting
 String voiceDictationMessageForError(String errorCode, {required bool isWeb}) {
   final code = errorCode.toLowerCase();
+  if (isWeb && code.contains('local-model-unavailable')) {
+    return 'Le modèle vocal local n’a pas pu être chargé. Vérifiez la '
+        'connexion et l’espace libre, puis réessayez.';
+  }
+  if (isWeb && code.contains('local-transcription-failed')) {
+    return 'La transcription locale a échoué. Le texte de la note est '
+        'conservé. Réessayez avec une dictée plus courte.';
+  }
   if (isWeb &&
       (code.contains('service-not-allowed') ||
           code.contains('service_not_allowed'))) {
-    return 'Le service vocal du navigateur est bloqué (service-not-allowed). '
-        'Sous Safari, activez Siri ou Dictée dans les réglages du Mac. '
-        'Sous Arc, essayez Google Chrome ou Safari.';
+    return 'Le service vocal du navigateur est bloqué. Touchez à nouveau '
+        'le micro pour utiliser le modèle vocal local.';
   }
   if (isWeb && (code.contains('not-allowed') || code.contains('not_allowed'))) {
     return 'Le navigateur refuse l’accès au microphone ou à la '
@@ -103,8 +110,8 @@ String voiceDictationMessageForError(String errorCode, {required bool isWeb}) {
     return 'Aucun microphone utilisable n’a été détecté par le navigateur.';
   }
   if (isWeb && code.contains('network')) {
-    return 'Le service de reconnaissance vocale du navigateur ne répond pas. '
-        'Vérifiez la connexion, puis réessayez (network).';
+    return 'Le service de reconnaissance vocale ne répond pas. Touchez à '
+        'nouveau le micro pour utiliser le modèle vocal local.';
   }
   if (isWeb && (code.contains('language') || code.contains('on_device'))) {
     return 'La reconnaissance française du navigateur n’est pas disponible '
@@ -156,9 +163,8 @@ class _VoiceDictationStartResult {
   bool get started => errorMessage == null;
 }
 
-/// Owns the singleton `speech_to_text` instance and routes its callbacks to the
-/// currently active editor. Native iPad uses on-device recognition; the web
-/// app uses the browser speech service after preparing its runtime.
+/// Routes callbacks to the active editor. Native iPad uses `speech_to_text`
+/// on-device recognition; web uses a local model with its own lifecycle.
 class _VoiceDictationService {
   _VoiceDictationService._();
 
@@ -179,13 +185,15 @@ class _VoiceDictationService {
   Future<String?> prepareWebRuntime() async {
     if (!kIsWeb) return null;
     final runtime = await prepareWebVoiceSpeechRuntime();
+    _usesLocalWebModel = runtime == 'local-model';
     final message = voiceDictationMessageForWebRuntime(runtime);
     if (message != null) return message;
 
-    // The web bridge updates the retained recognizer at each start. Calling
-    // SpeechToText() again returns the same singleton, not a new engine.
     return null;
   }
+
+  bool get usesLocalWebModel => _usesLocalWebModel;
+  bool _usesLocalWebModel = false;
 
   Future<_VoiceDictationStartResult> start({
     required Object owner,
@@ -210,12 +218,27 @@ class _VoiceDictationService {
     _errorCallback = onError;
 
     try {
+      if (kIsWeb) {
+        // The browser model returns text after asynchronous transcription.
+        // The native plugin's final-result timer is unsuitable for this path.
+        startWebVoiceRecognition(
+          onResult: (text) => _relayResult(
+            SpeechRecognitionResult([SpeechRecognitionWords(text, null, 1)], 0),
+          ),
+          onStatus: _relayStatus,
+          onError: (code) => _relayError(SpeechRecognitionError(code, true)),
+        );
+        return const _VoiceDictationStartResult.success();
+      }
       if (!_initialized) {
         _initialized = await _speech.initialize(
           onStatus: _relayStatus,
           onError: _relayError,
           debugLogging: false,
         );
+      }
+      if (!isActiveOwner(owner)) {
+        return const _VoiceDictationStartResult.success();
       }
       if (!_initialized) {
         _release(owner);
@@ -229,6 +252,9 @@ class _VoiceDictationService {
       }
 
       final localeId = await _findFrenchLocale();
+      if (!isActiveOwner(owner)) {
+        return const _VoiceDictationStartResult.success();
+      }
       if (localeId == null) {
         _release(owner);
         return _VoiceDictationStartResult.failure(
@@ -270,7 +296,11 @@ class _VoiceDictationService {
   Future<void> stop(Object owner) async {
     if (!identical(_activeOwner, owner)) return;
     try {
-      await _speech.stop();
+      if (kIsWeb) {
+        stopWebVoiceRecognition();
+      } else {
+        await _speech.stop();
+      }
     } catch (_) {
       _release(owner);
     }
@@ -316,9 +346,9 @@ class _VoiceDictationService {
     final callback = _statusCallback;
     final owner = _activeOwner;
     callback?.call(status);
-    if (owner != null &&
-        (status == stt.SpeechToText.doneStatus ||
-            status == stt.SpeechToText.notListeningStatus)) {
+    // Apple stops capturing before delivering its final recognition result.
+    // Keep callbacks until `done`, otherwise the final words are lost.
+    if (owner != null && status == stt.SpeechToText.doneStatus) {
       _release(owner);
     }
   }
@@ -333,7 +363,11 @@ class _VoiceDictationService {
   Future<void> _cancelActiveSession() async {
     final callback = _statusCallback;
     try {
-      await _speech.cancel();
+      if (kIsWeb) {
+        cancelWebVoiceRecognition();
+      } else {
+        await _speech.cancel();
+      }
     } catch (_) {
       // Best effort: a failed cancellation must not keep an editor locked.
     }
@@ -389,6 +423,7 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
   TextEditingValue? _baseValue;
   bool _isStarting = false;
   bool _isListening = false;
+  bool _isProcessing = false;
 
   @override
   void dispose() {
@@ -397,11 +432,15 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
   }
 
   Future<void> _toggle() async {
-    if (_isStarting) return;
+    if (_isProcessing) {
+      await _service.cancel(_owner);
+      return;
+    }
     if (_service.isActiveOwner(_owner) || _isListening) {
       await _service.stop(_owner);
       return;
     }
+    if (_isStarting) return;
 
     setState(() => _isStarting = true);
     _baseValue = widget.controller.value;
@@ -415,6 +454,13 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
         widget.onListeningChanged?.call(false);
         _showMessage(runtimeError);
         return;
+      }
+      if (_service.usesLocalWebModel) {
+        _showMessage(
+          'Préparation de la dictée locale. Le premier usage télécharge '
+          'le modèle vocal. Attendez l’icône Arrêter pour parler. '
+          'Touchez à nouveau pour transcrire, après une minute au maximum.',
+        );
       }
     }
 
@@ -451,9 +497,14 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
   void _handleStatus(String status) {
     if (!mounted) return;
     final listening = status == stt.SpeechToText.listeningStatus;
-    if (_isListening != listening || _isStarting) {
+    final processing = status == 'processing';
+    if (_isListening != listening ||
+        _isStarting ||
+        _isProcessing != processing) {
       setState(() {
         _isListening = listening;
+        _isProcessing = processing;
+        if (processing) _isStarting = true;
         if (listening ||
             status == stt.SpeechToText.doneStatus ||
             status == stt.SpeechToText.notListeningStatus) {
@@ -469,6 +520,7 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
     setState(() {
       _isStarting = false;
       _isListening = false;
+      _isProcessing = false;
     });
     widget.onListeningChanged?.call(false);
     _showMessage(_messageForError(error));
@@ -497,13 +549,17 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
 
     return Semantics(
       button: true,
-      label: active
+      label: _isProcessing
+          ? 'Annuler la transcription en cours'
+          : active
           ? 'Arrêter la dictée vocale'
           : kIsWeb
           ? 'Démarrer la dictée vocale dans le navigateur'
           : 'Démarrer la dictée vocale hors ligne',
       child: Tooltip(
-        message: active
+        message: _isProcessing
+            ? 'Transcription en cours. Touchez pour annuler.'
+            : active
             ? 'Arrêter la dictée'
             : kIsWeb
             ? 'Dicter dans le navigateur'
