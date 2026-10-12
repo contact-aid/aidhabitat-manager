@@ -13,9 +13,14 @@
       if (value > 0 && value < 1) progress.value = value; else progress.removeAttribute('value');
     }, 500);
     try {
-      await aidHabitatLocalAiPrepare();
+      const state = JSON.parse(await aidHabitatLocalAiPrepare());
       finish(); install.hidden = true; progress.value = 1;
       status.textContent = 'Installation terminée. Vous pouvez revenir à votre rapport.';
+      if (state.warning) {
+        result.textContent = state.warning;
+        install.hidden = false;
+        install.textContent = 'Réessayer l’accès hors ligne (facultatif)';
+      }
     } catch (_) {
       finish(); progress.hidden = true; status.textContent = 'Installation interrompue';
       result.textContent = window.aidHabitatLocalAiLastError?.() || 'Le moteur d’installation ne répond pas. Rouvrez cette page dans un nouvel onglet. Les notes de votre dossier sont conservées. [INSTALLER_UNAVAILABLE]';

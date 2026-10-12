@@ -15,6 +15,7 @@
     gpu_limits: 'Ce navigateur ne fournit pas les capacités graphiques nécessaires au moteur d’IA local. Utilisez Google Chrome à jour pour installer et utiliser l’IA. Gardez votre rapport ouvert et vérifiez sa synchronisation avant de changer de navigateur. [GPU_LIMITS]',
     download: 'Le téléchargement ne répond pas. Vérifiez la connexion puis réessayez. Les notes sont conservées.',
     offline: 'Le modèle est prêt, mais la préparation hors ligne a échoué. Réessayez sans effacer les données du navigateur.',
+    offline_optional: 'Le modèle d’IA est installé et utilisable dans ce navigateur. L’accès hors ligne à l’application n’a pas pu être préparé : gardez une connexion pour ouvrir l’application. Aucune protection ni donnée du dossier n’a été modifiée. [OFFLINE_SHELL]',
     model_network: 'Le navigateur n’a pas pu récupérer un fichier du modèle. Vérifiez la connexion et l’accès à Hugging Face, puis réessayez. [MODEL_NETWORK]',
     model_storage: 'Le navigateur n’a pas pu enregistrer le modèle dans son stockage local. Vérifiez l’espace libre et les autorisations de stockage du site. [MODEL_STORAGE]',
     model_gpu: 'Le moteur graphique n’a pas pu charger le modèle. Vérifiez la version du navigateur et l’accélération graphique. [MODEL_GPU]',
@@ -87,6 +88,7 @@
   window.aidHabitatLocalAiCancel = stop;
   window.aidHabitatLocalAiPrepare = async () => {
     const attempt = generation;
+    let modelReady = false;
     const checkCancelled = () => {
       if (attempt !== generation) throw new Error('Preparation annulee.');
     };
@@ -110,6 +112,7 @@
     checkCancelled();
     phase = 'Téléchargement et chargement du modèle…';
     const result = await deadline(request('prepare'), 1800000, 'download');
+    modelReady = result.ready === true;
     clearTimeout(idle);
     checkCancelled();
     // Explicit opt-in; this worker caches only a build-time list of static files.
@@ -134,6 +137,14 @@
     phase = 'Installation terminée';
     return JSON.stringify(result);
     } catch (error) {
+      if (modelReady && attempt === generation && error.setupCode === 'offline') {
+        // A modified or unavailable static shell must fail its integrity
+        // checks. That does not undo a completely installed local model.
+        localStorage.setItem('appergo-local-ai-qwen3-v1', 'complete');
+        lastError = messages.offline_optional;
+        phase = 'Installation du modèle terminée';
+        return JSON.stringify({supported: true, installed: true, ready: true, offlineReady: false, warning: lastError});
+      }
       lastError = messages[error.setupCode] || messages.download;
       stop();
       throw new Error(lastError);
