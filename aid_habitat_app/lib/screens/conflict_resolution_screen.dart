@@ -157,6 +157,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
       'mesures_anthropometriques' => 'Mesures',
       'observations_synthese' => 'Observations de synthese',
       'diagnostic_sanitaires' => 'Diagnostic sanitaires',
+      'visit_recommendations' => 'Préconisations',
       _ => 'Dossier',
     };
     return Padding(
@@ -167,7 +168,9 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
           Text(title, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            review.remoteExists
+            review.entityType == 'visit_recommendations'
+                ? 'Comparez les listes avant de choisir. Les brouillons locaux sont conservés.'
+                : review.remoteExists
                 ? describeSyncConflict(
                     jsonDecode(review.payloadJson) as Map<String, dynamic>,
                   )
@@ -188,6 +191,22 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                   const SizedBox(height: 6),
                   LayoutBuilder(
                     builder: (context, constraints) {
+                      if (review.entityType == 'visit_recommendations') {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _recommendationList(
+                              'Cet appareil',
+                              review.localValues[key],
+                            ),
+                            const SizedBox(height: 12),
+                            _recommendationList(
+                              'Serveur',
+                              review.remoteValues[key],
+                            ),
+                          ],
+                        );
+                      }
                       final local = _value(
                         'Cet appareil',
                         review.localValues[key],
@@ -253,6 +272,27 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
     );
   }
 
+  Widget _recommendationList(String title, dynamic value) {
+    final items = value as List;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$title (${items.length})',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        if (items.isEmpty) const Text('Aucune préconisation'),
+        for (final item in items)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: SelectableText(
+              '${items.indexOf(item) + 1}. ${(item['customTitle']?.toString() ?? '').trim().isNotEmpty ? item['customTitle'] : item['wikiTitle'] ?? 'Préconisation'}\n${item['note'] ?? ''}',
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _value(String title, dynamic value) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -269,6 +309,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
 }
 
 const _fieldLabels = {
+  'items': 'Liste des préconisations',
   'firstName': 'Prenom',
   'lastName': 'Nom',
   'phone': 'Telephone',

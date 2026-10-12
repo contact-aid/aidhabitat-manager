@@ -2944,7 +2944,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
             dossier: _dossier,
             repository: _repository,
             controller: _recommendationsController,
-            externalRefreshToken: _dossierDetailPullToken,
+            externalRefreshToken:
+                _dossierDetailPullToken + widget.conflictRefreshToken,
           ),
         ),
       ],

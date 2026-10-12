@@ -10,6 +10,7 @@ import '../models/dossier_refresh_phase.dart';
 import '../models/visit_report_categories.dart';
 import 'access_members_repository.dart';
 import 'auth_service.dart';
+import 'app_config.dart';
 import 'connectivity_service.dart';
 import 'dossier_repository.dart';
 import 'document_repository.dart';
@@ -1344,6 +1345,22 @@ class DataService {
       }
       reviews.addAll(
         await _dossierRepository.reviewConflicts(dossierId, matches.single),
+      );
+    }
+    if (scope.entityTypes.contains('visit_recommendations')) {
+      if (!AppConfig.hasRemoteConfig) {
+        throw StateError(
+          'Connexion au serveur nécessaire pour comparer les préconisations.',
+        );
+      }
+      final snapshot = await _nocodbApiClient.fetchVisitRecommendationsSnapshot(
+        scope.remoteDossierId,
+      );
+      reviews.addAll(
+        await _dossierRepository.reviewVisitRecommendationsConflict(
+          dossierId,
+          snapshot,
+        ),
       );
     }
     final secondary = <String, Map<String, dynamic>?>{};
