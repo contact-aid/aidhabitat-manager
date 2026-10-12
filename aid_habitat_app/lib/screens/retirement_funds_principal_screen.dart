@@ -20,7 +20,7 @@ import '../services/url_resolver.dart';
 
 /// Page « Caisses de retraite principales » — référentiel partagé.
 ///
-/// Source : table NocoDB `caisses_de_retraite` (15 entrées) exposée
+/// Source : table NocoDB `caisses_de_retraite` exposée
 /// par `GET /api/retirement-funds-principal`. Le serveur set un
 /// Cache-Control HTTP de 5 min fresh + 30 min stale-while-revalidate
 /// pour réduire la pression sur le Fast Origin Transfer Vercel.
@@ -139,7 +139,7 @@ class _RetirementFundsPrincipalScreenState
 
   Future<void> _writeToCache(List<_PrincipalFund> funds) async {
     // Garde-fou (demande user 2026-05-15) : la table NocoDB des caisses
-    // principales est un référentiel quasi-statique (13 entrées). Une
+    // principales est un référentiel quasi-statique. Une
     // réponse vide n'est JAMAIS un état légitime — c'est forcément un
     // serveur en train de redémarrer, un token expiré ou un fetch foireux.
     // Refuser d'écraser le cache par du vide évite qu'une seule réponse

@@ -1,4 +1,4 @@
-// Catalog des caisses de retraite principales (15 entrées NocoDB).
+// Catalog des caisses de retraite principales du référentiel NocoDB.
 //
 // Chaque entrée mappe un nom NocoDB normalisé (lowercase + espaces) vers :
 //  • `logoUrl` : chemin statique servi par express (public/ ou dist/)
@@ -18,8 +18,22 @@
 // composition typographique d'origine (.svg dans le même dossier).
 
 export const PRINCIPAL_FUNDS_CATALOG = {
+  'carsat': {
+    displayName: 'CARSAT',
+    logoUrl: '/retirement-logos/principal/carsat.jpg',
+    primary: '#002395',
+    secondary: '#6C8CC0',
+  },
+  'cnav (assurance retraite)': {
+    displayName: 'CNAV',
+    logoUrl: '/retirement-logos/principal/cnav.png',
+    primary: '#0055A4',
+    secondary: '#003781',
+  },
+  // Ancien libellé conservé comme alias pour les caches locaux qui
+  // n'ont pas encore reçu le nouveau référentiel NocoDB.
   'cnav (assurance retraite / carsat)': {
-    displayName: 'CNAV / CARSAT',
+    displayName: 'CNAV',
     logoUrl: '/retirement-logos/principal/cnav.png',
     primary: '#0055A4',
     secondary: '#003781',
@@ -119,7 +133,7 @@ export const getPrincipalFundBranding = (name) => {
   if (!raw) return null;
   if (PRINCIPAL_FUNDS_CATALOG[raw]) return PRINCIPAL_FUNDS_CATALOG[raw];
   // Essai avec la partie avant la première parenthèse (ex. « CNAV »
-  // depuis « CNAV (Assurance retraite / CARSAT) »).
+  // depuis « CNAV (Assurance retraite) »).
   const short = raw.split('(')[0].trim();
   if (short && PRINCIPAL_FUNDS_CATALOG[short]) return PRINCIPAL_FUNDS_CATALOG[short];
   return null;
