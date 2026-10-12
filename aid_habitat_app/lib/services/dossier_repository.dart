@@ -3600,149 +3600,164 @@ class DossierRepository {
     bool forceSync = false,
   }) async {
     final db = await _database.database;
+    await db.transaction(
+      (txn) => saveVisitRecommendationsInTransaction(
+        txn,
+        dossierId,
+        items,
+        forceSync: forceSync,
+      ),
+    );
+    SyncEngine().notify();
+  }
+
+  /// Shared atomic write path for report edits and library propagation.
+  Future<void> saveVisitRecommendationsInTransaction(
+    Transaction txn,
+    String dossierId,
+    List<VisitRecommendationItem> items, {
+    bool forceSync = false,
+  }) async {
     final now = DateTime.now().toIso8601String();
-    await db.transaction((txn) async {
-      final existing = await txn.query(
+    final existing = await txn.query(
+      'visit_recommendations',
+      where: 'dossier_local_id = ?',
+      whereArgs: [dossierId],
+      limit: 1,
+    );
+    // EN LOCAL : on persiste TOUS les items (y compris ceux sans fiche
+    // wiki liée) → une préconisation "vide" en cours de saisie n'est pas
+    // perdue si l'app redémarre avant que l'utilisateur ait choisi
+    // l'item bibliothèque.
+    final itemsJson = items.map((e) => e.toJson()).toList();
+    final newItemsJsonString = jsonEncode(itemsJson);
+
+    // Optimisation 2026-05-13 : diff avec la liste existante. Si le
+    // JSON sérialisé est strictement identique à ce qui est en SQLite,
+    // c'est un no-op (pas de save SQLite, pas de push serveur). Cas
+    // typique : `recommendations_tab._save()` se déclenche au save
+    // debounce après n'importe quel rebuild même quand rien n'a
+    // vraiment changé (ex. focus/blur sur un champ texte).
+    if (existing.isNotEmpty) {
+      final existingItemsJson = existing.first['items_json'] as String?;
+      if (!forceSync && existingItemsJson == newItemsJsonString) {
+        return; // rien changé → no-op total
+      }
+    }
+
+    final data = <String, dynamic>{
+      'dossier_local_id': dossierId,
+      'items_json': newItemsJsonString,
+      'updated_at': now,
+      'sync_state': SyncState.pendingSync.name,
+    };
+
+    final opId = 'visitrec_update_$dossierId';
+    final row = existing.isEmpty ? null : existing.first;
+    final queuedPublications = await txn.query(
+      'sync_operations',
+      columns: const ['id'],
+      where: 'id = ? AND status IN (?, ?, ?, ?)',
+      whereArgs: [
+        opId,
+        SyncOperationStatus.pending.name,
+        SyncOperationStatus.running.name,
+        SyncOperationStatus.failed.name,
+        'conflict',
+      ],
+      limit: 1,
+    );
+    // Keep observed linked items in the reference even if the current
+    // library cache no longer contains them. Drafts were never published.
+    final previousLinkedItems = row?['items_json'] == null
+        ? <dynamic>[]
+        : (jsonDecode(row!['items_json'] as String) as List)
+              .where(
+                (item) =>
+                    (item['wikiItemId'] as String? ?? '').trim().isNotEmpty,
+              )
+              .toList();
+    final plan = planVisitRecommendationsPublication(
+      items: itemsJson,
+      hadPublishedItems: previousLinkedItems.isNotEmpty,
+      hasPendingPublication: queuedPublications.isNotEmpty,
+      remoteSnapshotExists: row?['remote_snapshot_exists'] == 1,
+      remoteRevision: row?['remote_revision'] as String?,
+      writeId: newSyncWriteId(),
+    );
+    if (existing.isEmpty) {
+      data['local_id'] = 'rec_${dossierId}_${_uuid()}';
+      await txn.insert('visit_recommendations', data);
+    } else {
+      await txn.update(
         'visit_recommendations',
+        data,
         where: 'dossier_local_id = ?',
         whereArgs: [dossierId],
-        limit: 1,
       );
-      // EN LOCAL : on persiste TOUS les items (y compris ceux sans fiche
-      // wiki liée) → une préconisation "vide" en cours de saisie n'est pas
-      // perdue si l'app redémarre avant que l'utilisateur ait choisi
-      // l'item bibliothèque.
-      final itemsJson = items.map((e) => e.toJson()).toList();
-      final newItemsJsonString = jsonEncode(itemsJson);
+    }
 
-      // Optimisation 2026-05-13 : diff avec la liste existante. Si le
-      // JSON sérialisé est strictement identique à ce qui est en SQLite,
-      // c'est un no-op (pas de save SQLite, pas de push serveur). Cas
-      // typique : `recommendations_tab._save()` se déclenche au save
-      // debounce après n'importe quel rebuild même quand rien n'a
-      // vraiment changé (ex. focus/blur sur un champ texte).
-      if (existing.isNotEmpty) {
-        final existingItemsJson = existing.first['items_json'] as String?;
-        if (!forceSync && existingItemsJson == newItemsJsonString) {
-          return; // rien changé → no-op total
-        }
-      }
-
-      final data = <String, dynamic>{
-        'dossier_local_id': dossierId,
-        'items_json': newItemsJsonString,
-        'updated_at': now,
-        'sync_state': SyncState.pendingSync.name,
-      };
-
-      final opId = 'visitrec_update_$dossierId';
-      final row = existing.isEmpty ? null : existing.first;
-      final queuedPublications = await txn.query(
+    if (plan.shouldEnqueue) {
+      // Keep the established conflict/reference payload for review screens,
+      // while adding the atomic publication envelope consumed by the API.
+      await _enqueueChildUpdate(
+        txn,
+        operationId: opId,
+        entityType: 'visit_recommendations',
+        dossierId: dossierId,
+        updates: {'items': plan.publishedItems},
+        baseValues: {
+          if (row?['items_json'] != null) 'items': previousLinkedItems,
+        },
+        existingRow: row,
+        rootFields: const ['items'],
+        now: now,
+      );
+      final queued = await txn.query(
         'sync_operations',
-        columns: const ['id'],
-        where: 'id = ? AND status IN (?, ?, ?, ?)',
-        whereArgs: [
-          opId,
-          SyncOperationStatus.pending.name,
-          SyncOperationStatus.running.name,
-          SyncOperationStatus.failed.name,
-          'conflict',
-        ],
+        columns: const ['payload_json'],
+        where: 'id = ?',
+        whereArgs: [opId],
         limit: 1,
       );
-      // Keep observed linked items in the reference even if the current
-      // library cache no longer contains them. Drafts were never published.
-      final previousLinkedItems = row?['items_json'] == null
-          ? <dynamic>[]
-          : (jsonDecode(row!['items_json'] as String) as List)
-                .where(
-                  (item) =>
-                      (item['wikiItemId'] as String? ?? '').trim().isNotEmpty,
-                )
-                .toList();
-      final plan = planVisitRecommendationsPublication(
-        items: itemsJson,
-        hadPublishedItems: previousLinkedItems.isNotEmpty,
-        hasPendingPublication: queuedPublications.isNotEmpty,
-        remoteSnapshotExists: row?['remote_snapshot_exists'] == 1,
-        remoteRevision: row?['remote_revision'] as String?,
-        writeId: newSyncWriteId(),
+      if (queued.length != 1) {
+        throw StateError('Publication des préconisations introuvable');
+      }
+      final payload =
+          jsonDecode(
+                await OfflineVault.instance.openString(
+                  queued.single['payload_json'] as String,
+                ),
+              )
+              as Map<String, dynamic>;
+      final guardValue = payload['concurrency'] ?? payload['localReference'];
+      final guard = (guardValue as Map?)?.cast<String, dynamic>();
+      final queuedWriteId = guard?['writeId']?.toString();
+      if (queuedWriteId == null || queuedWriteId.isEmpty) {
+        throw StateError('Identifiant de publication manquant');
+      }
+      payload['envelope'] = <String, dynamic>{
+        ...plan.envelope!,
+        'writeId': queuedWriteId,
+      };
+      await txn.update(
+        'sync_operations',
+        {
+          'payload_json': await OfflineVault.instance.sealString(
+            jsonEncode(payload),
+          ),
+        },
+        where: 'id = ?',
+        whereArgs: [opId],
       );
-      if (existing.isEmpty) {
-        data['local_id'] = 'rec_${dossierId}_${_uuid()}';
-        await txn.insert('visit_recommendations', data);
-      } else {
-        await txn.update(
-          'visit_recommendations',
-          data,
-          where: 'dossier_local_id = ?',
-          whereArgs: [dossierId],
-        );
-      }
-
-      if (plan.shouldEnqueue) {
-        // Keep the established conflict/reference payload for review screens,
-        // while adding the atomic publication envelope consumed by the API.
-        await _enqueueChildUpdate(
-          txn,
-          operationId: opId,
-          entityType: 'visit_recommendations',
-          dossierId: dossierId,
-          updates: {'items': plan.publishedItems},
-          baseValues: {
-            if (row?['items_json'] != null) 'items': previousLinkedItems,
-          },
-          existingRow: row,
-          rootFields: const ['items'],
-          now: now,
-        );
-        final queued = await txn.query(
-          'sync_operations',
-          columns: const ['payload_json'],
-          where: 'id = ?',
-          whereArgs: [opId],
-          limit: 1,
-        );
-        if (queued.length != 1) {
-          throw StateError('Publication des préconisations introuvable');
-        }
-        final payload =
-            jsonDecode(
-                  await OfflineVault.instance.openString(
-                    queued.single['payload_json'] as String,
-                  ),
-                )
-                as Map<String, dynamic>;
-        final guardValue = payload['concurrency'] ?? payload['localReference'];
-        final guard = (guardValue as Map?)?.cast<String, dynamic>();
-        final queuedWriteId = guard?['writeId']?.toString();
-        if (queuedWriteId == null || queuedWriteId.isEmpty) {
-          throw StateError('Identifiant de publication manquant');
-        }
-        payload['envelope'] = <String, dynamic>{
-          ...plan.envelope!,
-          'writeId': queuedWriteId,
-        };
-        await txn.update(
-          'sync_operations',
-          {
-            'payload_json': await OfflineVault.instance.sealString(
-              jsonEncode(payload),
-            ),
-          },
-          where: 'id = ?',
-          whereArgs: [opId],
-        );
-      } else if (row?['sync_state'] == SyncState.conflict.name) {
-        await txn.update(
-          'visit_recommendations',
-          {'sync_state': SyncState.conflict.name},
-          where: 'dossier_local_id = ?',
-          whereArgs: [dossierId],
-        );
-      }
-    });
-    SyncEngine().notify();
+    } else if (row?['sync_state'] == SyncState.conflict.name) {
+      await txn.update(
+        'visit_recommendations',
+        {'sync_state': SyncState.conflict.name},
+        where: 'dossier_local_id = ?',
+        whereArgs: [dossierId],
+      );
+    }
   }
 
   /// Met en file d'attente la génération du rapport PDF pour [dossierId].

@@ -4818,7 +4818,8 @@ const PreconisationsForm: React.FC<{
                                             placeholder="Texte libre pour cette préconisation..."
                                                 value={item.note || ''}
                                                 onChange={(value) => onUpdate(item.id, { note: value })}
-                                                rows={6}
+                                                rows={2}
+                                                autoGrow
                                             />
                                         </div>
 
@@ -5358,10 +5359,23 @@ const Input: React.FC<{
     </div>
 );
 
-const TextArea: React.FC<{ placeholder?: string, value: string, onChange: (v: string) => void, rows?: number }> = ({ placeholder, value, onChange, rows = 4 }) => (
-    <textarea placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)} rows={rows}
-        className={`${uiFieldClass} resize-none`} />
-);
+const TextArea: React.FC<{ placeholder?: string, value: string, onChange: (v: string) => void, rows?: number, autoGrow?: boolean }> = ({ placeholder, value, onChange, rows = 4, autoGrow = false }) => {
+    const ref = useRef<HTMLTextAreaElement>(null);
+    useEffect(() => {
+        const element = ref.current;
+        if (!autoGrow || !element) return;
+        const resize = () => {
+            element.style.height = 'auto';
+            element.style.height = `${element.scrollHeight + element.offsetHeight - element.clientHeight}px`;
+        };
+        resize();
+        const observer = new ResizeObserver(resize);
+        observer.observe(element.parentElement || element);
+        return () => observer.disconnect();
+    }, [value, autoGrow]);
+    return <textarea ref={ref} placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)} rows={rows}
+        className={`${uiFieldClass} resize-none ${autoGrow ? 'overflow-hidden' : ''}`} />;
+};
 
 const Checkbox: React.FC<{ label: string, checked: boolean, onChange: (v: boolean) => void }> = ({ label, checked, onChange }) => (
     <button

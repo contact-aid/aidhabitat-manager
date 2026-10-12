@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/types.dart';
 import 'local_database.dart';
+import 'dossier_repository.dart';
 import 'media_cache_service.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
@@ -413,117 +414,80 @@ class WikiRepository {
     required String now,
   }) async {
     final db = await _database.database;
-    final rows = await db.query('visit_recommendations');
-    if (rows.isEmpty) return;
-
-    final updatedTitle = updatedItem.title.trim();
-    final previousTitleTrimmed = previousTitle.trim();
-    final updatedDescription = _joinedDescriptions(updatedItem.description);
-    final previousDescriptionOptions = _descriptionSyncOptions(
-      previousDescription,
-    );
-    final updatedTags = updatedItem.tags;
-    final updatedTag = updatedTags.isNotEmpty
-        ? updatedTags.first
-        : updatedItem.category;
-
-    var changedAny = false;
-    final rowUpdates = <_VisitRecommendationRowUpdate>[];
-
-    for (final row in rows) {
-      final dossierId = (row['dossier_local_id'] as String? ?? '').trim();
-      final rawItemsJson = row['items_json'] as String? ?? '[]';
-      if (dossierId.isEmpty) continue;
-
-      final decoded = jsonDecode(rawItemsJson);
-      if (decoded is! List) continue;
-
-      var changedRow = false;
-      final nextItems = decoded
-          .map((entry) {
-            if (entry is! Map<String, dynamic>) return entry;
-            final item = VisitRecommendationItem.fromJson(entry);
-            if (item.wikiItemId.trim() != updatedItem.id.trim()) {
-              return item.toJson();
-            }
-
-            final currentCustomTitle = item.customTitle.trim();
-            final shouldSyncTitle =
-                currentCustomTitle.isEmpty ||
-                currentCustomTitle == previousTitleTrimmed ||
-                currentCustomTitle == item.wikiTitle.trim();
-            final nextCustomTitle = shouldSyncTitle
-                ? updatedTitle
-                : item.customTitle;
-            final nextNote = _syncedRecommendationNote(
-              currentNote: item.note,
-              previousOptions: previousDescriptionOptions,
-              updatedDescription: updatedDescription,
-            );
-            final nextItem = item.copyWith(
-              wikiTitle: updatedTitle,
-              wikiImageUrl: updatedItem.imageUrl,
-              wikiTag: updatedTag,
-              wikiDescription: updatedDescription,
-              customTitle: nextCustomTitle,
-              note: nextNote,
-              updatedAt: now,
-            );
-
-            final nextJson = nextItem.toJson();
-            if (jsonEncode(nextJson) != jsonEncode(item.toJson())) {
-              changedRow = true;
-            }
-            return nextJson;
-          })
-          .toList(growable: false);
-
-      if (!changedRow) continue;
-      changedAny = true;
-      rowUpdates.add(
-        _VisitRecommendationRowUpdate(
-          dossierId: dossierId,
-          itemsJson: jsonEncode(nextItems),
-          syncItems: nextItems
-              .whereType<Map<String, dynamic>>()
-              .where((item) => (item['wikiItemId'] as String? ?? '').isNotEmpty)
-              .toList(growable: false),
-        ),
-      );
-    }
-
-    if (!changedAny || rowUpdates.isEmpty) return;
-
     await db.transaction((txn) async {
-      for (final update in rowUpdates) {
-        await txn.update(
-          'visit_recommendations',
-          {
-            'items_json': update.itemsJson,
-            'updated_at': now,
-            'sync_state': SyncState.pendingSync.name,
-          },
-          where: 'dossier_local_id = ?',
-          whereArgs: [update.dossierId],
-        );
+      final rows = await txn.query('visit_recommendations');
+      if (rows.isEmpty) return;
 
-        await txn.insert('sync_operations', {
-          'id': 'visitrec_update_${update.dossierId}',
-          'entity_type': 'visit_recommendations',
-          'entity_local_id': update.dossierId,
-          'operation_type': 'update',
-          'payload_json': await OfflineVault.instance.sealString(
-            jsonEncode({
-              'dossierId': update.dossierId,
-              'items': update.syncItems,
-            }),
-          ),
-          'status': SyncOperationStatus.pending.name,
-          'attempt_count': 0,
-          'last_error': null,
-          'created_at': now,
-          'updated_at': now,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      final updatedTitle = updatedItem.title.trim();
+      final previousTitleTrimmed = previousTitle.trim();
+      final updatedDescription = _joinedDescriptions(updatedItem.description);
+      final previousDescriptionOptions = _descriptionSyncOptions(
+        previousDescription,
+      );
+      final updatedTags = updatedItem.tags;
+      final updatedTag = updatedTags.isNotEmpty
+          ? updatedTags.first
+          : updatedItem.category;
+
+      for (final row in rows) {
+        final dossierId = (row['dossier_local_id'] as String? ?? '').trim();
+        final rawItemsJson = row['items_json'] as String? ?? '[]';
+        if (dossierId.isEmpty) continue;
+
+        final decoded = jsonDecode(rawItemsJson);
+        if (decoded is! List) continue;
+
+        var changedRow = false;
+        final nextItems = decoded
+            .map((entry) {
+              if (entry is! Map<String, dynamic>) return entry;
+              final item = VisitRecommendationItem.fromJson(entry);
+              if (item.wikiItemId.trim() != updatedItem.id.trim()) {
+                return item.toJson();
+              }
+
+              final currentCustomTitle = item.customTitle.trim();
+              final shouldSyncTitle =
+                  currentCustomTitle.isEmpty ||
+                  currentCustomTitle == previousTitleTrimmed ||
+                  currentCustomTitle == item.wikiTitle.trim();
+              final nextCustomTitle = shouldSyncTitle
+                  ? updatedTitle
+                  : item.customTitle;
+              final nextNote = _syncedRecommendationNote(
+                currentNote: item.note,
+                previousOptions: previousDescriptionOptions,
+                updatedDescription: updatedDescription,
+              );
+              final nextItem = item.copyWith(
+                wikiTitle: updatedTitle,
+                wikiImageUrl: updatedItem.imageUrl,
+                wikiTag: updatedTag,
+                wikiDescription: updatedDescription,
+                customTitle: nextCustomTitle,
+                note: nextNote,
+                updatedAt: now,
+              );
+
+              final nextJson = nextItem.toJson();
+              if (jsonEncode(nextJson) != jsonEncode(item.toJson())) {
+                changedRow = true;
+              }
+              return nextJson;
+            })
+            .toList(growable: false);
+
+        if (!changedRow) continue;
+        await DossierRepository(
+          database: _database,
+        ).saveVisitRecommendationsInTransaction(
+          txn,
+          dossierId,
+          nextItems
+              .whereType<Map<String, dynamic>>()
+              .map(VisitRecommendationItem.fromJson)
+              .toList(),
+        );
       }
     });
   }
@@ -593,18 +557,6 @@ class WikiRepository {
       ),
     );
   }
-}
-
-class _VisitRecommendationRowUpdate {
-  const _VisitRecommendationRowUpdate({
-    required this.dossierId,
-    required this.itemsJson,
-    required this.syncItems,
-  });
-
-  final String dossierId;
-  final String itemsJson;
-  final List<Map<String, dynamic>> syncItems;
 }
 
 List<String> _descriptionsFromStored(String raw) {
