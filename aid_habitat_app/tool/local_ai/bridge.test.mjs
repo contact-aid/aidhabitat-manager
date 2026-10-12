@@ -28,3 +28,52 @@ test('editing pauses reuse the loaded worker while expiry and page exit release 
  await window.aidHabitatLocalAiRewrite('Dernier texte fictif.','professional');assert.equal(created,2);
  events.pagehide();assert.equal(terminated,2);
 });
+
+function warmHarness({installed=true,delayRegistration=false}={}) {
+ const requests=[];let completeWarm,completeRegistration,registrationStarted;
+ const registrationReady = new Promise(resolve=>{registrationStarted=resolve;});
+ const window={isSecureContext:true,addEventListener(){}};
+ class Worker {
+  postMessage({id,method}) {
+   requests.push(method);
+   const complete=()=>this.onmessage({data:{id,result:method==='rewrite'?'Proposition fictive.':{supported:true,installed:true,ready:false}}});
+   if(method==='warmup')completeWarm=complete;else queueMicrotask(complete);
+  }
+  terminate(){}
+ }
+ vm.runInNewContext(source,{window,Worker,URL,Promise,Error,JSON,document:{baseURI:'https://app.example/'},
+  navigator:{gpu:{},serviceWorker:{getRegistration:()=>{registrationStarted();return delayRegistration?new Promise(resolve=>{completeRegistration=()=>resolve(null);}):Promise.resolve(null);}}},
+  localStorage:{getItem:()=>installed?'complete':null,removeItem(){}},setTimeout,clearTimeout});
+ return {window,requests,registrationReady,completeRegistration:()=>completeRegistration(),completeWarm:()=>completeWarm()};
+}
+test('concurrent editor statuses share one cache check and one background load',async()=>{
+ const h=warmHarness();
+ try {
+  await Promise.all([h.window.aidHabitatLocalAiStatus(),h.window.aidHabitatLocalAiStatus()]);
+  assert.deepEqual(h.requests,['status','warmup']);
+  const result=h.window.aidHabitatLocalAiRewrite('Note fictive.','professional');
+  await Promise.resolve();assert.deepEqual(h.requests,['status','warmup']);
+  h.completeWarm();assert.equal(await result,'Proposition fictive.');
+  assert.deepEqual(h.requests,['status','warmup','rewrite']);
+ } finally {h.window.aidHabitatLocalAiCancel();}
+});
+test('uninstalled models are never automatically warmed',async()=>{
+ const h=warmHarness({installed:false});
+ try {await h.window.aidHabitatLocalAiStatus();assert.deepEqual(h.requests,['status']);}
+ finally {h.window.aidHabitatLocalAiCancel();}
+});
+test('cancelling a click during background load cannot restart generation',async()=>{
+ const h=warmHarness();await h.window.aidHabitatLocalAiStatus();
+ const result=h.window.aidHabitatLocalAiRewrite('Note fictive.','professional');
+ h.window.aidHabitatLocalAiCancel();
+ await assert.rejects(result,/annulée/);
+ assert.deepEqual(h.requests,['status','warmup']);
+});
+
+test('a cancelled status waiting for registration cannot start a new background worker',async()=>{
+ const h=warmHarness({delayRegistration:true});
+ const status=h.window.aidHabitatLocalAiStatus();
+ await h.registrationReady;
+ h.window.aidHabitatLocalAiCancel();h.completeRegistration();await status;
+ assert.deepEqual(h.requests,['status']);
+});
