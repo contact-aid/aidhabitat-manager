@@ -19,7 +19,11 @@
     let timer;
     return Promise.race([promise, new Promise((_, reject) => {
       timer = setTimeout(() => { const error = new Error(messages[code]); error.setupCode = code; reject(error); }, ms);
-    })]).finally(() => clearTimeout(timer));
+    })]).catch(error => {
+      const failure = error instanceof Error ? error : new Error(messages[code]);
+      if (!failure.setupCode) failure.setupCode = code;
+      throw failure;
+    }).finally(() => clearTimeout(timer));
   }
   window.aidHabitatLocalAiPhase = () => phase;
   window.aidHabitatLocalAiLastError = () => lastError;

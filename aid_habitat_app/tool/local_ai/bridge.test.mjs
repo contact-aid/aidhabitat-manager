@@ -1,10 +1,10 @@
 import test from 'node:test';import assert from 'node:assert/strict';import vm from 'node:vm';import {readFile} from 'node:fs/promises';
 const source=await readFile(new URL('../../web/local-ai/bridge.js',import.meta.url),'utf8');
-function harness({persistStalls=false,estimateStalls=false,unsupported=false,offlineStalls=false}={}){
+function harness({persistStalls=false,estimateStalls=false,unsupported=false,offlineStalls=false,offlineFails=false}={}){
  const requests=[],storage=new Map([['patient-vault','unchanged']]);
  class Worker{postMessage({id,method}){requests.push(method);queueMicrotask(()=>this.onmessage({data:{id,result:{supported:!unsupported,installed:method==='prepare',ready:method==='prepare'}}}));}terminate(){}}
  const window={isSecureContext:true,addEventListener(){}};
- const navigator={gpu:{},storage:{persist:()=>persistStalls?new Promise(()=>{}):Promise.resolve(true),estimate:()=>estimateStalls?new Promise(()=>{}):Promise.resolve({quota:2e9,usage:0})},serviceWorker:{getRegistration:async()=>null,register:()=>offlineStalls?new Promise(()=>{}):Promise.resolve({update:async()=>{},installing:null,waiting:null})}};
+ const navigator={gpu:{},storage:{persist:()=>persistStalls?new Promise(()=>{}):Promise.resolve(true),estimate:()=>estimateStalls?new Promise(()=>{}):Promise.resolve({quota:2e9,usage:0})},serviceWorker:{getRegistration:async()=>null,register:()=>offlineFails?Promise.reject(new Error('synthetic browser refusal')):offlineStalls?new Promise(()=>{}):Promise.resolve({update:async()=>{},installing:null,waiting:null})}};
  vm.runInNewContext(source,{window,navigator,document:{baseURI:'https://app.example/'},Worker,URL,Promise,Error,JSON,localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setTimeout:(fn,ms)=>setTimeout(fn,[10000,30000].includes(ms)?5:ms),clearTimeout});
  return {window,requests,storage};
 }
@@ -12,3 +12,5 @@ test('stalled persistent-storage permission cannot strand installation',async()=
 test('stalled quota check gives an actionable error before any model download',async()=>{const h=harness({estimateStalls:true});await assert.rejects(h.window.aidHabitatLocalAiPrepare(),/stockage/);assert.deepEqual(h.requests,['status']);assert.match(h.window.aidHabitatLocalAiLastError(),/stockage/);});
 test('incompatible graphics yields a visible reason',async()=>{const h=harness({unsupported:true});await assert.rejects(h.window.aidHabitatLocalAiPrepare(),/WebGPU/);assert.deepEqual(h.requests,['status']);});
 test('offline registration failure keeps vault intact and permits retry',async()=>{const h=harness({offlineStalls:true});await assert.rejects(h.window.aidHabitatLocalAiPrepare(),/hors ligne/);assert.equal(h.storage.get('patient-vault'),'unchanged');assert.equal(h.storage.has('appergo-local-ai-qwen3-v1'),false);});
+
+test('offline registration rejection shows the correct phase without clearing notes',async()=>{const h=harness({offlineFails:true});await assert.rejects(h.window.aidHabitatLocalAiPrepare(),/hors ligne/);assert.equal(h.storage.get('patient-vault'),'unchanged');});
