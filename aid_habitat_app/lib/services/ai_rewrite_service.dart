@@ -73,8 +73,10 @@ class AiRewriteService {
   Future<bool> needsPreparation() async {
     if (!kIsWeb) return false;
     final status = await web_ai.localAiStatus();
-    return status['installed'] != true || status['offlineReady'] != true;
+      return status['installed'] != true;
   }
+
+  String get preparationPhase => web_ai.localAiPhase();
 
   Future<void> prepareLocalModel() => web_ai.prepareLocalAi();
   double get preparationProgress => web_ai.localAiProgress();
