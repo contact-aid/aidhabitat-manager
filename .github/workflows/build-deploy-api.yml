@@ -88,6 +88,9 @@ jobs:
       - name: Verify synchronization contracts
         run: npm run test:sync-contract
 
+      - name: Install PDF test tools
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
       - name: Verify server regressions
         run: npm run test:server
 
