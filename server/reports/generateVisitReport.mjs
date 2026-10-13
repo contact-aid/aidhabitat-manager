@@ -3478,6 +3478,9 @@ export async function generateVisitReport({
   // PDF chargé avec ignoreEncryption — on charge proprement, le PDF
   // template n'est pas chiffré.
   const pdfDoc = await PDFDocument.load(templateBytes);
+  // Both supported templates end with the generic adapted-bathroom example.
+  // Keep its identity before adding any dossier-specific continuation pages.
+  const genericBathroomExamplePageRef = pdfDoc.getPages().at(-1).ref;
   const reportTextFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const form = pdfDoc.getForm();
   const isFlat2026Template = await ensureFlat2026CompatibilityFields(pdfDoc);
@@ -4264,7 +4267,8 @@ export async function generateVisitReport({
   // l'ordre décroissant, on s'assure de viser à chaque fois la même
   // page logique qu'au moment de la capture.
   // ---------------------------------------------------------------
-  const allRemovals = [...emptyPageIndices, ...emptyPlanPageRefs.map(ref => findCurrentPageIndexByRef(pdfDoc, ref)).filter(index => index >= 0)];
+  const genericBathroomExamplePageIndex = findCurrentPageIndexByRef(pdfDoc, genericBathroomExamplePageRef);
+  const allRemovals = [...(genericBathroomExamplePageIndex >= 0 ? [genericBathroomExamplePageIndex] : []), ...emptyPageIndices, ...emptyPlanPageRefs.map(ref => findCurrentPageIndexByRef(pdfDoc, ref)).filter(index => index >= 0)];
   stats.emptyPlanPagesRemoved = emptyPlanPageRefs.length;
   if (isFlat2026Template && flat2026ExtraStaticRecoPageRef) {
     // Le template 2026 contient une page préconisation statique

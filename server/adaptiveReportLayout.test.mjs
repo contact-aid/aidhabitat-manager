@@ -124,3 +124,14 @@ test('PDF preserves long health details in continuation without displaying unche
   assert(!text.includes('STALE_APA_DETAIL'));
   assert(!text.includes('STALE_MDPH_DETAIL'));
 });
+
+test('negative APA and MDPH remain explicit and the generic final example is removed in both profiles',async()=>{
+ for (const role of ['ERGOTHERAPIST','TECHNICIAN']) {
+  const {bytes}=await generateVisitReport({dossier:{patient:{apa:false,invalidity:false,occupants:[{apa:false,apaGir:'4',invalidity:false,invalidityTxt:'80%'}]}},ergoProfile:{role},fetchImageBytes:async()=>null});
+  const text=await extract(bytes);
+  assert.match(text,/Bénéficiaire APA : Non/);
+  assert.match(text,/Reconnaissance d.invalidité MDPH : Non/);
+  assert(!text.includes('Exemple d’une salle d’eau adaptée'));
+  assert(text.includes('Rappel des normes'));
+ }
+});
