@@ -172,8 +172,7 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
   y -= 20; options([['Propriétaire', 'Propriétaire'], ['Locataire', 'Locataire'], ['Usufruitier(e)', 'Usufruitiere']], view.occupationStatusNormalized);
   const statuses = reportOccupantStatuses(patient);
   function statusText(label, value) {
-    if (!value) return;
-    const full = `${label} : ${value}`;
+    const full = `${label} : ${value || 'Non'}`;
     const lines = wrapReportLines(full, regular, 9, 510);
     if (lines.length > 2) details.push(full);
     for (const [i, line] of (lines.length > 2 ? [lines[0], 'Voir suite'] : lines).entries()) {
