@@ -127,115 +127,347 @@ void main() {
   );
 
   for (final localWins in [true, false]) {
-    test('latest edit wins a patient conflict (local=$localWins)', () async {
+    test(
+      'local patient edit wins regardless of server clock (older=$localWins)',
+      () async {
+        final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+        addTearDown(db.close);
+        final local = LocalDatabase.forTesting(db);
+        await local.createSchemaForTesting();
+        final repository = DossierRepository(database: local);
+        final queue = SyncRepository.forTesting(database: local);
+        await repository.mergeRemoteDossierPayloads([
+          dossier(baseline, 'Original'),
+        ]);
+        await repository.updatePatient('patient-1', {'first_name': 'Local'});
+        final remoteTime = localWins
+            ? '2026-09-02T10:00:00.000Z'
+            : '2099-09-02T10:00:00.000Z';
+        var patches = 0;
+        final service = NocodbSyncService(
+          database: local,
+          syncRepository: queue,
+          apiClient: NocodbApiClient(
+            client: MockClient((request) async {
+              if (request.method == 'GET' &&
+                  request.url.path == '/api/dossiers') {
+                return http.Response(
+                  jsonEncode([dossier(remoteTime, 'Remote')]),
+                  200,
+                );
+              }
+              expect(request.method, 'PATCH');
+              patches++;
+              if (patches == 1) {
+                return http.Response(
+                  jsonEncode({
+                    'error': 'SYNC_FIELD_CONFLICT',
+                    'remoteUpdatedAt': remoteTime,
+                    'remoteData': {'firstName': 'Remote'},
+                  }),
+                  409,
+                );
+              }
+              return http.Response(
+                jsonEncode({
+                  'data': {'updatedAt': '2100-01-01T00:00:00.000Z'},
+                }),
+                200,
+              );
+            }),
+          ),
+        );
+
+        final first = await service.pushPendingChanges();
+        expect(first.conflictCount, 0);
+        final operation = (await db.query('sync_operations')).single;
+        expect(operation['status'], 'pending');
+        expect((await db.query('patients')).single['first_name'], 'Local');
+        final second = await service.pushPendingChanges();
+        expect(second.pushedOperations, 1);
+        expect(patches, 2);
+      },
+    );
+  }
+
+  test('modern local collection wins a verified field conflict', () async {
+    final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+    addTearDown(db.close);
+    final local = LocalDatabase.forTesting(db);
+    await local.createSchemaForTesting();
+    final repository = DossierRepository(database: local);
+    final initial = dossier(baseline, 'Original');
+    (initial['patient'] as Map)['dependenceTxt'] = 'Avant';
+    await repository.mergeRemoteDossierPayloads([initial]);
+    await repository.updatePatient('patient-1', {'dependence_txt': 'Canne'});
+    var patches = 0;
+    final service = NocodbSyncService(
+      database: local,
+      syncRepository: SyncRepository.forTesting(database: local),
+      apiClient: NocodbApiClient(
+        client: MockClient((request) async {
+          if (request.method == 'GET') {
+            final remote = dossier('2099-01-01T00:00:00Z', 'Original');
+            (remote['patient'] as Map)['dependenceTxt'] = 'Serveur';
+            return http.Response(jsonEncode([remote]), 200);
+          }
+          patches++;
+          final body = jsonDecode(request.body) as Map;
+          expect(body['dependenceTxt'], 'Canne');
+          expect(body['concurrency']['collectionContract'], 'collections-v2');
+          if (patches == 1) {
+            return http.Response(
+              jsonEncode({'error': 'SYNC_FIELD_CONFLICT'}),
+              409,
+            );
+          }
+          expect(body['expectedUpdatedAt'], '2099-01-01T00:00:00Z');
+          return http.Response(
+            jsonEncode({
+              'data': {'updatedAt': '2100-01-01T00:00:00Z'},
+            }),
+            200,
+          );
+        }),
+      ),
+    );
+    expect((await service.pushPendingChanges()).conflictCount, 0);
+    expect((await db.query('patients')).single['dependence_txt'], 'Canne');
+    expect((await service.pushPendingChanges()).pushedOperations, 1);
+    expect(patches, 2);
+  });
+
+  test(
+    'local recommendations win with newer server time and keep drafts',
+    () async {
       final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
       addTearDown(db.close);
       final local = LocalDatabase.forTesting(db);
       await local.createSchemaForTesting();
-      final repository = DossierRepository(database: local);
-      final queue = SyncRepository.forTesting(database: local);
-      await repository.mergeRemoteDossierPayloads([
-        dossier(baseline, 'Original'),
-      ]);
-      await repository.updatePatient('patient-1', {'first_name': 'Local'});
-      final remoteTime = localWins
-          ? '2026-09-02T10:00:00.000Z'
-          : '2099-09-02T10:00:00.000Z';
-      var patches = 0;
+      await DossierRepository(
+        database: local,
+      ).mergeRemoteDossierPayloads([dossier(baseline, 'Original')]);
+      const item = {'id': 'local', 'wikiItemId': 'wiki-1', 'note': 'Local'};
+      const draft = {'id': 'draft', 'wikiItemId': '', 'note': 'Brouillon'};
+      await db.insert('visit_recommendations', {
+        'local_id': 'reco',
+        'dossier_local_id': 'dossier-1',
+        'items_json': jsonEncode([item, draft]),
+        'sync_state': 'pendingSync',
+        'updated_at': baseline,
+      });
+      await db.insert('sync_operations', {
+        'id': 'recommendations',
+        'entity_type': 'visit_recommendations',
+        'entity_local_id': 'dossier-1',
+        'operation_type': 'update',
+        'status': 'pending',
+        'attempt_count': 0,
+        'created_at': baseline,
+        'updated_at': baseline,
+        'payload_json': jsonEncode({
+          'dossierId': 'dossier-1',
+          'envelope': {
+            'protocolVersion': 1,
+            'writeId': '11111111-1111-4111-8111-111111111111',
+            'expectedRevision': null,
+            'items': [item],
+          },
+        }),
+      });
+      const revision = '22222222-2222-4222-8222-222222222222';
+      var puts = 0;
       final service = NocodbSyncService(
         database: local,
-        syncRepository: queue,
+        syncRepository: SyncRepository.forTesting(database: local),
         apiClient: NocodbApiClient(
           client: MockClient((request) async {
-            if (request.method == 'GET' &&
-                request.url.path == '/api/dossiers') {
+            if (request.method == 'GET') {
               return http.Response(
-                jsonEncode([dossier(remoteTime, 'Remote')]),
+                jsonEncode({
+                  'data': {
+                    'snapshotExists': true,
+                    'revision': revision,
+                    'updatedAt': '2099-01-01T00:00:00Z',
+                    'items': [
+                      {
+                        'id': 'remote',
+                        'wikiItemId': 'wiki-1',
+                        'note': 'Serveur',
+                      },
+                    ],
+                  },
+                }),
                 200,
               );
             }
-            expect(request.method, 'PATCH');
-            patches++;
-            if (patches == 1) {
+            puts++;
+            final body = jsonDecode(request.body) as Map;
+            expect(body['items'], [item]);
+            if (puts == 1) {
               return http.Response(
                 jsonEncode({
-                  'error': 'SYNC_FIELD_CONFLICT',
-                  'remoteUpdatedAt': remoteTime,
-                  'remoteData': {'firstName': 'Remote'},
+                  'error': 'VISIT_RECOMMENDATIONS_REVISION_CONFLICT',
                 }),
                 409,
               );
             }
+            expect(body['expectedRevision'], revision);
             return http.Response(
               jsonEncode({
-                'data': {'updatedAt': '2100-01-01T00:00:00.000Z'},
+                'data': {'revision': revision},
               }),
               200,
             );
           }),
         ),
       );
-
       final first = await service.pushPendingChanges();
       expect(first.conflictCount, 0);
-      final operation = (await db.query('sync_operations')).single;
-      expect(operation['status'], localWins ? 'pending' : 'completed');
+      expect((await db.query('sync_operations')).single['status'], 'pending');
       expect(
-        (await db.query('patients')).single['first_name'],
-        localWins ? 'Local' : 'Remote',
+        jsonDecode(
+          (await db.query('visit_recommendations')).single['items_json']
+              as String,
+        ),
+        [item, draft],
       );
-      if (localWins) {
-        final second = await service.pushPendingChanges();
-        expect(second.pushedOperations, 1);
-        expect(patches, 2);
-      } else {
-        expect(patches, 1);
-      }
-    });
-  }
+      expect((await service.pushPendingChanges()).pushedOperations, 1);
+      expect(puts, 2);
+    },
+  );
 
-  for (final localWins in [true, false]) {
-    test('latest edit wins a visit note conflict (local=$localWins)', () async {
+  for (final scenario in [
+    'older',
+    'newer',
+    'equal',
+    'missing-time',
+    'legacy',
+    'legacy-deleted',
+    'retry-existing-deleted',
+    'edit-during-read',
+    'session-change',
+    'wrong-dossier',
+    'missing-revision',
+    'invalid-revision',
+    'remote-read-fails',
+    'retry-existing',
+    'server-races',
+    'missing-record',
+  ]) {
+    test('local note priority: $scenario', () async {
       final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
       addTearDown(db.close);
       final local = LocalDatabase.forTesting(db);
       await local.createSchemaForTesting();
+      await db.insert('app_session', {
+        'id': 1,
+        'user_local_id': 'owner',
+        'created_at': baseline,
+        'updated_at': baseline,
+      });
       final notes = NoteRepository(database: local);
       final queue = SyncRepository.forTesting(database: local);
       const patientId = 'nocodb-beneficiaire-123';
+      const tab = 'Sanitaires-Notes';
+      final deleted = scenario.endsWith('-deleted');
+      final localDrawing = deleted
+          ? '{"version":1,"deleted":true,"text":"","strokes":[]}'
+          : '{"local":true}';
       await notes.saveDrawingJson(
         patientId: patientId,
-        tabKey: 'Contexte de vie',
-        drawingJson: '{"local":true}',
+        tabKey: tab,
+        drawingJson: localDrawing,
         dossierId: 'dossier-1',
         mutationOrigin: SyncMutationOrigin.userEdit,
       );
       const revision = '11111111-1111-4111-8111-111111111111';
-      final remoteTime = localWins
-          ? '2026-09-02T10:00:00.000Z'
-          : '2099-09-02T10:00:00.000Z';
+      final localAt = (await db.query('note_pages')).single['updated_at'];
+      var writes = 0;
+      var failRecoveryRead = scenario.startsWith('retry-existing');
       final service = NocodbSyncService(
         database: local,
         syncRepository: queue,
         apiClient: NocodbApiClient(
           client: MockClient((request) async {
             if (request.method == 'GET') {
+              if (scenario == 'remote-read-fails' || failRecoveryRead) {
+                return http.Response('{}', 500);
+              }
+              if (scenario == 'edit-during-read') {
+                await notes.saveDrawingJson(
+                  patientId: patientId,
+                  tabKey: tab,
+                  drawingJson: '{"latest":true}',
+                  dossierId: 'dossier-1',
+                  mutationOrigin: SyncMutationOrigin.userEdit,
+                );
+              }
+              if (scenario == 'session-change') {
+                AppConfig.setAppSessionToken('other-token');
+              }
               return http.Response(
                 jsonEncode({
                   'success': true,
                   'data': {
                     'notePages': [
-                      {
-                        'patientId': patientId,
-                        'tabKey': 'Contexte de vie',
-                        'pageNumber': 0,
-                        'scopeType': 'visit_report',
-                        'scopeId': 'dossier-1',
-                        'drawingJson': '{"remote":true}',
-                        'revision': revision,
-                        'updatedAt': remoteTime,
-                      },
+                      if (scenario != 'missing-record' &&
+                          !(scenario.startsWith('legacy') &&
+                              request.url.queryParameters['scopeId'] ==
+                                  'dossier-1'))
+                        {
+                          'patientId': patientId,
+                          'dossierId': scenario == 'wrong-dossier'
+                              ? 'other'
+                              : 'dossier-1',
+                          'tabKey': tab,
+                          'pageNumber': 0,
+                          'scopeType': 'dossier_detail',
+                          'scopeId': scenario.startsWith('legacy')
+                              ? patientId
+                              : 'dossier-1',
+                          'drawingJson': '{"remote":true}',
+                          if (scenario != 'missing-revision')
+                            'revision': scenario == 'invalid-revision'
+                                ? 'invalid'
+                                : revision,
+                          if (scenario != 'missing-time')
+                            'updatedAt': scenario == 'equal'
+                                ? localAt
+                                : scenario == 'older'
+                                ? baseline
+                                : '2099-01-01T00:00:00Z',
+                        },
                     ],
+                  },
+                }),
+                200,
+              );
+            }
+            writes++;
+            final sent = jsonDecode(request.body) as Map;
+            expect(sent['drawingJson'], localDrawing);
+            if (writes > 1) {
+              expect(sent['expectedRevision'], revision);
+              expect(
+                sent['scopeId'],
+                scenario.startsWith('legacy') ? patientId : 'dossier-1',
+              );
+              if (scenario == 'server-races') {
+                return http.Response(
+                  jsonEncode({
+                    'error': 'NOTE_PAGE_REVISION_CONFLICT',
+                    'observed': {'revision': revision},
+                  }),
+                  409,
+                );
+              }
+              return http.Response(
+                jsonEncode({
+                  'data': {
+                    'notePage': {
+                      'revision': '22222222-2222-4222-8222-222222222222',
+                    },
                   },
                 }),
                 200,
@@ -251,22 +483,44 @@ void main() {
           }),
         ),
       );
-
       final result = await service.pushPendingChanges();
-      expect(result.conflictCount, 0);
+      final succeeds = const {
+        'older',
+        'newer',
+        'equal',
+        'missing-time',
+        'legacy',
+        'legacy-deleted',
+        'server-races',
+      }.contains(scenario);
+      expect(result.conflictCount, succeeds ? 0 : 1);
       final note = (await db.query('note_pages')).single;
-      if (localWins) {
+      expect(
+        await OfflineVault.instance.openString(note['drawing_json'] as String),
+        scenario == 'edit-during-read' ? '{"latest":true}' : localDrawing,
+      );
+      expect(writes, 1);
+      if (scenario.startsWith('retry-existing')) {
+        // The first cycle retains a conflict after a transient read failure.
+        failRecoveryRead = false;
+        final retry = await service.pushPendingChanges();
+        expect(retry.pushedOperations, 1);
+        expect(retry.conflictCount, 0);
+        expect(writes, 2);
+      }
+      if (succeeds) {
         expect((await db.query('sync_operations')).single['status'], 'pending');
         expect(note['sync_state'], 'pendingSync');
-      } else {
-        expect(await db.query('sync_operations'), isEmpty);
-        expect(note['sync_state'], 'synced');
-        expect(
-          await OfflineVault.instance.openString(
-            note['drawing_json'] as String,
-          ),
-          '{"remote":true}',
-        );
+        final second = await service.pushPendingChanges();
+        expect(second.pushedOperations, scenario == 'server-races' ? 0 : 1);
+        expect(second.conflictCount, 0);
+        expect(writes, 2);
+        if (scenario == 'server-races') {
+          expect(
+            (await db.query('sync_operations')).single['status'],
+            'pending',
+          );
+        }
       }
     });
   }

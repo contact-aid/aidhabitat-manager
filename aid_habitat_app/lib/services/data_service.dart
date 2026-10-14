@@ -935,7 +935,11 @@ class DataService {
     }
   }
 
+  String? _noteConflictResolutionFailure;
+  String? get noteConflictResolutionFailure => _noteConflictResolutionFailure;
+
   Future<bool> resolveNoteConflictKeepingLocal(String operationId) async {
+    _noteConflictResolutionFailure = null;
     final session = SyncSessionScope();
     try {
       return await session.run(() async {
@@ -944,7 +948,11 @@ class DataService {
           forExplicitResolution: true,
         );
         session.check();
-        if (details == null) return false;
+        if (details == null) {
+          _noteConflictResolutionFailure =
+              'La note a changé ou son auteur doit être vérifié. Rouvrez les détails.';
+          return false;
+        }
         final remote = await _nocodbApiClient.fetchNoteForExplicitLocalChoice(
           patientId: details['patientId'] as String,
           dossierId: details['dossierId']?.toString() ?? '',
@@ -955,7 +963,7 @@ class DataService {
           subTabKey: details['subTabKey']?.toString(),
         );
         session.check();
-        return _syncRepository.resolveNoteConflictKeepingLocal(
+        final resolved = await _syncRepository.resolveNoteConflictKeepingLocal(
           operationId,
           observedRevision: remote?['revision']?.toString(),
           verifiedRemoteMissing: remote == null,
@@ -963,8 +971,20 @@ class DataService {
           observedRemote: remote,
           checkSession: session.check,
         );
+        if (!resolved) {
+          _noteConflictResolutionFailure =
+              'La note ou son état a changé pendant la vérification. Réessayez.';
+        }
+        return resolved;
       });
-    } catch (_) {
+    } catch (error) {
+      _noteConflictResolutionFailure = !session.isCurrent
+          ? 'Le compte connecté a changé. Rouvrez les détails avec le compte auteur.'
+          : error is NotePageReadException
+          ? 'Lecture de la note sur le serveur impossible (HTTP ${error.statusCode}).'
+          : error is FormatException
+          ? 'L’adresse de la note sur le serveur ne peut pas être vérifiée.'
+          : 'Le serveur est momentanément inaccessible. Réessayez avec la connexion active.';
       return false;
     }
   }

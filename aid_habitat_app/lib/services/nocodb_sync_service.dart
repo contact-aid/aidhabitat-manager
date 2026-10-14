@@ -239,6 +239,27 @@ class NocodbSyncService {
       // empêcher la suite du cycle.
     }
 
+    // Resume note revision conflicts retained by an earlier app version or
+    // a failed remote read. Read metadata only; each note is guarded by its
+    // current owner and by a snapshot of both local content and queued write.
+    if (!ConnectivityService().isOffline && AppConfig.hasRemoteConfig) {
+      try {
+        final failures = await _syncRepository.fetchAllFailingOperations();
+        for (final failure in failures) {
+          SyncSessionScope.current?.check();
+          if (failure['entityType'] == 'note_page' &&
+              failure['status'] == 'conflict' &&
+              failure['id'] != null) {
+            await _resolveNoteConflictKeepingLocal(failure['id']!);
+          }
+        }
+      } catch (_) {
+        // Recovery is best effort; a failed metadata read must not prevent
+        // the normal pending queue from being processed.
+        SyncSessionScope.current?.check();
+      }
+    }
+
     final existingConflicts = await _syncRepository
         .countConflictingOperations();
     final operations = await _syncRepository.fetchRunnableOperations(
@@ -523,7 +544,7 @@ class NocodbSyncService {
           remoteData: e.remoteData,
         );
         if (retained) {
-          final resolved = await _resolveVisitConflictByLatestEdit(operation);
+          final resolved = await _resolveVisitConflictKeepingLocal(operation);
           if (resolved) {
             deferred += 1;
           } else {
@@ -609,19 +630,23 @@ class NocodbSyncService {
     );
   }
 
-  /// Rebase only a verified visit-report conflict. A device's edit timestamp
-  /// and the server's update timestamp decide which value wins; missing or
-  /// equal timestamps leave the conflict available for manual review.
-  Future<bool> _resolveVisitConflictByLatestEdit(
+  /// Pending local report edits take priority after a fresh, verified review.
+  /// Server timestamps describe persistence, not the freshness of an edit.
+  /// Keep conditional writes and snapshot guards when rebasing the queue.
+  Future<bool> _resolveVisitConflictKeepingLocal(
     SyncOperation operation,
   ) async {
     final queued = jsonDecode(operation.payloadJson) as Map<String, dynamic>;
     final updates = queued['updates'] is Map
         ? queued['updates'] as Map
         : queued;
-    if (hasCollectionUpdates(operation.entityType, updates)) return false;
+    if (hasCollectionUpdates(operation.entityType, updates) &&
+        (queued['concurrency'] as Map?)?['collectionContract'] !=
+            collectionMutationContract) {
+      return false;
+    }
     if (operation.entityType == 'note_page') {
-      return _resolveNoteConflictByLatestEdit(operation);
+      return _resolveNoteConflictKeepingLocal(operation.id);
     }
     if (operation.entityType == 'visit_recommendations') {
       try {
@@ -629,12 +654,20 @@ class NocodbSyncService {
         final snapshot = await _apiClient.fetchVisitRecommendationsSnapshot(
           remoteId,
         );
-        return DossierRepository(
-          database: _database,
-        ).resolveVisitRecommendationsByLatestEdit(
+        final repository = DossierRepository(database: _database);
+        final reviews = await repository.reviewVisitRecommendationsConflict(
           operation.entityLocalId,
           snapshot,
         );
+        final matching = reviews.where(
+          (review) => review.operationId == operation.id,
+        );
+        if (matching.length != 1) return false;
+        await repository.resolveReviewedConflict(
+          matching.single,
+          keepLocal: true,
+        );
+        return true;
       } catch (_) {
         return false;
       }
@@ -707,79 +740,43 @@ class NocodbSyncService {
       );
       if (matching.length != 1) return false;
       final review = matching.single;
-      final localRows = await db.query(
-        review.table,
-        columns: const ['updated_at'],
-        where: 'local_id = ?',
-        whereArgs: [review.localRowId],
-        limit: 1,
-      );
-      if (localRows.length != 1) return false;
-      final localAt = DateTime.tryParse(
-        localRows.single['updated_at']?.toString() ?? '',
-      );
-      final remoteAt = DateTime.tryParse(review.remoteUpdatedAt ?? '');
-      if (localAt == null ||
-          remoteAt == null ||
-          localAt.isAtSameMomentAs(remoteAt)) {
-        return false;
-      }
-      await repository.resolveReviewedConflict(
-        review,
-        keepLocal: localAt.isAfter(remoteAt),
-      );
+      await repository.resolveReviewedConflict(review, keepLocal: true);
       return true;
     } catch (_) {
-      // Retain the original conflict if the remote snapshot or local edit
-      // clock cannot be verified, including changes made during review.
+      // Preserve the conflict if identity or the reviewed snapshot changed.
       return false;
     }
   }
 
-  Future<bool> _resolveNoteConflictByLatestEdit(SyncOperation operation) async {
+  Future<bool> _resolveNoteConflictKeepingLocal(String operationId) async {
     try {
-      final details = await _syncRepository.noteConflictDetails(operation.id);
+      final session = SyncSessionScope.current;
+      final details = await _syncRepository.noteConflictDetails(
+        operationId,
+        forExplicitResolution: true,
+      );
+      session?.check();
       if (details == null) return false;
-      final patientId = details['patientId']?.toString() ?? '';
-      final tabKey = details['tabKey']?.toString() ?? '';
-      if (patientId.isEmpty || tabKey.isEmpty) return false;
-      final pageNumber = int.tryParse('${details['pageNumber'] ?? 0}');
-      if (pageNumber == null) return false;
-      final remote = await _apiClient.fetchNotePage(
-        patientId: patientId,
-        tabKey: tabKey,
-        pageNumber: pageNumber,
-        scopeType: details['scopeType']?.toString(),
-        scopeId: details['scopeId']?.toString(),
+      // Only revision conflicts represent competing content at a known key.
+      // Identity, missing records and malformed writes still need review.
+      if (details['errorCode'] != 'NOTE_PAGE_REVISION_CONFLICT') return false;
+      final remote = await _apiClient.fetchNoteForExplicitLocalChoice(
+        patientId: details['patientId'] as String,
+        dossierId: details['dossierId']?.toString() ?? '',
+        scopeType: details['scopeType'] as String,
+        scopeId: details['scopeId'] as String,
+        tabKey: details['tabKey'] as String,
+        pageNumber: int.tryParse('${details['pageNumber']}') ?? -1,
+        subTabKey: details['subTabKey']?.toString(),
       );
+      session?.check();
       if (remote == null) return false;
-      final db = await _database.database;
-      final rows = await db.query(
-        'note_pages',
-        columns: const ['updated_at'],
-        where: 'local_id = ?',
-        whereArgs: [operation.entityLocalId],
-        limit: 1,
-      );
-      if (rows.length != 1) return false;
-      final localAt = DateTime.tryParse(
-        rows.single['updated_at']?.toString() ?? '',
-      );
-      final remoteAt = DateTime.tryParse(remote['updatedAt']?.toString() ?? '');
-      if (localAt == null ||
-          remoteAt == null ||
-          localAt.isAtSameMomentAs(remoteAt)) {
-        return false;
-      }
-      if (localAt.isAfter(remoteAt)) {
-        return _syncRepository.resolveNoteConflictKeepingLocal(
-          operation.id,
-          revision: remote['revision']?.toString(),
-        );
-      }
-      return _syncRepository.resolveNoteConflictUsingServer(
-        operation.id,
-        remote,
+      return _syncRepository.resolveNoteConflictKeepingLocal(
+        operationId,
+        observedRevision: remote['revision']?.toString(),
+        explicitSnapshot: details,
+        observedRemote: remote,
+        checkSession: session?.check,
       );
     } catch (_) {
       return false;
