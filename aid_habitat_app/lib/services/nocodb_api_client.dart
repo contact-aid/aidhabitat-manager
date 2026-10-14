@@ -2031,7 +2031,7 @@ class NocodbApiClient {
       },
     );
     final response = await _client
-        .get(uri, headers: {..._headers, 'Cache-Control': 'no-cache'})
+        .get(uri, headers: _headers)
         .timeout(_defaultTimeout);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
