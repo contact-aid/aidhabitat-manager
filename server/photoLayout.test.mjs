@@ -44,11 +44,17 @@ test('real report renders all photos at the same height across pages', async () 
     return Buffer.from(UPNG.default.encode([rgba.buffer], w, h, 0));
   });
   const documents = Array.from({ length: 28 }, (_, i) => ({
-    id: `synthetic-photo-${i}`, title: `Photo ${i + 1}`,
-    tags: [['Visite - Logement', 'Visite - Accessibilité', 'Visite - Sanitaires'][Math.floor(i / 10)]],
+    id: `synthetic-photo-${i}`, title: `Photo ${i + 1} : description longue à placer sous la photo avec retour à la ligne`,
+    tags: [['Visite - Logement', 'Visite - Accessibilité', 'Visite - Sanitaires'][Math.floor(i / 10)], '__pdf_show_label'],
     categoryOrder: i, createdAt: '2026-01-01',
   }));
   const draws = [];
+  const captions = [];
+  const originalText = PDFPage.prototype.drawText;
+  PDFPage.prototype.drawText = function(text, options) {
+    if (text.startsWith('Photo ')) captions.push({text,options,page:this});
+    return originalText.call(this,text,options);
+  };
   const original = PDFPage.prototype.drawImage;
   PDFPage.prototype.drawImage = function (image, options) {
     if (dimensions.some(([w, h]) => image.width === w && image.height === h)) {
@@ -64,13 +70,20 @@ test('real report renders all photos at the same height across pages', async () 
       contexteNotes: [], recommendations: [],
       ergoProfile: { displayName: 'Ergo Test', email: 'ergo@example.test' },
       fetchImageBytes: async ({ id }) => ({
-        buffer: images[Number(id.split('-').at(-1)) % images.length], mimeType: 'image/png',
+        buffer: images[Number(id.split('-').at(-1)) < 3 ? 0 : Number(id.split('-').at(-1)) % images.length], mimeType: 'image/png',
       }),
     });
   } finally {
     PDFPage.prototype.drawImage = original;
+    PDFPage.prototype.drawText = originalText;
   }
   assert.equal(draws.length, documents.length);
+  assert.equal(draws.slice(0,3).filter(d=>d.page===draws[0].page && d.options.y===draws[0].options.y).length,3);
+  assert.equal(captions.length,documents.length);
+  for(let i=0;i<captions.length;i++) {
+    assert.equal(captions[i].page,draws[i].page);
+    assert(captions[i].options.y < draws[i].options.y);
+  }
   assert.ok(new Set(draws.map((d) => d.page)).size > 1);
   const rows = [];
   for (const draw of draws) {

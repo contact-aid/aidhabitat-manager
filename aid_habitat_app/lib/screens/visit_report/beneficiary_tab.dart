@@ -2211,6 +2211,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
           FormTextField(
             label: 'Personne de confiance',
             value: _trustedName,
+            maxLength: 100,
             onChanged: (v) {
               _trustedName = v;
               _markChanged();
