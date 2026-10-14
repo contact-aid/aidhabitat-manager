@@ -46,8 +46,10 @@ void main() {
         reads.map((r) => r.url.queryParameters['_syncRead']).toSet(),
         hasLength(2),
       );
+      // The deployed API allows Content-Type and X-App-Session in CORS.
+      // A Cache-Control request header would block browser reads entirely.
       expect(
-        reads.every((r) => r.headers['Cache-Control'] == 'no-cache'),
+        reads.every((r) => !r.headers.containsKey('Cache-Control')),
         isTrue,
       );
     },
