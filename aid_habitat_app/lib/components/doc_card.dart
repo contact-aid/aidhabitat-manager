@@ -228,9 +228,14 @@ class _DocCardState extends State<DocCard> {
   Widget build(BuildContext context) {
     final doc = widget.doc;
     final createdAt = DateTime.tryParse(doc.date)?.toLocal();
+    final isReport = doc.tags.any(
+      (tag) => tag.trim().toLowerCase() == 'rapport',
+    );
     final dateLabel = createdAt == null
         ? doc.date
-        : DateFormat('dd/MM/yyyy').format(createdAt);
+        : DateFormat(
+            isReport ? "dd/MM/yyyy 'à' HH:mm" : 'dd/MM/yyyy',
+          ).format(createdAt);
     final selMode = widget.selectionMode;
     final selected = widget.selected;
 
