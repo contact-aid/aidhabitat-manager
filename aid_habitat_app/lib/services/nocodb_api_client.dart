@@ -2025,19 +2025,40 @@ class NocodbApiClient {
   Future<List<Map<String, dynamic>>> fetchDocuments(String patientId) async {
     if (!AppConfig.hasRemoteConfig) return const [];
 
+    final uri = Uri.parse('$_baseUrl/api/documents/$patientId').replace(
+      queryParameters: {
+        '_syncRead': DateTime.now().microsecondsSinceEpoch.toString(),
+      },
+    );
     final response = await _client
-        .get(Uri.parse('$_baseUrl/api/documents/$patientId'), headers: _headers)
+        .get(uri, headers: {..._headers, 'Cache-Control': 'no-cache'})
         .timeout(_defaultTimeout);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Remote documents fetch failed (${response.statusCode})');
     }
 
-    final payload = jsonDecode(response.body) as Map<String, dynamic>;
-    final data = (payload['data'] as Map?)?.cast<String, dynamic>() ?? const {};
-    return ((data['documents'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((item) => item.cast<String, dynamic>())
+    final dynamic payload = jsonDecode(response.body);
+    final dynamic documents = payload is Map && payload['data'] is Map
+        ? payload['data']['documents']
+        : null;
+    if (payload is! Map ||
+        payload['success'] != true ||
+        documents is! List ||
+        documents.any(
+          (item) =>
+              item is! Map ||
+              item['id'] is! String ||
+              (item['id'] as String).trim().isEmpty ||
+              item['remotePath'] is! String ||
+              (item['remotePath'] as String).trim().isEmpty,
+        )) {
+      throw const FormatException('Incomplete remote documents response');
+    }
+    return documents
+        .map<Map<String, dynamic>>(
+          (item) => (item as Map).cast<String, dynamic>(),
+        )
         .toList();
   }
 

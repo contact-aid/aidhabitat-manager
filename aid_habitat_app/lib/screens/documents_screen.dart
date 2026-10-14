@@ -43,6 +43,8 @@ import '../services/document_file_naming.dart';
 import '../services/document_page_save.dart';
 import '../services/document_scanner_service.dart';
 import '../services/document_repository.dart';
+import '../services/document_refresh_scheduler.dart';
+import '../services/connectivity_service.dart';
 import '../services/media_cache_service.dart';
 import '../services/mandate_document_service.dart';
 import '../services/native_file_protection.dart';
@@ -159,7 +161,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   /// toute la zone. Géré par `FileDropZone.onHighlight`.
   bool _dragHighlight = false;
 
-  // _refreshTimer supprimé 2026-05-12 (refactor sync à la (re)connexion).
+  late final DocumentRefreshScheduler _remoteRefreshScheduler;
 
   String get _patientId => widget.dossier.patient.id;
 
@@ -167,6 +169,15 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _remoteRefreshScheduler = DocumentRefreshScheduler(
+      refresh: () async {
+        if (!mounted || ConnectivityService().isOffline) return;
+        final refreshed = await _dataService.refreshDocumentsFromRemote(
+          _patientId,
+        );
+        if (refreshed && mounted) await _reloadLocalDocuments();
+      },
+    )..start();
     _loadDocuments();
     _documentChangeSubscription = DocumentRepository.changes.listen((change) {
       if (!mounted) return;
@@ -181,16 +192,9 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     _syncEngineSubscription = SyncEngine().stateStream.listen(
       _handleSyncStateChanged,
     );
-    // Refactor 2026-05-12 : suppression du polling 1 s + de
-    // `enterActiveContext`. L'écran Documents charge sa grille à
-    // l'ouverture et la garde stable pendant toute la session sur
-    // l'écran. Les imports faits depuis l'autre device apparaîtront :
-    //  - au retour foreground (changement d'app puis retour)
-    //  - à la reconnexion réseau
-    //  - à la re-connexion utilisateur (logout/login)
-    //  - au pull-to-refresh explicite.
-    // Les actions locales (ajout, suppression, rotation, renommage...)
-    // relisent seulement SQLite pour rester instantanées.
+    // Incoming documents are read separately from the outgoing sync queue.
+    // Local actions still read SQLite immediately; polling leaves previews,
+    // selection and unsent edits intact and only runs on this visible screen.
   }
 
   void _handleSyncStateChanged(SyncEngineState state) {
@@ -219,7 +223,10 @@ class _DocumentsScreenState extends State<DocumentsScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Refresh au retour au premier plan (iOS: willEnterForeground / Android: onResume).
     if (state == AppLifecycleState.resumed && mounted) {
+      _remoteRefreshScheduler.start();
       _loadDocuments(silent: true);
+    } else {
+      _remoteRefreshScheduler.stop();
     }
   }
 
@@ -1975,6 +1982,7 @@ class _DocumentsScreenState extends State<DocumentsScreen>
 
   @override
   void dispose() {
+    _remoteRefreshScheduler.stop();
     WidgetsBinding.instance.removeObserver(this);
     _documentChangeSubscription?.cancel();
     _syncEngineSubscription?.cancel();
