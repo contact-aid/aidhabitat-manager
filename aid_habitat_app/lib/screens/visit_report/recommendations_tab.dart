@@ -1085,7 +1085,7 @@ class _InlineRecommendationFieldState
     final style = TextStyle(
       fontSize: widget.isTitle ? 16 : 14,
       fontWeight: widget.isTitle ? FontWeight.w700 : FontWeight.w400,
-      color: widget.isTitle ? const Color(0xFF2B323A) : const Color(0xFF5C6670),
+      color: widget.isTitle ? Colors.black : const Color(0xFF5C6670),
       height: 1.4,
     );
     return MouseRegion(
@@ -1105,7 +1105,7 @@ class _InlineRecommendationFieldState
           decoration: InputDecoration(
             isDense: true,
             filled: true,
-            fillColor: active
+            fillColor: active && !widget.isTitle
                 ? Colors.white.withValues(alpha: 0.55)
                 : Colors.transparent,
             contentPadding: const EdgeInsets.symmetric(

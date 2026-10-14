@@ -364,7 +364,9 @@ class _DocCardState extends State<DocCard> {
                             style: GoogleFonts.nunito(
                               fontWeight: FontWeight.w500,
                               fontSize: 16,
-                              color: Colors.black87,
+                              color: doc.type == 'image'
+                                  ? Colors.black
+                                  : Colors.black87,
                             ),
                           ),
                           const SizedBox(height: 2),
