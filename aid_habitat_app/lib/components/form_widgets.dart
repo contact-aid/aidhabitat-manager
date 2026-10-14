@@ -231,6 +231,7 @@ class FormTextField extends StatefulWidget {
   final bool readOnly;
   final TextInputType? keyboardType;
   final String? suffix;
+  final int? maxLength;
 
   /// Hauteur max en lignes. `null` = pas de limite (le champ grandit
   /// avec le contenu, toutes les lignes restent visibles). Refonte
@@ -275,6 +276,7 @@ class FormTextField extends StatefulWidget {
     this.readOnly = false,
     this.keyboardType,
     this.suffix,
+    this.maxLength,
     this.maxLines = 1,
     this.minLines,
     this.labelColor,
@@ -357,6 +359,21 @@ class _FormTextFieldState extends State<FormTextField> {
               readOnly: widget.readOnly,
               autofocus: widget.autofocus,
               keyboardType: widget.keyboardType,
+              maxLength: widget.maxLength,
+              maxLengthEnforcement: MaxLengthEnforcement.none,
+              inputFormatters: widget.maxLength == null
+                  ? null
+                  : [
+                      TextInputFormatter.withFunction((oldValue, newValue) {
+                        final limit = widget.maxLength!;
+                        if (newValue.text.characters.length <= limit ||
+                            newValue.text.characters.length <
+                                oldValue.text.characters.length) {
+                          return newValue;
+                        }
+                        return oldValue;
+                      }),
+                    ],
               maxLines: widget.maxLines,
               minLines: widget.minLines ?? (isMultiline ? 2 : 1),
               style: TextStyle(

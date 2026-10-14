@@ -1,4 +1,4 @@
-import { drawReportFrame, drawPaginatedReportText, drawBeneficiaryOccupants } from './adaptiveReportLayout.mjs';
+import { drawReportFrame, drawPaginatedReportText, drawBeneficiaryOccupants, drawTrustedPerson, wrapReportLines } from './adaptiveReportLayout.mjs';
 import { formatMobilityAidsForReport, printableMobilityAidsForReport, applyMobilityAidsToReport } from './mobilityAids.mjs';
 // Génère un rapport de visite PDF depuis le template
 // `server/templates/visitReport.template.pdf` avec les données du
@@ -17,7 +17,6 @@ import { formatMobilityAidsForReport, printableMobilityAidsForReport, applyMobil
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { appendSanitaryRoomsAppendix } from './sanitaryRoomsAppendix.mjs';
 import { uniformPhotoHeight } from './photoLayout.mjs';
 import { needsMorbihanEligibleWorks, insertMorbihanEligibleWorks } from './morbihanEligibleWorks.mjs';
 import { fileURLToPath } from 'node:url';
@@ -2390,7 +2389,7 @@ async function drawVisitPhotosWithFlow({
   const flowXEnd = Math.max(logXEnd, accXEnd, saniXEnd);
   const flowWidth = flowXEnd - flowXStart;
   const flowGap = Math.max(8, Math.min(accHGap, saniHGap, logHGap, 18));
-  const unitW = (flowWidth - flowGap * 3) / 4;
+  const unitW = (flowWidth - flowGap * 2) / 3;
   let rowH = Math.max(logH, accH, saniH);
 
   const buildRowsForCategory = async (
@@ -2424,10 +2423,10 @@ async function drawVisitPhotosWithFlow({
     };
 
     for (const item of resolved) {
-      if (units > 0 && units + item.units > 4) pushCurrent();
+      if (units > 0 && units + item.units > 3) pushCurrent();
       current.push(item);
       units += item.units;
-      if (units >= 4 || (!item.isLandscape && current.length >= 3)) {
+      if (units >= 3 || (!item.isLandscape && current.length >= 3)) {
         pushCurrent();
       }
     }
@@ -2496,8 +2495,11 @@ async function drawVisitPhotosWithFlow({
   rowH = uniformPhotoHeight(allRows.flatMap((row) => row.items.map((item) => ({
     width: item.units === 2 ? unitW * 2 + flowGap : unitW,
     image: item.pdfImage,
-  }))), rowH);
+  }))), rowH * 1.12);
 
+  const captionFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const captionLines = item => shouldShowPhotoLabel(Array.isArray(item.photo?.tags) ? item.photo.tags : [])
+    ? wrapReportLines(sanitizeForPdfFont(item.photo.title ?? ''), captionFont, 9, item.units === 2 ? unitW * 2 + flowGap : unitW) : [];
   let currentPage = page8;
   let cursorY = firstLogTopY;
   let bottomLimit = page8BottomLimit;
@@ -2505,11 +2507,12 @@ async function drawVisitPhotosWithFlow({
 
   for (let r = 0; r < allRows.length; r += 1) {
     const row = allRows[r];
+    const captionHeight = Math.max(0, ...row.items.map(item => captionLines(item).length)) * 11 + 6;
     const titleSpace = row.showTitle && row.isFirstOfCategory ? TITLE_HEIGHT : 0;
 
     // Pagination : la rangée + son titre tiennent-ils dans la zone ?
     let categoryInFrame = false;
-    if (cursorY - titleSpace - rowH < bottomLimit) {
+    if (cursorY - titleSpace - rowH - captionHeight < bottomLimit) {
       const insertAt = page8Index + 1 + bonusPagesInserted;
       currentPage = pdfDoc.insertPage(insertAt, [pageWidth, pageHeight]);
       drawReportFrame(currentPage, row.label === 'Sanitaires' ? 'Sanitaires' : 'Photos du logement', helveticaTitle, { bottom: 42.4, top: 793 });
@@ -2540,19 +2543,16 @@ async function drawVisitPhotosWithFlow({
         width,
         height: rowH,
       };
-      const imageRect = drawEmbeddedPhotoAtRect(
+      drawEmbeddedPhotoAtRect(
         pdfDoc, currentPage, rect, item.photo, item.pdfImage, stats,
-      ) || rect;
-      const tags = Array.isArray(item.photo?.tags) ? item.photo.tags : [];
-      if (shouldShowPhotoLabel(tags)) {
-        await drawPhotoLabelOverlayAtRect(
-          pdfDoc, currentPage, imageRect, item.photo.title,
-        );
+      );
+      for (const [line,value] of captionLines(item).entries()) {
+        currentPage.drawText(value,{x,y:cursorY-rowH-14-line*11,size:9,font:captionFont,color:rgb(.15,.15,.15)});
       }
       x += width + flowGap;
     }
 
-    cursorY -= rowH;
+    cursorY -= rowH + captionHeight;
     if (r + 1 < allRows.length) {
       cursorY -= computeVGap(row.type, allRows[r + 1].type);
     }
@@ -4322,11 +4322,13 @@ export async function generateVisitReport({
     await insertMorbihanEligibleWorks(numberedDoc, accessibilityNormsPageIndex);
     stats.morbihanWorksPageAdded = true;
   }
-  stats.sanitaryAppendixPages = await appendSanitaryRoomsAppendix({ pdfDoc: numberedDoc, sanitaires });
+  stats.sanitaryAppendixPages = 0;
   if (adaptiveIndices) {
     // Capture all page objects before inserting any continuation.
     const pages = Object.fromEntries(Object.entries(adaptiveIndices).map(([key, index]) => [key, numberedDoc.getPage(index)]));
-    const details = await drawBeneficiaryOccupants(numberedDoc, pages.beneficiary, dossier.patient, view.patient, { primaryMobilityAppendix: stats.mobilityAppendixPages > 0 });
+    const occupantDetails = await drawBeneficiaryOccupants(numberedDoc, pages.beneficiary, dossier.patient, view.patient, { primaryMobilityAppendix: stats.mobilityAppendixPages > 0 });
+    const trustedDetails = await drawTrustedPerson(numberedDoc, pages.beneficiary, dossier.patient);
+    const details = [occupantDetails, trustedDetails].filter(Boolean).join('\n\n');
     if (details) {
       const index = numberedDoc.getPages().findIndex(p => p.ref === pages.beneficiary.ref);
       const detailPage = numberedDoc.insertPage(index + 1, [pages.beneficiary.getWidth(), pages.beneficiary.getHeight()]);
