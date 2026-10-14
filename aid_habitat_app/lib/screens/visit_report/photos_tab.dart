@@ -12,7 +12,6 @@ import '../../components/brand_colors.dart';
 import '../../components/confirmation_dialog.dart';
 import '../../components/dashed_border_painter.dart';
 import '../../components/file_drop_zone.dart';
-import '../../components/form_widgets.dart';
 import '../../models/types.dart';
 import '../../models/visit_report_categories.dart';
 import '../../services/app_config.dart';
@@ -1014,12 +1013,12 @@ class _PhotosTabState extends State<PhotosTab>
             : 0.0;
         final totalRows = totalSlots == 0 ? 0 : ((totalSlots - 1) ~/ 3) + 1;
         final gridHeight =
-            safeTileWidth * totalRows + spacing * (totalRows - 1);
+            (safeTileWidth + 48) * totalRows + spacing * (totalRows - 1);
 
         Offset offsetFor(int index) {
           return Offset(
             (index % 3) * (safeTileWidth + spacing),
-            (index ~/ 3) * (safeTileWidth + spacing),
+            (index ~/ 3) * (safeTileWidth + 48 + spacing),
           );
         }
 
@@ -1040,10 +1039,13 @@ class _PhotosTabState extends State<PhotosTab>
                   left: offsetFor(i).dx,
                   top: offsetFor(i).dy,
                   width: safeTileWidth,
-                  height: safeTileWidth,
+                  height: safeTileWidth + 48,
                   child: i < photos.length
                       ? _buildOccupiedSlot(tag: tag, photos: photos, index: i)
-                      : _buildEmptySlot(tag: tag),
+                      : Padding(
+                          padding: const EdgeInsets.only(bottom: 48),
+                          child: _buildEmptySlot(tag: tag),
+                        ),
                 ),
             ],
           ),
@@ -1510,34 +1512,48 @@ class _PhotoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Les photos remplissent désormais directement leur carré :
-    // pas de cadre blanc/padding type polaroid autour de la preview.
-    //  - Aspect ratio 1:1 préservé pour matcher les cadres vides
-    //  - Highlight au drag : border mauve-500 1.5px sur l'extérieur
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: AspectRatio(
-        aspectRatio: 1,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          curve: Curves.easeOutCubic,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: highlight
-                ? Border.all(color: kBrandPurple, width: 1.5)
-                : null,
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0x141F1E14).withValues(alpha: 0.08),
-                blurRadius: 18,
-                offset: const Offset(0, 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AspectRatio(
+            aspectRatio: 1,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              curve: Curves.easeOutCubic,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: highlight
+                    ? Border.all(color: kBrandPurple, width: 1.5)
+                    : null,
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0x141F1E14).withValues(alpha: 0.08),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
               ),
-            ],
+              child: _PhotoThumbnail(doc: doc),
+            ),
           ),
-          child: _PhotoThumbnail(doc: doc),
-        ),
+          SizedBox(
+            height: 48,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                doc.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: Colors.black),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2078,21 +2094,57 @@ class _PhotoFullscreenDialogState extends State<_PhotoFullscreenDialog> {
                         ],
                       ),
                       const SizedBox(height: 12),
+                      Expanded(
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFE4E7EB)),
+                          ),
+                          child: Center(
+                            child: _bytes != null
+                                ? InteractiveViewer(
+                                    maxScale: 4.0,
+                                    child: Image.memory(
+                                      _bytes!,
+                                      fit: BoxFit.contain,
+                                      gaplessPlayback: true,
+                                    ),
+                                  )
+                                : _failed
+                                ? const Icon(
+                                    LucideIcons.imageOff,
+                                    size: 56,
+                                    color: Color(0xFF8A939D),
+                                  )
+                                : const CircularProgressIndicator(
+                                    color: kBrandPurple,
+                                  ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           Expanded(
-                            child: FormTextField(
-                              label: 'Titre de la photo',
-                              value: _draftTitle,
+                            child: TextFormField(
+                              initialValue: _draftTitle,
+                              style: const TextStyle(color: Colors.black),
+                              decoration: const InputDecoration(
+                                labelText: 'Titre de la photo',
+                                filled: false,
+                                border: InputBorder.none,
+                              ),
                               onChanged: (value) {
                                 if (value == _draftTitle) return;
                                 setState(() => _draftTitle = value);
                               },
-                              onSubmitted: (_) {
-                                _saveTitleIfNeeded();
-                              },
-                              onTapOutside: () {
+                              onFieldSubmitted: (_) => _saveTitleIfNeeded(),
+                              onTapOutside: (_) {
+                                FocusManager.instance.primaryFocus?.unfocus();
                                 _saveTitleIfNeeded();
                               },
                             ),
@@ -2131,38 +2183,6 @@ class _PhotoFullscreenDialogState extends State<_PhotoFullscreenDialog> {
                             ),
                           ],
                         ],
-                      ),
-                      const SizedBox(height: 16),
-                      Expanded(
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFE4E7EB)),
-                          ),
-                          child: Center(
-                            child: _bytes != null
-                                ? InteractiveViewer(
-                                    maxScale: 4.0,
-                                    child: Image.memory(
-                                      _bytes!,
-                                      fit: BoxFit.contain,
-                                      gaplessPlayback: true,
-                                    ),
-                                  )
-                                : _failed
-                                ? const Icon(
-                                    LucideIcons.imageOff,
-                                    size: 56,
-                                    color: Color(0xFF8A939D),
-                                  )
-                                : const CircularProgressIndicator(
-                                    color: kBrandPurple,
-                                  ),
-                          ),
-                        ),
                       ),
                     ],
                   ),
