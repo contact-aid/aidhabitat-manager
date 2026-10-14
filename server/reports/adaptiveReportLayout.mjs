@@ -187,3 +187,30 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
   for (const [i, line] of (helpLines.length > 2 ? [helpLines[0], 'Voir suite'] : helpLines).entries()) text(line, y - i * 12);
   return details.join('\n\n');
 }
+
+export async function drawTrustedPerson(pdfDoc, page, patient = {}) {
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  page.drawRectangle({x:34,y:339,width:526,height:137,color:white});
+  const text = (value,y) => page.drawText(printable(value,font),{x:42,y,size:10,font});
+  text(`Téléphone : ${patient.phone ?? ''}`,457);
+  text(`Mail : ${patient.email ?? ''}`,433);
+  text('Personne de confiance à contacter :',409);
+  const trusted = patient.trustedPerson ?? {};
+  const name = String(trusted.name ?? '').replace(/\s+/g,' ').trim();
+  let lines = wrapReportLines(name,font,10,510);
+  // 100 characters fit two lines even with wide glyphs. If word wrapping
+  // wastes that space, use glyph wrapping instead of shrinking or clipping.
+  if (name.length <= 100 && lines.length > 2) {
+    lines = []; let line = '';
+    for (const char of printable(name,font)) {
+      if(font.widthOfTextAtSize(line+char,10)>510) {lines.push(line);line='';}
+      line += char;
+    }
+    if(line) lines.push(line);
+  }
+  const overflow = lines.length > 2;
+  for (const [i,line] of (overflow ? [lines[0],'Voir suite des renseignements sur les occupants'] : lines).entries()) text(line,393-i*12);
+  text(`Téléphone : ${trusted.phone ?? ''}`,361);
+  text(`Mail : ${trusted.email ?? ''}`,343);
+  return overflow ? `Personne de confiance à contacter : ${name}` : '';
+}

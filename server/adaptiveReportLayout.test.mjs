@@ -135,3 +135,13 @@ test('negative APA and MDPH remain explicit and the generic final example is rem
   assert(text.includes('Rappel des normes'));
  }
 });
+
+test('trusted person uses the full width and preserves long existing text',async()=>{
+ const name='Madame EXEMPLE Céline, assistante sociale de l’espace autonomie du secteur, à contacter en priorité';
+ for(const value of [name, 'W'.repeat(100), name.repeat(4)]) {
+  const {bytes}=await generateVisitReport({dossier:{patient:{trustedPerson:{name:value,phone:'0102030405',email:'contact@example.test'}}},fetchImageBytes:async()=>null});
+  const text=await extract(bytes);
+  assert(text.replace(/\s/g,'').includes(value.replace(/\s/g,'')));
+  assert(text.includes('0102030405'));assert(text.includes('contact@example.test'));
+ }
+});
