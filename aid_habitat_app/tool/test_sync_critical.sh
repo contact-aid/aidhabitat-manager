@@ -50,6 +50,8 @@ bash "$script_dir/test_safely.sh" \
   test/services/local_database_open_failure_test.dart \
   test/services/document_revision_save_test.dart \
   test/services/document_remote_revision_test.dart \
+  test/services/document_refresh_scheduler_test.dart \
+  test/services/document_list_transport_test.dart \
   test/services/document_imported_upload_test.dart \
   test/services/aggir_document_test.dart \
   test/services/document_page_save_test.dart \

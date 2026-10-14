@@ -96,6 +96,7 @@ void main() {
                 'data': {
                   'documents': [
                     {
+                      'id': 'patient::original-server-id',
                       'clientDocumentId': 'original-client-id',
                       'remotePath': oldPath,
                       'publicUrl': oldPath,
