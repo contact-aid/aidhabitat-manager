@@ -106,7 +106,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
     if (!where) return true;
     const parts = where.split('~and');
     return parts.map((part) => {
-      const match = /^\((Id|uuid_source|patient_id|beneficiaires_id|beneficiaire_id|app_sync_revision|scope_type|scope_id|tab_key|sub_tab_key|page_number),eq,([^(),]*)\)$/.exec(part);
+      const match = /^\((Id|uuid_source|patient_id|beneficiaires_id|beneficiaire_id|client_document_id|dossier_id|document_uuid_source|app_sync_revision|scope_type|scope_id|tab_key|sub_tab_key|page_number),eq,([^(),]*)\)$/.exec(part);
       assert(match, `Unsupported where: ${where}`);
       return String(row[match[1]]) === match[2];
     }).every(Boolean);
@@ -157,7 +157,7 @@ export function createRestMock({ referenceRows = {} } = {}) {
             let list = rows[tableId].filter((row) => matches(where, row));
             const sort = url.searchParams.get('sort');
             if (sort) {
-              assert(['Id', '-Id', '-UpdatedAt', '-updated_at'].includes(sort), `Unknown sort: ${sort}`);
+              assert(['Id', '-Id', '-UpdatedAt', '-updated_at', 'chunk_index'].includes(sort), `Unknown sort: ${sort}`);
               const key = sort.replace(/^-/, '');
               list.sort((a, b) => String(a[key]).localeCompare(String(b[key])) * (sort.startsWith('-') ? -1 : 1));
             }
@@ -195,6 +195,15 @@ export function createRestMock({ referenceRows = {} } = {}) {
               throw new Error('SIMULATED_RESPONSE_LOST_AFTER_COMMIT');
             }
             return json(Array.isArray(call.body) ? created : created[0]);
+          }
+          if (method === 'DELETE' && tableId === tables.mobile_document_chunks) {
+            paramsOnly(url, []);
+            call.body = JSON.parse(init.body);
+            assert.deepEqual(Object.keys(call.body), ['Id']);
+            const removed = rows[tableId].find(row => row.Id === call.body.Id);
+            assert(removed, 'Chunk to remove must exist');
+            rows[tableId] = rows[tableId].filter(row => row.Id !== call.body.Id);
+            return json(removed);
           }
           if (method === 'PATCH' && tableId === tables.ergos) {
             paramsOnly(url, []);
