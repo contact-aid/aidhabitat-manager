@@ -69,7 +69,7 @@ void main() {
     },
   );
 
-  Future<void> conflict(String type) async {
+  Future<void> conflict(String type, {Map<String, dynamic>? remoteData}) async {
     final ops = await queue.fetchRunnableOperations();
     final op = ops.singleWhere((op) => op.entityType == type);
     expect(await queue.tryMarkRunning(op), isTrue);
@@ -79,10 +79,12 @@ void main() {
       entityLocalId: op.entityLocalId,
       error: 'synthetic conflict',
       expectedPayloadJson: op.payloadJson,
-      remoteData: {
-        'remoteUpdatedAt': _new,
-        'remoteData': {'prenom': 'Remote'},
-      },
+      remoteData:
+          remoteData ??
+          {
+            'remoteUpdatedAt': _new,
+            'remoteData': {'prenom': 'Remote'},
+          },
     );
   }
 
@@ -330,6 +332,89 @@ void main() {
       expect(jsonDecode(housing['rdc_rooms_json'] as String), ['Remote']);
       expect(jsonDecode(housing['basement_rooms_json'] as String), ['Cave']);
       expect(housing['surface'], 80);
+    },
+  );
+
+  for (final keepLocal in [true, false]) {
+    test('explicit null rooms are reviewable, keepLocal=$keepLocal', () async {
+      await dossiers.updateHousing('dossier-1', {
+        'rdc_rooms_json': '["Local"]',
+      });
+      await conflict('housing');
+      final raw = remote(version: _new);
+      raw['housing'] = {...(raw['housing'] as Map), 'roomsBreakdown': null};
+      final review = (await dossiers.reviewConflicts('dossier-1', raw)).single;
+      expect((review.remoteValues['roomsBreakdown'] as Map)['rdc'], isEmpty);
+      expect(
+        jsonDecode(
+          (await db.query('housings')).single['rdc_rooms_json'] as String,
+        ),
+        ['Local'],
+      );
+      await dossiers.resolveReviewedConflict(review, keepLocal: keepLocal);
+      expect(
+        jsonDecode(
+          (await db.query('housings')).single['rdc_rooms_json'] as String,
+        ),
+        keepLocal ? ['Local'] : [],
+      );
+    });
+  }
+
+  test(
+    'null room conflict retries once with original guard and local data intact',
+    () async {
+      await db.update('housings', {'rdc_rooms_json': '[]'});
+      await dossiers.updateHousing('dossier-1', {
+        'rdc_rooms_json': '["Local"]',
+      });
+      await conflict(
+        'housing',
+        remoteData: {
+          'error': 'SYNC_FIELD_CONFLICT',
+          'remoteUpdatedAt': _new,
+          'remoteData': {'rooms_breakdown_json': null},
+        },
+      );
+      final original = await payload();
+      expect(await queue.recoverEmptyHousingRoomConflicts(), 1);
+      expect((await payload())['concurrency'], original['concurrency']);
+      expect((await payload())['updates'], original['updates']);
+      expect(
+        jsonDecode(
+          (await db.query('housings')).single['rdc_rooms_json'] as String,
+        ),
+        ['Local'],
+      );
+      await conflict(
+        'housing',
+        remoteData: {
+          'error': 'SYNC_FIELD_CONFLICT',
+          'remoteUpdatedAt': _new,
+          'remoteData': {'rooms_breakdown_json': null},
+        },
+      );
+      expect(await queue.recoverEmptyHousingRoomConflicts(), 0);
+    },
+  );
+
+  test(
+    'real room changes and unknown baselines are never automatically retried',
+    () async {
+      await dossiers.updateHousing('dossier-1', {
+        'rdc_rooms_json': '["Local"]',
+      });
+      await conflict(
+        'housing',
+        remoteData: {
+          'error': 'SYNC_FIELD_CONFLICT',
+          'remoteUpdatedAt': _new,
+          'remoteData': {'rooms_breakdown_json': null},
+        },
+      );
+      final before = await db.query('sync_operations');
+      expect(await queue.recoverEmptyHousingRoomConflicts(), 0);
+      expect(await db.query('sync_operations'), before);
     },
   );
 

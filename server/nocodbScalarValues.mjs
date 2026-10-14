@@ -38,6 +38,19 @@ export function canonicalOccupantValues(value) {
   });
 }
 
+export function isEmptyRoomBreakdown(value) {
+  if (value == null || value === '') return true;
+  let parsed;
+  try { parsed = typeof value === 'string' ? JSON.parse(value) : value; } catch { return false; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const levels = new Set(['basement', 'rdc', 'floor', 'secondFloor', 'thirdFloor']);
+  return Object.entries(parsed).every(([key, rooms]) => {
+    if (key === '_roomIds') return rooms && typeof rooms === 'object' && !Array.isArray(rooms)
+      && Object.entries(rooms).every(([level, ids]) => levels.has(level) && Array.isArray(ids) && ids.length === 0);
+    return levels.has(key) && Array.isArray(rooms) && rooms.length === 0;
+  });
+}
+
 function sameRoomBreakdown(a, b) {
   try {
     const left = JSON.parse(a);
@@ -156,8 +169,10 @@ export function createDatabaseValueComparator(columns = []) {
           key === 'occupants_json' ? canonicalOccupantValues(right) : right);
       } catch { return false; }
     }
-    if (key === 'rooms_breakdown_json' && typeof a === 'string' && typeof b === 'string') {
-      return sameRoomBreakdown(a, b);
+    if (key === 'rooms_breakdown_json') {
+      if (isEmptyRoomBreakdown(a) && isEmptyRoomBreakdown(b)) return true;
+      if (typeof a === 'string' && typeof b === 'string') return sameRoomBreakdown(a, b);
+      return false;
     }
     if (levelDescriptions.has(key)) {
       const left = roomDescriptionParts(a);

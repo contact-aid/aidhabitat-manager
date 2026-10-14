@@ -2351,6 +2351,102 @@ class SyncRepository {
 
   /// Réinitialise UNE op à `pending` (attempt_count=0, last_error=null).
   /// Renvoie le nombre de lignes modifiées (0 ou 1).
+  /// Retry the old null-versus-empty room conflict once with its ORIGINAL
+  /// baseline and write ID. The server still rejects any real concurrent edit.
+  Future<int> recoverEmptyHousingRoomConflicts() async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        where: "entity_type = 'housing' AND status = 'conflict'",
+      );
+      var recovered = 0;
+      for (final row in rows) {
+        Map<String, dynamic> payload;
+        try {
+          payload =
+              jsonDecode(
+                    await OfflineVault.instance.openString(
+                      row['payload_json'] as String,
+                    ),
+                  )
+                  as Map<String, dynamic>;
+        } catch (_) {
+          continue;
+        }
+        if (payload['emptyHousingRoomsRecoveryAttempted'] == true) continue;
+        final guard = payload['concurrency'];
+        final baseline = guard is Map ? guard['baseValues'] : null;
+        final rooms = baseline is Map ? baseline['roomsBreakdown'] : null;
+        final conflict = payload['conflict'];
+        final remote = conflict is Map ? conflict['remote'] : null;
+        final observed = remote is Map ? remote['remoteData'] : null;
+        const levels = {
+          'basement',
+          'rdc',
+          'floor',
+          'secondFloor',
+          'thirdFloor',
+        };
+        if (guard is! Map ||
+            guard['version'] != 1 ||
+            guard['collectionContract'] != 'collections-v2' ||
+            guard['writeId'] is! String ||
+            rooms is! Map ||
+            rooms.isEmpty ||
+            !rooms.entries.every(
+              (entry) =>
+                  levels.contains(entry.key) &&
+                  entry.value is List &&
+                  (entry.value as List).isEmpty,
+            ) ||
+            remote is! Map ||
+            remote['error'] != 'SYNC_FIELD_CONFLICT' ||
+            observed is! Map ||
+            !observed.containsKey('rooms_breakdown_json') ||
+            observed['rooms_breakdown_json'] != null) {
+          continue;
+        }
+        final id = row['id'] as String;
+        // mayClaim only accepts pending rows. Ownership is checked in this
+        // transaction so an unrelated account never gets a retry queued.
+        payload['emptyHousingRoomsRecoveryAttempted'] = true;
+        await txn.update(
+          'sync_operations',
+          {
+            'status': 'pending',
+            'attempt_count': 0,
+            'last_error': null,
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: "id = ? AND status = 'conflict'",
+          whereArgs: [id],
+        );
+        if (_enforceOwnership &&
+            !await SyncOperationOwnership.mayClaim(txn, id)) {
+          await txn.update(
+            'sync_operations',
+            row,
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          continue;
+        }
+        await _updateEntitySyncState(
+          db: txn,
+          entityType: 'housing',
+          entityLocalId: row['entity_local_id'] as String,
+          syncState: SyncState.pendingSync,
+        );
+        recovered++;
+      }
+      return recovered;
+    });
+  }
+
   Future<bool> retryOriginalOccupantConflict({
     required String operationId,
     required String expectedPayloadJson,
