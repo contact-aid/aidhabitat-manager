@@ -27,6 +27,7 @@ void main() {
       const dossier = 'dossier-independent-fiction';
       const dossierKey = 'notes_rapides';
       const beneficiaryKey = 'Bénéficiaire-Notes';
+      const accessibilityKey = 'Accessibilité-Notes';
       await tester.runAsync(() async {
         directory = await Directory.systemTemp.createTemp('independent-notes-');
         databaseFactory = databaseFactoryFfi;
@@ -39,6 +40,8 @@ void main() {
           (dossierKey, 0, '', true),
           (dossierKey, 1, 'Ancien texte à ne pas ressusciter', false),
           (beneficiaryKey, 0, 'Texte iPad préservé', true),
+          (accessibilityKey, 0, 'Observation commune', false),
+          (accessibilityKey, 1, 'Ancienne observation secondaire', false),
         ]) {
           await notes.mergeRemoteNotePage(
             patientId: patient,
@@ -48,7 +51,18 @@ void main() {
             drawingJson: jsonEncode({
               'version': 1,
               'text': text,
-              'strokes': [],
+              'strokes': key == accessibilityKey
+                  ? [
+                      {
+                        'tool': 'pen',
+                        'color': '#000000',
+                        'size': 2,
+                        'points': [
+                          {'x': 0.1 + page * 0.2, 'y': 0.2},
+                        ],
+                      },
+                    ]
+                  : [],
               if (initialized) 'noteTextInitialized': true,
             }),
             revision: '00000000-0000-4000-8000-000000000001',
@@ -68,17 +82,23 @@ void main() {
             home: Scaffold(
               body: Row(
                 children: [
-                  for (final key in [dossierKey, beneficiaryKey])
+                  for (final key in [
+                    dossierKey,
+                    beneficiaryKey,
+                    accessibilityKey,
+                  ])
                     Expanded(
                       child: NotesWidget(
                         key: ValueKey(key),
                         patientId: patient,
                         dossierId: dossier,
                         tabKey: key,
-                        sharedText: key == dossierKey,
-                        currentPage: key == dossierKey ? dossierPage : 0,
-                        totalPages: key == dossierKey ? 2 : 1,
-                        showCanvas: false,
+                        sharedText:
+                            key == dossierKey || key == accessibilityKey,
+                        currentPage: key == beneficiaryKey ? 0 : dossierPage,
+                        totalPages: key == beneficiaryKey ? 1 : 2,
+                        showCanvas: key == accessibilityKey,
+                        stackedCards: key == accessibilityKey,
                         showSaveButton: false,
                         fillParentHeight: true,
                         allowPagination: true,
@@ -147,6 +167,7 @@ void main() {
       await open();
       expect(shown(dossierKey), '');
       expect(shown(beneficiaryKey), 'Texte iPad préservé');
+      expect(shown(accessibilityKey), 'Observation commune');
       final openingWrites = await tester.runAsync(
         () async =>
             (await LocalDatabase.instance.database).query('sync_operations'),
@@ -156,6 +177,50 @@ void main() {
       await open(dossierPage: 1);
       expect(shown(dossierKey), '');
       expect(shown(beneficiaryKey), 'Texte iPad préservé');
+      expect(shown(accessibilityKey), 'Observation commune');
+      await tester.enterText(field(accessibilityKey), 'Observation corrigée');
+      await waitSaved(accessibilityKey, 'Observation corrigée');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await open();
+      expect(shown(accessibilityKey), 'Observation corrigée');
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey(accessibilityKey)),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.label == 'Page suivante',
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(shown(accessibilityKey), 'Observation corrigée');
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey(accessibilityKey)),
+          matching: find.byTooltip('Nouvelle page'),
+        ),
+      );
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 30));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 15)),
+        );
+      }
+      expect(shown(accessibilityKey), 'Observation corrigée');
+      final secondPage = await tester.runAsync(
+        () => notes.fetchDrawingJson(
+          patientId: patient,
+          dossierId: dossier,
+          tabKey: accessibilityKey,
+          pageNumber: 1,
+        ),
+      );
+      expect(
+        (jsonDecode(secondPage!)['strokes'][0]['points'][0]['x'] as num)
+            .toDouble(),
+        closeTo(0.3, 0.001),
+      );
       await tester.enterText(field(dossierKey), 'Modification dossier');
       await waitSaved(dossierKey, 'Modification dossier');
       expect(shown(beneficiaryKey), 'Texte iPad préservé');

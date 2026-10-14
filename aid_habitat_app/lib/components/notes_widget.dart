@@ -487,7 +487,13 @@ class _NotesWidgetState extends State<NotesWidget> {
   late int _totalPages;
   final Map<int, List<Stroke>> _pageStrokes = <int, List<Stroke>>{};
   final Map<int, String> _pageTexts = <int, String>{};
-  bool _dossierTextInitialized = false;
+  // Accessibility keeps its written observation on page zero even when a
+  // later Pencil page is reopened or refreshed from another device.
+  bool get _usesCanonicalSharedText =>
+      widget.sharedText &&
+      (widget.tabKey == 'notes_rapides' ||
+          widget.tabKey == 'Accessibilité-Notes');
+  bool _sharedTextInitialized = false;
   // Flags médicaux par page (1 = Pathologie, 2 = Suivi, 3 = Sensoriel).
   // Sérialisés dans `drawing_json['medicalFlags']`. Utilisé uniquement
   // quand [widget.medicalFlags] / [widget.onMedicalFlagsChanged] sont
@@ -632,9 +638,7 @@ class _NotesWidgetState extends State<NotesWidget> {
 
   Future<void> _refreshCurrentPageFromRemoteAfterPull() async {
     try {
-      if (widget.sharedText &&
-          widget.tabKey == 'notes_rapides' &&
-          _currentPage != 0) {
+      if (widget.sharedText && _usesCanonicalSharedText && _currentPage != 0) {
         await _refreshNotePageFromRemote(
           patientId: widget.patientId,
           tabKey: widget.tabKey,
@@ -689,7 +693,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       // par `_loadPages()`.
       _pageStrokes.clear();
       _pageTexts.clear();
-      _dossierTextInitialized = false;
+      _sharedTextInitialized = false;
       _pageMedicalFlags.clear();
       _pageMedicalFlagsByScope.clear();
       _undoStack.clear();
@@ -822,9 +826,7 @@ class _NotesWidgetState extends State<NotesWidget> {
   /// into this in-app widget.
   Future<void> _reloadCurrentPageFromStore() async {
     final readPageZero =
-        widget.sharedText &&
-        widget.tabKey == 'notes_rapides' &&
-        _currentPage != 0;
+        widget.sharedText && _usesCanonicalSharedText && _currentPage != 0;
     final pageZero = readPageZero
         ? await _fetchNoteDrawingJson(
             patientId: widget.patientId,
@@ -1149,9 +1151,7 @@ class _NotesWidgetState extends State<NotesWidget> {
     //    d'afficher quoi que ce soit, ce qui prenait plusieurs secondes
     //    pour la note rapide du dossier.
     final readPageZero =
-        widget.sharedText &&
-        widget.tabKey == 'notes_rapides' &&
-        _currentPage != 0;
+        widget.sharedText && _usesCanonicalSharedText && _currentPage != 0;
     final pageZero = readPageZero
         ? await _fetchNoteDrawingJson(
             patientId: widget.patientId,
@@ -1263,7 +1263,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       }
       // Page zero becomes authoritative after initialization, even when empty.
       // A stale secondary page from an interrupted sync must not revive text.
-      final txt = widget.tabKey == 'notes_rapides' && _dossierTextInitialized
+      final txt = _usesCanonicalSharedText && _sharedTextInitialized
           ? (_pageTexts[0] ?? '')
           : (firstText ?? '');
       for (var i = 0; i < _totalPages; i++) {
@@ -1313,12 +1313,16 @@ class _NotesWidgetState extends State<NotesWidget> {
   }
 
   void _applyJson(int page, String? json, {required bool hydrateController}) {
-    if (page == 0 && widget.tabKey == 'notes_rapides') {
-      _dossierTextInitialized = false;
+    if (page == 0 && _usesCanonicalSharedText) {
+      _sharedTextInitialized = false;
       try {
         final data = jsonDecode(json ?? '{}');
-        _dossierTextInitialized =
-            data is Map && data['noteTextInitialized'] == true;
+        _sharedTextInitialized =
+            data is Map &&
+            (data['noteTextInitialized'] == true ||
+                (widget.tabKey == 'Accessibilité-Notes' &&
+                    data.containsKey('text') &&
+                    data['deleted'] != true));
       } catch (_) {}
     }
     if (json == null || json.isEmpty) {
@@ -1350,8 +1354,8 @@ class _NotesWidgetState extends State<NotesWidget> {
       final text =
           page != 0 &&
               widget.sharedText &&
-              widget.tabKey == 'notes_rapides' &&
-              _dossierTextInitialized
+              _usesCanonicalSharedText &&
+              _sharedTextInitialized
           ? (_pageTexts[0] ?? '')
           : (decoded['text']?.toString() ?? '');
       final rawStrokes = decoded['strokes'] as List?;
@@ -1581,7 +1585,7 @@ class _NotesWidgetState extends State<NotesWidget> {
   // ---------------------------------------------------------------------------
 
   void _onTextChanged() {
-    if (widget.tabKey == 'notes_rapides') _dossierTextInitialized = true;
+    if (_usesCanonicalSharedText) _sharedTextInitialized = true;
     if (widget.sharedText) {
       final txt = _textController.text;
       for (var i = 0; i < _totalPages; i++) {
