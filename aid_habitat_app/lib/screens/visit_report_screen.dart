@@ -1044,16 +1044,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     final activeIdx = _activeSubsectionByTab[activeTab] ?? 0;
     final safeIdx = activeIdx.clamp(0, subsections.length - 1);
 
-    // Special case Accessibilité (totalPages=4 + sharedText) retiré
-    // 2026-05-13 — demande user : « la partie note de accessibilité est
-    // cassé, reprend comme dans bénéficiaire ». On revient à la parité
-    // Bénéficiaire : chaque sous-section a son propre NotesWidget avec
-    // tabKey unique (texte + dessin indépendants par sous-section). Le
-    // collapse correspondant dans `_resolveNotesTabKey` a été aussi
-    // retiré → `Accessibilité-Général`, `Accessibilité-Niveaux`,
-    // `Accessibilité-Équipements`, `Accessibilité-Extérieur` sont
-    // désormais 4 notes totalement distinctes.
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1102,8 +1092,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   final tabKey = layer.tabKey;
                   final liveKey = '${_dossier.patient.id}::$tabKey';
                   final isMedical = tabKey == 'Contexte de vie-Médical';
-                  final hasSharedContextText =
-                      isMedical || tabKey == 'Contexte de vie-Autonomie';
+                  final hasSharedWrittenText =
+                      isMedical ||
+                      tabKey == 'Contexte de vie-Autonomie' ||
+                      tabKey == _kSharedAccessibiliteNotesTabKey;
                   final isActive = tabKey == activeTabKey;
                   final pdfPlaceholder = _resolvePlaceholderForTabKey(tabKey);
                   // Bannière titre 2026-05-15 : auparavant le libellé PDF
@@ -1155,11 +1147,11 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                             // local/remote, ce qui permet une suppression avec
                             // renumérotation logique (1, 2, 3 -> 1, 2).
                             totalPages: 1,
-                            // Contexte de vie : les textes "Environnement" et
-                            // "Habitudes de vie" restent uniques. Ajouter une
+                            // Contexte de vie et Accessibilité : le texte
+                            // écrit reste unique. Ajouter une
                             // page crée seulement un nouveau dessin, jamais une
                             // nouvelle note écrite.
-                            sharedText: hasSharedContextText,
+                            sharedText: hasSharedWrittenText,
                             medicalFlags: isMedical
                                 ? _currentMedicalFlagNumbers
                                 : null,
