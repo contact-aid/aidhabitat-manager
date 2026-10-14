@@ -1,5 +1,6 @@
 import { resolveReportPigPloermel } from './reports/pigPloermel.mjs';
 import { assertCollectionMutationAllowed } from './collectionMutationContract.mjs';
+import { assertMandateImportIdentity } from './mandateImportIdentity.mjs';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import fs from 'node:fs/promises';
@@ -8232,14 +8233,6 @@ app.get('/api/documents/:patientId', requireAuth, async (req, res, next) => {
   }
 });
 
-function assertMandateImportIdentity(appUser, documentLocalId, dossierId) {
-  if (!documentLocalId.startsWith('doc_mandat_')) return;
-  const account = crypto.createHash('sha256').update(normalizeEmail(appUser.email)).digest('hex');
-  if (!dossierId || documentLocalId !== `doc_mandat_${dossierId}_${account}`) {
-    throw httpError(403, 'Identité de mandat incompatible avec le compte connecté');
-  }
-}
-
 app.post(
   '/api/documents/upload',
   requireAuth,
@@ -8251,7 +8244,12 @@ app.post(
       const title = stringValue(req.query?.title).trim() || 'Document';
       const requestedFileName = stringValue(req.query?.fileName).trim();
       const requestedDossierId = stringValue(req.query?.dossierId).trim();
-      assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
+      if (!patientId) throw httpError(400, 'patientId manquant');
+      const access = await resolveBeneficiaryAccess(req.appUser, patientId);
+      assertMandateImportIdentity(
+        req.appUser, documentLocalId, requestedDossierId,
+        field(access.dossierRecord, 'uuid_source'),
+      );
       const tags = safeParseJsonArray(req.query?.tagsJson).map((tag) => String(tag).trim()).filter(Boolean);
       const mimeType = stringValue(req.get('content-type')).trim() || 'application/octet-stream';
       const bodyBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -8281,7 +8279,6 @@ app.post(
         );
       }
 
-      const access = await resolveBeneficiaryAccess(req.appUser, patientId);
       const canonicalPatientId = canonicalPatientIdForDocumentAccess(access);
       const documentContext = buildBeneficiaryDocumentContext({
         beneficiaryRecord: access.beneficiaryRecord,
@@ -8318,7 +8315,12 @@ app.post('/api/documents', requireAuth, documentUpload.single('file'), async (re
     const title = stringValue(req.body?.title).trim() || 'Document';
     const requestedFileName = stringValue(req.body?.fileName).trim();
     const requestedDossierId = stringValue(req.body?.dossierId).trim();
-    assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
+    if (!patientId) throw httpError(400, 'patientId manquant');
+    const access = await resolveBeneficiaryAccess(req.appUser, patientId);
+    assertMandateImportIdentity(
+      req.appUser, documentLocalId, requestedDossierId,
+      field(access.dossierRecord, 'uuid_source'),
+    );
 
     // tags may arrive as JSON string (multipart) or array (JSON body)
     const rawTags = req.body?.tags;
@@ -8362,7 +8364,6 @@ app.post('/api/documents', requireAuth, documentUpload.single('file'), async (re
       }
     }
 
-    const access = await resolveBeneficiaryAccess(req.appUser, patientId);
     const canonicalPatientId = canonicalPatientIdForDocumentAccess(access);
     const documentContext = buildBeneficiaryDocumentContext({
       beneficiaryRecord: access.beneficiaryRecord,
@@ -8494,7 +8495,12 @@ app.post(
       const title = stringValue(req.body?.title).trim() || 'Document';
       const requestedFileName = stringValue(req.body?.fileName).trim();
       const requestedDossierId = stringValue(req.body?.dossierId).trim();
-    assertMandateImportIdentity(req.appUser, documentLocalId, requestedDossierId);
+      if (!patientId) throw httpError(400, 'patientId manquant');
+      const access = await resolveBeneficiaryAccess(req.appUser, patientId);
+      assertMandateImportIdentity(
+        req.appUser, documentLocalId, requestedDossierId,
+        field(access.dossierRecord, 'uuid_source'),
+      );
       const rawTags = req.body?.tags;
       const parsedTags = typeof rawTags === 'string'
         ? (() => {
@@ -8545,7 +8551,6 @@ app.post(
 
       const contentBase64 = buffer.toString('base64');
 
-      const access = await resolveBeneficiaryAccess(req.appUser, patientId);
       const documentContext = buildBeneficiaryDocumentContext({
         beneficiaryRecord: access.beneficiaryRecord,
         dossierRecord: access.dossierRecord,

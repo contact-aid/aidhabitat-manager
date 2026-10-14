@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -8,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
 if (process.argv.includes('--runner')) await run();
-else test('all mandate upload transports reject another account identity before storage', async () => {
+else test('mandate transports verify the account and accept legacy missing dossierId', async () => {
   const root = await mkdtemp(`${tmpdir()}/mandate-identity-`);
   try {
     const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(import.meta.url), '--runner'], {
@@ -48,6 +49,36 @@ async function run() {
       assert.equal(response.status, 403, `${route}: ${await response.text()}`);
     }
     assert(!mock.calls.slice(before).some(call => call.method !== 'GET'));
+    assert.deepEqual(mock.violations, []);
+    const legacyIdentity = { patientId,
+      documentLocalId: `doc_mandat_${dossierId}_${createHash('sha256').update(ownerEmail.trim().toLowerCase()).digest('hex')}`,
+      title: 'Synthetic mandate', fileName: 'synthetic.pdf', mimeType: 'application/pdf' };
+    const raw = await fetch(`${origin}/api/documents/upload?${new URLSearchParams(legacyIdentity)}`, {
+      method: 'POST', headers: { 'x-app-session': token, 'content-type': 'application/pdf' }, body: '%PDF-synthetic',
+    });
+    assert.equal(raw.status, 201, await raw.text());
+    const multipart = new FormData();
+    for (const [key, value] of Object.entries(legacyIdentity)) multipart.set(key, value);
+    multipart.set('file', new Blob(['%PDF-synthetic'], { type: 'application/pdf' }), 'synthetic.pdf');
+    const uploaded = await fetch(`${origin}/api/documents`, {
+      method: 'POST', headers: { 'x-app-session': token }, body: multipart,
+    });
+    assert.equal(uploaded.status, 201);
+    assert.equal((await uploaded.json()).data.document.dossierId, dossierId);
+    const chunk = new FormData();
+    chunk.set('uploadId', 'synthetic-legacy-mandate');
+    chunk.set('chunkIndex', '0'); chunk.set('totalChunks', '1');
+    chunk.set('chunk', new Blob(['%PDF-synthetic']), 'chunk.bin');
+    const staged = await fetch(`${origin}/api/documents/upload/chunk`, {
+      method: 'POST', headers: { 'x-app-session': token }, body: chunk,
+    });
+    assert.equal(staged.status, 202, await staged.text());
+    const finalized = await fetch(`${origin}/api/documents/upload/finalize`, {
+      method: 'POST', headers: { 'x-app-session': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...legacyIdentity, uploadId: 'synthetic-legacy-mandate' }),
+    });
+    assert.equal(finalized.status, 201);
+    assert.equal((await finalized.json()).data.document.dossierId, dossierId);
     assert.deepEqual(mock.violations, []);
     console.log('MANDATE_IDENTITY_PASS');
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
