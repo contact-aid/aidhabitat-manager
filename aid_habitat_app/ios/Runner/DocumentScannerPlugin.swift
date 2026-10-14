@@ -3,6 +3,49 @@ import AVFoundation
 import UIKit
 import VisionKit
 
+// Contain VisionKit rather than subclassing its camera controller. Only this
+// full-screen capture flow restricts orientation; Flutter stays freely rotatable.
+private final class PortraitDocumentScannerController: UIViewController {
+  private let scanner: VNDocumentCameraViewController
+  private let orientationFailed: (Error) -> Void
+
+  init(scanner: VNDocumentCameraViewController, orientationFailed: @escaping (Error) -> Void) {
+    self.scanner = scanner
+    self.orientationFailed = orientationFailed
+    super.init(nibName: nil, bundle: nil)
+    modalPresentationStyle = .fullScreen
+  }
+
+  required init?(coder: NSCoder) { fatalError("Use init(scanner:orientationFailed:)") }
+
+  override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+  override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .portrait }
+  override var shouldAutorotate: Bool { true }
+
+  @available(iOS 26.0, *)
+  override var prefersInterfaceOrientationLocked: Bool { true }
+
+  override var childForStatusBarHidden: UIViewController? { scanner }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    addChild(scanner)
+    scanner.view.frame = view.bounds
+    scanner.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    view.addSubview(scanner.view)
+    scanner.didMove(toParent: self)
+  }
+
+  override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    setNeedsUpdateOfSupportedInterfaceOrientations()
+    if #available(iOS 26.0, *) { setNeedsUpdateOfPrefersInterfaceOrientationLocked() }
+    view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) {
+      [weak self] error in self?.orientationFailed(error)
+    }
+  }
+}
+
 class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewControllerDelegate,
   UIImagePickerControllerDelegate, UINavigationControllerDelegate {
   private static let channelName = "aidhabitat/document_scanner"
@@ -10,6 +53,9 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
   private let channel: FlutterMethodChannel
   private weak var captureController: UIViewController?
   private var pendingResult: FlutterResult?
+  private weak var scannerScene: UIWindowScene?
+  private var previousScannerOrientation: UIInterfaceOrientation?
+  private var scannerPresentationID: UUID?
 
   private init(channel: FlutterMethodChannel) {
     self.channel = channel
@@ -72,11 +118,29 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
 
     pendingResult = result
 
-    let controller = VNDocumentCameraViewController()
-    controller.delegate = self
-    // A full-screen capture controller participates in UIKit's own rotation
-    // handling instead of inheriting the presenting sheet/context orientation.
-    controller.modalPresentationStyle = .fullScreen
+    let scanner = VNDocumentCameraViewController()
+    scanner.delegate = self
+    scannerScene = presenter.view.window?.windowScene
+    if #available(iOS 26.0, *) {
+      previousScannerOrientation = scannerScene?.effectiveGeometry.interfaceOrientation
+    } else {
+      previousScannerOrientation = scannerScene?.interfaceOrientation
+    }
+    let presentationID = UUID()
+    scannerPresentationID = presentationID
+    let controller = PortraitDocumentScannerController(scanner: scanner) { [weak self] _ in
+      guard let self, self.scannerPresentationID == presentationID,
+        self.pendingResult != nil else { return }
+      let flutterResult = self.pendingResult
+      self.pendingResult = nil
+      self.finish {
+        flutterResult?(FlutterError(
+          code: "scan_portrait_unavailable",
+          message: "Ouvrez l’app en plein écran pour scanner en portrait.",
+          details: nil
+        ))
+      }
+    }
     captureController = controller
 
     DispatchQueue.main.async {
@@ -209,10 +273,32 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
   private func finish(result: @escaping () -> Void) {
     let controller = captureController
     captureController = nil
-    if let controller {
-      controller.dismiss(animated: true, completion: result)
-    } else {
+    let scene = scannerScene
+    let previousOrientation = previousScannerOrientation
+    scannerScene = nil
+    previousScannerOrientation = nil
+    scannerPresentationID = nil
+    let presenter = controller?.presentingViewController
+    let complete = {
+      if let scene, let previousOrientation {
+        presenter?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        if #available(iOS 26.0, *) { presenter?.setNeedsUpdateOfPrefersInterfaceOrientationLocked() }
+        let mask: UIInterfaceOrientationMask
+        switch previousOrientation {
+        case .portrait: mask = .portrait
+        case .portraitUpsideDown: mask = .portraitUpsideDown
+        case .landscapeLeft: mask = .landscapeLeft
+        case .landscapeRight: mask = .landscapeRight
+        default: mask = .all
+        }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+      }
       result()
+    }
+    if let controller {
+      controller.dismiss(animated: true, completion: complete)
+    } else {
+      complete()
     }
   }
 
