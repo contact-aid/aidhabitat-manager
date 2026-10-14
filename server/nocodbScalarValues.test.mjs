@@ -85,3 +85,14 @@ test('occupant defaults are equivalent but actual health edits and roster change
   }
   assert(!equals('occupants_json', JSON.stringify([person]), JSON.stringify([projected, projected])));
 });
+
+test('empty legacy housing rooms match complete empty baselines without equating real room data', () => {
+  const equals = createDatabaseValueComparator([]);
+  const empty = JSON.stringify({ basement: [], rdc: [], floor: [], secondFloor: [], thirdFloor: [] });
+  for (const value of [null, '', '{}', empty]) assert(equals('rooms_breakdown_json', value, empty));
+  for (const value of ['bad JSON', 'null', '[]', '{"rdc":["Cuisine"]}', '{"rdc":null}', '{"unknown":[]}']) {
+    assert(!equals('rooms_breakdown_json', value, empty));
+  }
+  assert(!equals('occupants_json', null, '[]'));
+  assert(!equals('rooms_breakdown_json', null, '{"rdc":["WC"]}'));
+});

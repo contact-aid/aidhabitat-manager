@@ -10,6 +10,7 @@ function fixture({ loseResponse = false, preferLocal = false } = {}) {
   const request = async ({ method, path, body }) => {
     if (path.includes('/meta/')) return { id: 'table1', base_id: 'base1', columns: [
       { title: 'Id', pk: true, uidt: 'ID' },
+      { title: 'rooms_breakdown_json', uidt: 'LongText' },
       ...['app_sync_revision', 'first', 'second'].map(title => ({ title, uidt: 'SingleLineText' })),
     ] };
     if (method === 'GET') return { list: [structuredClone(row)] };
@@ -245,4 +246,22 @@ test('uncertain write carries a retryable HTTP status outside route adapters', a
     e.code === 'NOCODB_CONDITIONAL_WRITE_UNCERTAIN');
   assert.equal((await f.apply(f.mutation)).replay, true);
   assert.equal(f.patches(), 1);
+});
+
+
+test('first rooms edit on a null legacy column is conditional and genuine remote edits remain conflicts', async () => {
+  const f = fixture();
+  f.row.rooms_breakdown_json = null;
+  const baseFields = { rooms_breakdown_json: JSON.stringify({ basement: [], rdc: [], floor: [], secondFloor: [], thirdFloor: [] }) };
+  const fields = { rooms_breakdown_json: JSON.stringify({ basement: [], rdc: ['WC'], floor: [], secondFloor: [], thirdFloor: [] }) };
+  const request = { ...f.mutation, fields, baseFields };
+  await f.apply(request);
+  assert.equal(f.row.rooms_breakdown_json, fields.rooms_breakdown_json);
+  assert.equal(f.patches(), 1);
+  assert.equal((await f.apply(request)).replay, true);
+  assert.equal(f.patches(), 1);
+  const other = fixture();
+  other.row.rooms_breakdown_json = JSON.stringify({ rdc: ['Cuisine'] });
+  await assert.rejects(other.apply({ ...other.mutation, fields, baseFields }), error => error.status === 409);
+  assert.equal(other.patches(), 0);
 });

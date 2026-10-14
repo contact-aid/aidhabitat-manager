@@ -184,7 +184,26 @@ class DossierRepository {
         final columns = type == 'patient'
             ? _buildPatientPayload(raw: raw, now: now)
             : type == 'housing'
-            ? _buildHousingPayload(raw: raw, now: now)
+            ? _buildHousingPayload(
+                raw: {
+                  ...raw,
+                  // Explicit null is an empty server collection, not an
+                  // omitted/unreadable field. Keep normal pull behavior intact.
+                  if (raw.containsKey('roomsBreakdown') &&
+                      raw['roomsBreakdown'] == null)
+                    'roomsBreakdown': {
+                      for (final level in [
+                        'basement',
+                        'rdc',
+                        'floor',
+                        'secondFloor',
+                        'thirdFloor',
+                      ])
+                        level: <String>[],
+                    },
+                },
+                now: now,
+              )
             : _buildDossierPayload(raw: raw, now: now);
         final mapper = type == 'patient'
             ? _mapPatientFieldsToApi
