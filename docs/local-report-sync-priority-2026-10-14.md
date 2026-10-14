@@ -22,4 +22,13 @@ Les écritures restent conditionnelles : si le serveur change entre la lecture e
 
 Les tests couvrent les horloges serveur plus anciennes, plus récentes, identiques et absentes, l’adresse historique, les modifications pendant la lecture, le changement de session, le mauvais dossier, les révisions invalides, les échecs de lecture, la reprise d’un conflit existant et une nouvelle course côté serveur. Ils vérifient aussi les préconisations et leurs brouillons, la priorité d’une mutation moderne de collection et le maintien du blocage d’une mutation ancienne.
 
-Les scénarios sont intégrés à `test_sync_critical.sh` pour les prochaines validations CI. La publication de la branche et de la PR ne déploie pas la nouvelle version sur les appareils.
+Les scénarios sont intégrés à `test_sync_critical.sh` pour les prochaines validations CI. La publication de la branche et de la PR ne déploie pas la nouvelle version sur les appareils. Le build 84 prépare la mise à disposition du correctif.
+
+
+## Reprise d’une suppression de page sur iPad
+
+Une copie de secours vérifiée confirme aussi un conflit de révision pour une suppression locale de page : le dessin en attente contient `deleted: true`, et son contenu correspond exactement à la ligne locale. Le compteur visible peut afficher quatre pages alors que l’opération concerne l’ancienne cinquième page (index 4).
+
+Les scénarios de reprise couvrent désormais cette suppression, à une adresse historique sous le bénéficiaire et dans une opération déjà bloquée. La reprise garde la suppression locale et relance une écriture conditionnelle. Un échec de lecture affiche son code HTTP ; les changements de session, d’identité ou d’instantané conservent la note et donnent une explication.
+
+818 tests critiques Flutter passent après ces ajouts. Les essais automatisés utilisent exclusivement des notes fictives. Les identités et contenus des copies de bénéficiaires ne sont pas conservés dans le dépôt.

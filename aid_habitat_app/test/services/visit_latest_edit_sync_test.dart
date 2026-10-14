@@ -343,6 +343,8 @@ void main() {
     'equal',
     'missing-time',
     'legacy',
+    'legacy-deleted',
+    'retry-existing-deleted',
     'edit-during-read',
     'session-change',
     'wrong-dossier',
@@ -368,17 +370,21 @@ void main() {
       final queue = SyncRepository.forTesting(database: local);
       const patientId = 'nocodb-beneficiaire-123';
       const tab = 'Sanitaires-Notes';
+      final deleted = scenario.endsWith('-deleted');
+      final localDrawing = deleted
+          ? '{"version":1,"deleted":true,"text":"","strokes":[]}'
+          : '{"local":true}';
       await notes.saveDrawingJson(
         patientId: patientId,
         tabKey: tab,
-        drawingJson: '{"local":true}',
+        drawingJson: localDrawing,
         dossierId: 'dossier-1',
         mutationOrigin: SyncMutationOrigin.userEdit,
       );
       const revision = '11111111-1111-4111-8111-111111111111';
       final localAt = (await db.query('note_pages')).single['updated_at'];
       var writes = 0;
-      var failRecoveryRead = scenario == 'retry-existing';
+      var failRecoveryRead = scenario.startsWith('retry-existing');
       final service = NocodbSyncService(
         database: local,
         syncRepository: queue,
@@ -406,7 +412,7 @@ void main() {
                   'data': {
                     'notePages': [
                       if (scenario != 'missing-record' &&
-                          !(scenario == 'legacy' &&
+                          !(scenario.startsWith('legacy') &&
                               request.url.queryParameters['scopeId'] ==
                                   'dossier-1'))
                         {
@@ -417,7 +423,7 @@ void main() {
                           'tabKey': tab,
                           'pageNumber': 0,
                           'scopeType': 'dossier_detail',
-                          'scopeId': scenario == 'legacy'
+                          'scopeId': scenario.startsWith('legacy')
                               ? patientId
                               : 'dossier-1',
                           'drawingJson': '{"remote":true}',
@@ -440,12 +446,12 @@ void main() {
             }
             writes++;
             final sent = jsonDecode(request.body) as Map;
-            expect(sent['drawingJson'], '{"local":true}');
+            expect(sent['drawingJson'], localDrawing);
             if (writes > 1) {
               expect(sent['expectedRevision'], revision);
               expect(
                 sent['scopeId'],
-                scenario == 'legacy' ? patientId : 'dossier-1',
+                scenario.startsWith('legacy') ? patientId : 'dossier-1',
               );
               if (scenario == 'server-races') {
                 return http.Response(
@@ -484,16 +490,17 @@ void main() {
         'equal',
         'missing-time',
         'legacy',
+        'legacy-deleted',
         'server-races',
       }.contains(scenario);
       expect(result.conflictCount, succeeds ? 0 : 1);
       final note = (await db.query('note_pages')).single;
       expect(
         await OfflineVault.instance.openString(note['drawing_json'] as String),
-        scenario == 'edit-during-read' ? '{"latest":true}' : '{"local":true}',
+        scenario == 'edit-during-read' ? '{"latest":true}' : localDrawing,
       );
       expect(writes, 1);
-      if (scenario == 'retry-existing') {
+      if (scenario.startsWith('retry-existing')) {
         // The first cycle retains a conflict after a transient read failure.
         failRecoveryRead = false;
         final retry = await service.pushPendingChanges();

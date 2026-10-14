@@ -588,9 +588,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Résolution impossible pour le moment. La note locale est conservée.',
+              choice == 'local' &&
+                      _dataService.noteConflictResolutionFailure != null
+                  ? '${_dataService.noteConflictResolutionFailure} La note locale est conservée.'
+                  : 'Résolution impossible pour le moment. La note locale est conservée.',
             ),
           ),
         );

@@ -13,6 +13,13 @@ import 'app_config.dart';
 import 'document_repository.dart' show InlineDocumentBytes, InlineDocumentOrder;
 import 'note_repository.dart' show InlinePlanBytes;
 
+class NotePageReadException implements Exception {
+  const NotePageReadException(this.statusCode);
+  final int statusCode;
+  @override
+  String toString() => 'Remote note fetch failed ($statusCode)';
+}
+
 class SyncSessionScope {
   SyncSessionScope()
     : epoch = AppConfig.sessionEpoch,
@@ -2944,7 +2951,7 @@ class NocodbApiClient {
         .timeout(_defaultTimeout);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Remote note fetch failed (${response.statusCode})');
+      throw NotePageReadException(response.statusCode);
     }
 
     final payload = jsonDecode(response.body) as Map<String, dynamic>;
