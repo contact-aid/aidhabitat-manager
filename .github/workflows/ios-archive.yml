@@ -1,0 +1,77 @@
+name: Prepare iOS archive
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-archive-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: Compile unsigned iOS release for Apple signing
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.4'
+          channel: stable
+      - name: Check Apple SDK
+        run: |
+          xcodebuild -version
+          xcodebuild -version -sdk iphoneos SDKVersion
+      - name: Archive release without signing credentials
+        working-directory: aid_habitat_app
+        run: |
+          flutter pub get
+          flutter build ipa --release --no-codesign \
+            --obfuscate --split-debug-info=build/ios-release-symbols \
+            --dart-define=AIDHABITAT_API_BASE_URL=https://api.aidhabitat.fr
+      - name: Verify archive identity and preserve provenance
+        env:
+          ARCHIVE_GIT_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, plistlib
+          app = pathlib.Path('aid_habitat_app')
+          archive = app / 'build/ios/archive/Runner.xcarchive'
+          with (archive / 'Products/Applications/Runner.app/Info.plist').open('rb') as f:
+              info = plistlib.load(f)
+          version = next(line.split(':', 1)[1].strip() for line in (app / 'pubspec.yaml').read_text().splitlines() if line.startswith('version:'))
+          name, number = version.split('+', 1)
+          assert info['CFBundleIdentifier'] == 'com.aidhabitat.manager', 'Unexpected bundle ID'
+          assert info['CFBundleShortVersionString'] == name, 'Unexpected app version'
+          assert info['CFBundleVersion'] == number, 'Unexpected build number'
+          output = pathlib.Path('ios-release-candidate')
+          output.mkdir()
+          (output / 'manifest.json').write_text(json.dumps({
+              'gitSha': os.environ['ARCHIVE_GIT_SHA'],
+              'appVersion': name, 'buildNumber': number,
+              'bundleId': info['CFBundleIdentifier'],
+              'apiBaseUrl': 'https://api.aidhabitat.fr',
+              'signed': False, 'testFlightUploaded': False,
+          }, indent=2) + '\n')
+          PY
+          # Zip on macOS before uploading to preserve framework symlinks.
+          ditto -c -k --sequesterRsrc --keepParent \
+            aid_habitat_app/build/ios/archive/Runner.xcarchive \
+            ios-release-candidate/Runner.xcarchive.zip
+          ditto -c -k --sequesterRsrc --keepParent \
+            aid_habitat_app/build/ios-release-symbols \
+            ios-release-candidate/symbols.zip
+          (cd ios-release-candidate && shasum -a 256 *.zip > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aidhabitat-ios-unsigned-${{ github.sha }}
+          path: ios-release-candidate/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Report publication boundary
+        run: |
+          echo 'Archive iOS compilée et non signée. Aucun envoi TestFlight effectué.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Signature et distribution à terminer sur le Mac autorisé avec Xcode et le compte Apple existant.' >> "$GITHUB_STEP_SUMMARY"
