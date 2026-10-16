@@ -118,7 +118,7 @@ void main() {
       expect(rows[0].birthDate, '1948-04-12');
       expect(rows[1].homeHelpTxt, 'Aide deuxième personne');
       expect(rows.map((o) => o.gender), ['Homme', 'Femme']);
-      expect(dossierBeneficiaryTitle(imported), 'Daniel et Heike Lecuyer');
+      expect(dossierBeneficiaryTitle(imported), 'LECUYER Daniel et Heike');
       expect(imported.lastName, 'LECUYER Daniel');
     },
   );
@@ -155,7 +155,7 @@ void main() {
         Occupant(firstName: 'Heike', lastName: 'Lecuyer'),
       ],
     );
-    expect(dossierBeneficiaryTitle(imported), 'Daniel et Heike Lecuyer');
+    expect(dossierBeneficiaryTitle(imported), 'LECUYER Daniel et Heike');
     expect(
       dossierBeneficiaryTitle(
         imported,
@@ -164,9 +164,9 @@ void main() {
           Occupant(firstName: 'Heike', lastName: 'MARTIN'),
         ],
       ),
-      'Daniel Lecuyer et Heike Martin',
+      'LECUYER Daniel et MARTIN Heike',
     );
-    expect(dossierBeneficiaryTitle(patient()), 'René et Madeleine Exemple');
+    expect(dossierBeneficiaryTitle(patient()), 'EXEMPLE René et Madeleine');
   });
 
   test(
