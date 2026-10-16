@@ -417,6 +417,7 @@ const FIELD_SETS = {
     'CreatedAt', 'UpdatedAt',
   ],
   dossiers: [
+    'airtable_stage', 'airtable_report_sent_date',
     'uuid_source', 'patient_id', 'beneficiaires_id', 'status', 'ergo_id', 'visit_date', 'compte_anah',
     'nature_accompagnement', 'envoi_rapport', 'personnes_presentes_visite', 'beneficiaire_prepare', 'created_at', 'CreatedAt', 'UpdatedAt',
   ],
@@ -2631,6 +2632,8 @@ const createVirtualDossier = (beneficiaryRecord, appBeneficiaryId, housingRecord
 
 const createDossier = (beneficiaryRecord, appBeneficiaryId, dossierRecord, housingRecord, contextRecord, infoRecord) => ({
   id: field(dossierRecord, 'uuid_source'),
+  airtableStage: field(dossierRecord, 'airtable_stage') ?? null,
+  airtableReportSentDate: field(dossierRecord, 'airtable_report_sent_date') ?? null,
   patient: mapPatient(beneficiaryRecord, appBeneficiaryId),
   status: stringValue(field(dossierRecord, 'status')) || 'À visiter',
   ergoId: normalizeDossierAssignment(field(dossierRecord, 'ergo_id')),

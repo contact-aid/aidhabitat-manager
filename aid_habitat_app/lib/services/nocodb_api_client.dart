@@ -3092,6 +3092,8 @@ class NocodbApiClient {
       status: _mapStatus(json['status']?.toString()),
       ergoId: json['ergoId']?.toString() ?? '',
       visitDate: json['visitDate']?.toString(),
+      airtableStage: json['airtableStage']?.toString(),
+      airtableReportSentDate: json['airtableReportSentDate']?.toString(),
       housing: Housing(
         type: _mapHousingType(housingJson['typology']?.toString()),
         year: int.tryParse(housingJson['yearConstruction']?.toString() ?? ''),

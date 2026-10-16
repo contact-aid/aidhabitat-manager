@@ -16,6 +16,7 @@ import '../services/references_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/route_service.dart';
 import '../services/visit_date_time.dart';
+import '../services/dossier_workflow.dart';
 
 /// Dashboard screen aligned with the React web `Dashboard.tsx` layout:
 ///   - Welcome header with user name + today's date
@@ -1572,25 +1573,6 @@ class _SegmentDone extends _SegmentState {
 // statuts qu'on a actuellement »). Le badge coloré est dérivé du
 // statut texte tel quel.
 
-/// Helper local pour reproduire la logique de bascule auto « visite
-/// passée → rapport à faire » de DossiersListScreen sans dépendre
-/// d'un export privé. Vrai si la `visitDate` est strictement
-/// antérieure à aujourd'hui (date civile, pas l'heure).
-bool _isVisitInPast(Dossier d) {
-  final raw = d.visitDate;
-  if (raw == null || raw.trim().isEmpty) return false;
-  try {
-    final dt = parseVisitDateTime(raw);
-    if (dt == null) return false;
-    final today = DateTime.now();
-    final dtDay = DateTime(dt.year, dt.month, dt.day);
-    final todayDay = DateTime(today.year, today.month, today.day);
-    return dtDay.isBefore(todayDay);
-  } catch (_) {
-    return false;
-  }
-}
-
 class _PendingReportsPanel extends StatelessWidget {
   final List<Dossier> dossiers;
   final void Function(Dossier) onSelect;
@@ -1604,21 +1586,9 @@ class _PendingReportsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Filtre identique au bucket « Rapport à faire » de
-    // DossiersListScreen (cf. _matchesBucket) — demande utilisateur
-    // 2026-05-12 : « Les bénéficiaires qu'on voit dans rapports en
-    // cours doivent être ceux qu'on retrouve dans rapport à faire
-    // dans mes dossiers ». Critère :
-    //   • status == VISITED (visite réalisée, rapport pas envoyé)
-    //   • OU status == TO_VISIT && date de visite passée (bascule
-    //     auto quand l'ergo a oublié de marquer la visite).
     final pending =
         dossiers
-            .where(
-              (d) =>
-                  d.status == DossierStatus.VISITED ||
-                  (d.status == DossierStatus.TO_VISIT && _isVisitInPast(d)),
-            )
+            .where((d) => dossierBucket(d) == DossierBucket.rapportAFaire)
             .toList(growable: false)
           ..sort((a, b) {
             // Plus récents d'abord (createdAt desc).
@@ -1941,8 +1911,7 @@ class _WeekAgendaPanel extends StatelessWidget {
     //   • date de visite dans la semaine en cours
     final upcoming = <_AgendaItem>[];
     for (final d in dossiers) {
-      if (d.status != DossierStatus.TO_VISIT) continue;
-      if (_isVisitInPast(d)) continue;
+      if (dossierBucket(d) != DossierBucket.visiteAFaire) continue;
       final raw = d.visitDate;
       if (raw == null || raw.isEmpty) continue;
       final when = parseVisitDateTime(raw);

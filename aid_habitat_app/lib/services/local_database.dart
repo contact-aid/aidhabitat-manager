@@ -33,7 +33,7 @@ class LocalDatabase {
   static final LocalDatabase instance = LocalDatabase._();
   static const _dbName = 'aid_habitat_offline.db';
   static const _debugFallbackDbName = 'aid_habitat_offline.debug_fallback.db';
-  static const _dbVersion = 26;
+  static const _dbVersion = 27;
 
   Database? _database;
   Future<Database>? _opening;
@@ -459,6 +459,15 @@ class LocalDatabase {
         'INTEGER NOT NULL DEFAULT 0',
       );
       await _addColumnIfMissing(db, 'note_pages', 'remote_revision', 'TEXT');
+    }
+    if (oldVersion < 27) {
+      await _addColumnIfMissing(db, 'dossiers', 'airtable_stage', 'TEXT');
+      await _addColumnIfMissing(
+        db,
+        'dossiers',
+        'airtable_report_sent_date',
+        'TEXT',
+      );
     }
   }
 
@@ -1331,6 +1340,8 @@ class LocalDatabase {
         status TEXT NOT NULL,
         ergo_id TEXT NOT NULL,
         visit_date TEXT,
+        airtable_stage TEXT,
+        airtable_report_sent_date TEXT,
         autonomy_notes TEXT NOT NULL,
         compte_anah TEXT NOT NULL DEFAULT '',
         nature_accompagnement TEXT NOT NULL DEFAULT '',

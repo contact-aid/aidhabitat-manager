@@ -13,11 +13,9 @@ import '../components/soft_transitions.dart';
 import '../models/types.dart';
 import '../services/references_service.dart';
 import '../services/visit_date_time.dart';
+import '../services/dossier_workflow.dart';
 
-/// Catégories pour les 3 menus déroulants de la page « Mes dossiers »
-/// (demande utilisateur 2026-05-04). Chaque dossier tombe dans
-/// exactement une catégorie selon son `status`.
-enum _DossierBucket { visiteAFaire, rapportAFaire, rapportEnvoye }
+typedef _DossierBucket = DossierBucket;
 
 /// État par section : tri courant + drapeau replié/déroulé. Mutable
 /// (les setState côté écran modifient les champs directement).
@@ -40,47 +38,8 @@ String _bucketTitle(_DossierBucket b) {
   }
 }
 
-/// Détermine si le dossier appartient à la section donnée :
-///   • TO_VISIT avec date à venir (ou aucune date) → Visite à faire
-///   • TO_VISIT avec date PASSÉE                   → Rapport à faire
-///     (demande utilisateur 2026-05-04 : si la date de visite est
-///     dépassée, la visite a manifestement eu lieu — sinon l'ergo
-///     l'aurait reportée — donc on bascule automatiquement en
-///     "Rapport à faire" sans attendre que le statut soit changé
-///     manuellement à VISITED.)
-///   • VISITED                                     → Rapport à faire
-///   • IN_PROGRESS et au-delà                      → Rapport envoyé
 bool _matchesBucket(Dossier d, _DossierBucket b) {
-  final visitInPast = _isVisitInPast(d);
-  switch (b) {
-    case _DossierBucket.visiteAFaire:
-      return d.status == DossierStatus.TO_VISIT && !visitInPast;
-    case _DossierBucket.rapportAFaire:
-      return d.status == DossierStatus.VISITED ||
-          (d.status == DossierStatus.TO_VISIT && visitInPast);
-    case _DossierBucket.rapportEnvoye:
-      return d.status.index >= DossierStatus.IN_PROGRESS.index;
-  }
-}
-
-/// Vrai si la date de visite du dossier est strictement antérieure à
-/// aujourd'hui (comparaison sur la date civile, pas l'heure — un
-/// dossier dont la visite est prévue aujourd'hui reste en "Visite à
-/// faire" jusqu'à minuit). Tolère une date absente ou mal formatée
-/// (renvoie false dans ces cas — on ne bascule pas par défaut).
-bool _isVisitInPast(Dossier d) {
-  final raw = d.visitDate;
-  if (raw == null || raw.trim().isEmpty) return false;
-  try {
-    final dt = parseVisitDateTime(raw);
-    if (dt == null) return false;
-    final today = DateTime.now();
-    final dtDay = DateTime(dt.year, dt.month, dt.day);
-    final todayDay = DateTime(today.year, today.month, today.day);
-    return dtDay.isBefore(todayDay);
-  } catch (_) {
-    return false;
-  }
+  return dossierBucket(d) == b;
 }
 
 class DossiersListScreen extends StatefulWidget {
@@ -106,21 +65,12 @@ class DossiersListScreen extends StatefulWidget {
 class _DossiersListScreenState extends State<DossiersListScreen> {
   final ReferencesService _references = ReferencesService();
   StreamSubscription<ReferencesPayload>? _refsSub;
+  Timer? _workflowTicker;
 
   String _searchTerm = '';
   String? _selectedEpciId; // null = no filter
   String _selectedEpciLabel = 'Communauté de commune';
 
-  // Trois sections collapsibles avec chacune leur propre tri (colonne +
-  // direction) et leur propre état déroulé/replié. Demande utilisateur
-  // 2026-05-04 : « 3 menus déroulants avec chacun ces propres titres
-  // qui font l'ordre ». Catégorisation par status :
-  //   • Visite à faire   = TO_VISIT
-  //   • Rapport à faire  = VISITED (visite réalisée, rapport pas encore
-  //                        envoyé / pas encore passé en IN_PROGRESS)
-  //   • Rapport envoyé   = IN_PROGRESS et au-delà (En cours, Attente
-  //                        devis, Subvention validée, Travaux, Clôturé,
-  //                        Archivé). Tous les statuts post-rapport.
   final Map<_DossierBucket, _BucketState> _bucketStates = {
     _DossierBucket.visiteAFaire: _BucketState(),
     _DossierBucket.rapportAFaire: _BucketState(),
@@ -130,6 +80,9 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
   @override
   void initState() {
     super.initState();
+    _workflowTicker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
     // Trigger a references load (communes + EPCI mapping). If already
     // loaded, this is a no-op.
     _references.ensureLoaded();
@@ -140,6 +93,7 @@ class _DossiersListScreenState extends State<DossiersListScreen> {
 
   @override
   void dispose() {
+    _workflowTicker?.cancel();
     _refsSub?.cancel();
     super.dispose();
   }

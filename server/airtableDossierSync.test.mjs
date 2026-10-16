@@ -13,6 +13,91 @@ const source = (id, date, cancelled = 'NON', first = 'Camille') => ({
   client: { id: `rec${id.slice(3)}`, fields: { Prénom: first, Nom: 'Exemple' } },
 });
 
+test('refresh replaces workflow metadata, including clearing a sending date, without replacing visit work', async () => {
+  for (const sent of ['2026-10-15', '']) {
+    const input = source('recAAAAAAAAAAAAAA', '2026-07-01T08:00:00.000Z');
+    input.dossier.fields.Etape = '2. Envoi du dossier';
+    if (sent) input.dossier.fields['Date envoi dossier'] = sent;
+    const row = { id: 10, fields: {
+      uuid_source: 'airtable:recAAAAAAAAAAAAAA', beneficiaires_id: 11,
+      ergo_id: 'Coralie', visit_date: '2026-07-01T08:00:00.000Z',
+      status: 'À visiter', compte_anah: 'Conservé',
+      airtable_stage: '1a. Rendez-vous à Prendre',
+      airtable_report_sent_date: '2026-10-01',
+    } };
+    const options = {
+      ergoLabel: 'Coralie', sourceRows: [input], dossierRows: [row],
+      beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple' } }],
+    };
+    const preview = await syncCurrentProfileDossiers({ ...options, dryRun: true });
+    const expected = { airtable_stage: '2. Envoi du dossier', airtable_report_sent_date: sent };
+    assert.deepEqual(preview.changes[0].fields.dossier, expected);
+    const patches = [];
+    await syncCurrentProfileDossiers({ ...options,
+      updateDossier: async (_, patch) => patches.push(patch),
+      updateBeneficiary: async () => assert.fail('unexpected beneficiary update'),
+    });
+    assert.deepEqual(patches, [expected]);
+    const unchanged = await syncCurrentProfileDossiers({ ...options, dryRun: true,
+      dossierRows: [{ ...row, fields: { ...row.fields, ...expected } }],
+    });
+    assert.deepEqual(unchanged.changes, []);
+    const excluded = await syncCurrentProfileDossiers({ ...options, dryRun: true, selectedIds: new Set() });
+    assert.deepEqual(excluded.changes, []);
+  }
+});
+
+test('an existing cancelled dossier is refreshed even if its appointment was removed', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '', 'OUI');
+  input.dossier.fields.Etape = '1a. Rendez-vous à Prendre';
+  const result = await syncCurrentCoralieDossiers({
+    sourceRows: [input], dryRun: true,
+    dossierRows: [{ id: 10, fields: {
+      uuid_source: 'airtable:recAAAAAAAAAAAAAA', beneficiaires_id: 11, ergo_id: 'Coralie',
+    } }],
+    beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple' } }],
+  });
+  assert.equal(result.changes[0].fields.dossier.airtable_stage, 'Annulé');
+});
+
+test('a rescheduled or removed appointment replaces the old schedule and remains repeatable', async () => {
+  for (const visit of ['2026-11-20T09:00:00Z', '']) {
+    const input = source('recAAAAAAAAAAAAAA', visit);
+    input.dossier.fields.Etape = '1a. Rendez-vous à Prendre';
+    const row = { id: 10, fields: {
+      uuid_source: 'airtable:recAAAAAAAAAAAAAA', beneficiaires_id: 11, ergo_id: 'Coralie',
+      visit_date: '2026-10-15T08:00:00Z',
+      airtable_stage: '1a. Rendez-vous à Prendre', airtable_report_sent_date: '',
+    } };
+    const options = { sourceRows: [input], dossierRows: [row], dryRun: true,
+      beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple' } }] };
+    const result = await syncCurrentCoralieDossiers(options);
+    assert.deepEqual(result.changes[0].fields.dossier, { visit_date: visit || null });
+    const unchanged = await syncCurrentCoralieDossiers({ ...options,
+      dossierRows: [{ ...row, fields: { ...row.fields, visit_date: visit || null } }],
+    });
+    assert.deepEqual(unchanged.changes, []);
+  }
+});
+
+test('new dossiers expose workflow metadata in both preview and creation', async () => {
+  const input = source('recAAAAAAAAAAAAAA', '2026-10-15T08:00:00Z');
+  input.dossier.fields.Etape = '3. Suivi de dossier';
+  input.dossier.fields['Date envoi dossier'] = '2026-10-16';
+  const options = { sourceRows: [input], dossierRows: [], beneficiaryRows: [] };
+  const preview = await syncCurrentCoralieDossiers({ ...options, dryRun: true });
+  let created;
+  await syncCurrentCoralieDossiers({ ...options,
+    createBeneficiary: async () => ({ id: 11 }),
+    createDossier: async (fields) => { created = fields; return { id: 10 }; },
+  });
+  assert.equal(created.airtable_stage, '3. Suivi de dossier');
+  assert.equal(created.airtable_report_sent_date, '2026-10-16');
+  for (const [key, expected] of Object.entries(preview.changes[0].fields.dossier)) {
+    assert.equal(created[key], expected);
+  }
+});
+
 test('only the agreed recent, non-cancelled cohort is imported in bounded batches', async () => {
   const created = [];
   const rows = [
@@ -58,7 +143,7 @@ test('an Airtable reassignment moves the existing dossier without replacing its 
   assert.equal(result.created, 1);
   assert.equal(result.updated, 1);
   assert.equal(created[1].ergo_id, 'Christelle');
-  assert.deepEqual(patches, [{ ergo_id: 'Christelle' }]);
+  assert.deepEqual(patches, [{ ergo_id: 'Christelle', airtable_stage: '', airtable_report_sent_date: '' }]);
   assert.deepEqual(result.skipped, []);
 });
 
@@ -80,10 +165,10 @@ test('an existing dossier can be reassigned even when the Airtable client is inc
     updateDossier: async (_, patch) => patches.push(patch),
   });
   assert.equal(result.updated, 1);
-  assert.deepEqual(patches, [{ ergo_id: 'Fabien CRIBIER' }]);
+  assert.deepEqual(patches, [{ ergo_id: 'Fabien CRIBIER', airtable_stage: '', airtable_report_sent_date: '' }]);
 });
 
-test('an existing dossier keeps every populated field when Airtable differs', async () => {
+test('an existing dossier refreshes scheduling while preserving populated visit work', async () => {
   const patches = [];
   const result = await syncCurrentCoralieDossiers({
     sourceRows: [source('recAAAAAAAAAAAAAA', '2026-09-29T08:00:00.000Z')],
@@ -97,9 +182,12 @@ test('an existing dossier keeps every populated field when Airtable differs', as
     updateDossier: async (_, patch) => patches.push({ table: 'dossier', patch }),
   });
   assert.equal(result.created, 0);
-  assert.equal(result.updated, 0);
+  assert.equal(result.updated, 1);
   assert.equal(result.remaining, 0);
-  assert.deepEqual(patches, []);
+  assert.deepEqual(patches, [{ table: 'dossier', patch: {
+    visit_date: '2026-09-29T08:00:00.000Z',
+    airtable_stage: '', airtable_report_sent_date: '',
+  } }]);
 });
 
 test('Airtable fills only empty beneficiary fields and preserves the dossier status', async () => {
@@ -128,6 +216,7 @@ test('Airtable fills only empty beneficiary fields and preserves the dossier sta
       nombre_personnes: 1,
       categorie_revenu_id1: 42,
     } },
+    { table: 'dossier', patch: { airtable_stage: '', airtable_report_sent_date: '' } },
   ]);
 });
 
@@ -145,6 +234,7 @@ test('an empty visit date and status can be prefilled without changing other fie
   });
   assert.deepEqual(patches, [{
     visit_date: '2026-09-29T08:00:00.000Z', status: 'En cours',
+    airtable_stage: '', airtable_report_sent_date: '',
   }]);
 });
 
@@ -207,7 +297,8 @@ test('prefills housing and ownership from new-client Airtable fields without rep
   const result = await syncCurrentCoralieDossiers({
     sourceRows: [input],
     dossierRows: [{ id: 10, fields: { uuid_source: 'airtable:recAAAAAAAAAAAAAA',
-      beneficiaires_id: 11, ergo_id: 'Coralie', visit_date: '2026-09-29T08:00:00.000Z' } }],
+      beneficiaires_id: 11, ergo_id: 'Coralie', visit_date: '2026-09-29T08:00:00.000Z',
+      airtable_stage: '', airtable_report_sent_date: '' } }],
     beneficiaryRows: [{ id: 11, fields: { prenom: 'Camille', nom: 'Exemple' } }],
     housingRows: [{ id: 21, fields: { beneficiaires_id: 11, annee_construction: '1981' } }],
     housingTypes: [{ id: 1, fields: { libelle: 'Maison' } }],

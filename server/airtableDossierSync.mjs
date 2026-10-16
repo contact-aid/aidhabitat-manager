@@ -45,7 +45,9 @@ export async function syncCurrentProfileDossiers({
   maxChanges = 5, enhancedWeb = true, dryRun = false, selectedIds = null,
 }) {
   if (!ergoLabel?.trim()) throw new TypeError('Profil intervenant requis');
-  const eligible = sourceRows.filter(isCurrentAdaptationDossier)
+  const existingUuids = new Set(dossierRows.map((row) => normalized(value(row, 'uuid_source'))));
+  const eligible = sourceRows.filter((row) => isCurrentAdaptationDossier(row)
+    || (enhancedWeb && existingUuids.has(`airtable:${row.dossier?.id}`)))
     .map((row) => projectAirtableDossier(row, { enhancedWeb }));
   for (const source of enhancedWeb ? eligible : []) {
     const bareme = baremeFor(baremeRows, source.beneficiary.nombre_personnes);
@@ -113,8 +115,13 @@ export async function syncCurrentProfileDossiers({
     }
     const dossierPatch = Object.fromEntries(Object.entries(source.dossier)
       .filter(([key]) => isEmpty(value(existingDossier, key))));
-    // Ownership follows the verified Airtable assignment; all other existing
-    // dossier fields remain fill-only, including notes and visit work.
+    if (enhancedWeb) {
+      for (const key of ['visit_date', 'airtable_stage', 'airtable_report_sent_date']) {
+        if (!same(value(existingDossier, key), source.dossier[key])
+          || (key !== 'visit_date' && value(existingDossier, key) == null)) dossierPatch[key] = source.dossier[key];
+        else delete dossierPatch[key];
+      }
+    }
     if (!same(value(existingDossier, 'ergo_id'), ergoLabel)) {
       dossierPatch.ergo_id = ergoLabel;
     }

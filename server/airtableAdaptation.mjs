@@ -10,7 +10,7 @@ const dossierFields = [
   'Dossier ID', 'Adaptation ou énergie', 'Intervenant couleur', 'Nom intervenant',
   'No Client', 'Commentaires', 'Date du RDV avec heure',
   'Nature des travaux conca', 'Commune', 'Commune texte', 'Communauté de communes',
-  'Audit ou Eval', 'Annulé ?',
+  'Audit ou Eval', 'Annulé ?', 'Etape', 'Date envoi dossier',
 ];
 const clientFields = [
   'Prénom', 'Nom', 'Téléphone', 'Adresse mail', 'N° et rue',
@@ -85,6 +85,12 @@ export function projectAirtableDossier({ dossier, client }, { enhancedWeb = true
   }
   const incomeCategory = first(person[enhancedWeb ? 'Catégorie sans emoji' : 'Catégorie']);
   add(dossierPatch, 'visit_date', first(source['Date du RDV avec heure']));
+  if (enhancedWeb) {
+    dossierPatch.visit_date = first(source['Date du RDV avec heure']) || null;
+    dossierPatch.airtable_stage = normalized(first(source['Annulé ?'])) === 'oui'
+      ? 'Annulé' : first(source.Etape);
+    dossierPatch.airtable_report_sent_date = first(source['Date envoi dossier']);
+  }
   const nature = normalized(first(source['Nature des travaux conca']));
   if (nature.includes('complet')) dossierPatch.nature_accompagnement = 'complet';
   else if (nature.includes('ergo')) dossierPatch.nature_accompagnement = 'ergo';

@@ -102,6 +102,13 @@ const MOBILE_SCHEMA = [
 
 const EXISTING_TABLE_PATCHES = [
   {
+    tableName: 'dossiers',
+    fields: [
+      ['airtable_stage', 'SingleLineText'],
+      ['airtable_report_sent_date', 'SingleLineText'],
+    ],
+  },
+  {
     tableName: process.env.NOCODB_DIAGNOSTIC_SANITAIRES_TABLE_NAME || 'diagnostic_sanitaires',
     fields: [
       ['sdb_instances_json', 'LongText'],

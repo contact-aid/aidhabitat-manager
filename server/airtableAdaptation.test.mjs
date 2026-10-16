@@ -107,6 +107,7 @@ test('projection only contains authorized dossier identity and scheduling fields
   });
   assert.deepEqual(result.dossier, {
     visit_date: '2026-10-01T08:00:00.000Z', nature_accompagnement: 'complet',
+    airtable_stage: '', airtable_report_sent_date: '',
   });
   assert.equal(result.quickNote, 'Note fictive');
   assert.equal(result.intakeNote, 'Note d’inscription fictive');

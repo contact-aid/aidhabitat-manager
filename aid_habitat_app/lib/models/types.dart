@@ -1262,6 +1262,8 @@ class Dossier {
   final DossierStatus status;
   final String ergoId;
   final String? visitDate;
+  final String? airtableStage;
+  final String? airtableReportSentDate;
   final Housing housing;
   final String autonomyNotes;
   final Map<String, FinancialPlan> plans;
@@ -1290,6 +1292,8 @@ class Dossier {
     required this.status,
     required this.ergoId,
     this.visitDate,
+    this.airtableStage,
+    this.airtableReportSentDate,
     required this.housing,
     required this.autonomyNotes,
     required this.plans,
@@ -1323,6 +1327,8 @@ class Dossier {
       status: status ?? this.status,
       ergoId: ergoId ?? this.ergoId,
       visitDate: visitDate ?? this.visitDate,
+      airtableStage: airtableStage,
+      airtableReportSentDate: airtableReportSentDate,
       housing: housing ?? this.housing,
       autonomyNotes: autonomyNotes ?? this.autonomyNotes,
       plans: plans ?? this.plans,

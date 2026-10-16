@@ -1000,6 +1000,8 @@ class DossierRepository {
         d.status AS dossier_status,
         d.ergo_id AS dossier_ergo_id,
         d.visit_date AS dossier_visit_date,
+        d.airtable_stage AS dossier_airtable_stage,
+        d.airtable_report_sent_date AS dossier_airtable_report_sent_date,
         d.autonomy_notes AS dossier_autonomy_notes,
         d.created_at AS dossier_created_at,
         d.sync_state AS dossier_sync_state,
@@ -2051,6 +2053,10 @@ class DossierRepository {
       'status': _asDossierStatusName(raw['status']),
       'ergo_id': raw['ergoId']?.toString() ?? '',
       'visit_date': raw['visitDate']?.toString(),
+      if (raw.containsKey('airtableStage'))
+        'airtable_stage': raw['airtableStage']?.toString(),
+      if (raw.containsKey('airtableReportSentDate'))
+        'airtable_report_sent_date': raw['airtableReportSentDate']?.toString(),
       'autonomy_notes': raw['autonomyNotes']?.toString() ?? '',
       'compte_anah': raw['compteAnah']?.toString() ?? '',
       'nature_accompagnement': raw['natureAccompagnement']?.toString() ?? '',
@@ -2632,6 +2638,9 @@ class DossierRepository {
       status: DossierStatus.values.byName(row['dossier_status'] as String),
       ergoId: row['dossier_ergo_id'] as String,
       visitDate: row['dossier_visit_date'] as String?,
+      airtableStage: row['dossier_airtable_stage'] as String?,
+      airtableReportSentDate:
+          row['dossier_airtable_report_sent_date'] as String?,
       compteAnah: row['dossier_compte_anah'] as String? ?? '',
       natureAccompagnement:
           row['dossier_nature_accompagnement'] as String? ?? '',

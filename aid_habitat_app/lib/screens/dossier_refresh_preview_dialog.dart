@@ -15,6 +15,8 @@ const _fieldLabels = <String, String>{
   'categorie_revenu_id1': 'Catégorie de revenus',
   'statut_occupation_id1': 'Statut d’occupation',
   'visit_date': 'Date de visite',
+  'airtable_stage': 'Étape Airtable',
+  'airtable_report_sent_date': 'Date d’envoi du dossier',
   'nature_accompagnement': 'Type d’accompagnement',
   'status': 'Statut du dossier',
   'type_de_logement_id': 'Type de logement',
