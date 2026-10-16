@@ -27,7 +27,7 @@ DossierBucket? dossierBucket(Dossier dossier, {DateTime? now}) {
     }
     if (visit == null) return null;
     if (past) return DossierBucket.rapportAFaire;
-    return RegExp(r'^1a(?:\b|\.)', caseSensitive: false).hasMatch(stage)
+    return RegExp(r'^1[ab](?:\b|\.)', caseSensitive: false).hasMatch(stage)
         ? DossierBucket.visiteAFaire
         : null;
   }

@@ -42,19 +42,37 @@ void main() {
     );
   });
 
-  test('only step 1a with a scheduled appointment is to visit', () {
+  test('steps 1a and 1b with a scheduled appointment are to visit', () {
     expect(bucket(dossier(visit: '2026-10-20')), DossierBucket.visiteAFaire);
-    for (final stage in [
-      '1b. Rendez-vous pris',
-      '2. Envoi du dossier',
-      '',
-      '1ab',
-    ]) {
+    for (final stage in ['2. Envoi du dossier', '', '1ab']) {
       expect(bucket(dossier(stage: stage)), isNull);
     }
     for (final visit in [null, '', 'invalid']) {
       expect(bucket(dossier(visit: visit)), isNull);
     }
+  });
+
+  test('the four scheduled October appointments in step 1b remain visible', () {
+    for (final visit in [
+      '2026-10-21T12:00:00Z',
+      '2026-10-21T14:15:00Z',
+      '2026-10-23T11:30:00Z',
+      '2026-10-27T08:00:00Z',
+    ]) {
+      expect(
+        bucket(dossier(stage: '1b. Rendez-vous pris', visit: visit)),
+        DossierBucket.visiteAFaire,
+      );
+    }
+    expect(
+      bucket(dossier(stage: '1b. Rendez-vous pris', visit: '2026-10-15')),
+      DossierBucket.rapportAFaire,
+    );
+    expect(bucket(dossier(stage: '1b. Rendez-vous pris', visit: null)), isNull);
+    expect(
+      bucket(dossier(stage: '1b. Rendez-vous pris', sent: '2026-10-16')),
+      DossierBucket.rapportEnvoye,
+    );
   });
 
   test(

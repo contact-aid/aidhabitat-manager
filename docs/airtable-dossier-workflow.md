@@ -13,7 +13,7 @@ Le classement des dossiers actualisés utilise ces règles, dans cet ordre :
 - Un rendez-vous antérieur à aujourd’hui place le dossier sans envoi dans
   « Rapport à faire », quelle que soit son étape.
 - Un rendez-vous aujourd’hui ou à venir apparaît dans « Visite à faire »
-  uniquement pour l’étape `1a. Rendez-vous à Prendre`.
+  pour les étapes `1a. Rendez-vous à Prendre` et `1b. Rendez-vous pris`.
 - Une date de rendez-vous absente ou illisible exclut les deux sections à faire.
 
 La comparaison des jours utilise Europe/Paris. Le basculement intervient dès le

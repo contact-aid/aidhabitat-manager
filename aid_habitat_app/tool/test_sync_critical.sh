@@ -57,6 +57,8 @@ bash "$script_dir/test_safely.sh" \
   test/services/document_page_save_test.dart \
   test/services/image_rotation_worker_test.dart \
   test/services/visit_date_time_test.dart \
+  test/services/dossier_workflow_test.dart \
+  test/services/dossier_workflow_storage_test.dart \
   test/screens/database_unavailable_screen_test.dart \
   test/screens/agent3_sync_ownership_review_screen_test.dart \
   test/screens/dossier_note_read_only_test.dart \
