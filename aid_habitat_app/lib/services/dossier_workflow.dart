@@ -22,14 +22,23 @@ DossierBucket? dossierBucket(Dossier dossier, {DateTime? now}) {
   final stage = dossier.airtableStage?.trim().toLowerCase();
   if (stage != null) {
     if (stage == 'annulé') return null;
-    if (parseVisitDateTime(dossier.airtableReportSentDate) != null) {
+    final scheduledStage = RegExp(r'^1[ab](?:\b|\.)').hasMatch(stage);
+    final sent = parseVisitDateTime(dossier.airtableReportSentDate);
+    final previousReport =
+        scheduledStage &&
+        visit != null &&
+        sent != null &&
+        DateTime.utc(
+          sent.year,
+          sent.month,
+          sent.day,
+        ).isBefore(DateTime.utc(visit.year, visit.month, visit.day));
+    if (sent != null && !previousReport) {
       return DossierBucket.rapportEnvoye;
     }
     if (visit == null) return null;
     if (past) return DossierBucket.rapportAFaire;
-    return RegExp(r'^1[ab](?:\b|\.)', caseSensitive: false).hasMatch(stage)
-        ? DossierBucket.visiteAFaire
-        : null;
+    return scheduledStage ? DossierBucket.visiteAFaire : null;
   }
   if (dossier.status.index >= DossierStatus.IN_PROGRESS.index) {
     return DossierBucket.rapportEnvoye;

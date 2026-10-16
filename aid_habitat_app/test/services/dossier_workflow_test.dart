@@ -60,7 +60,13 @@ void main() {
       '2026-10-27T08:00:00Z',
     ]) {
       expect(
-        bucket(dossier(stage: '1b. Rendez-vous pris', visit: visit)),
+        bucket(
+          dossier(
+            stage: '1b. Rendez-vous pris',
+            visit: visit,
+            sent: visit == '2026-10-21T14:15:00Z' ? '2026-02-06' : null,
+          ),
+        ),
         DossierBucket.visiteAFaire,
       );
     }
@@ -74,6 +80,32 @@ void main() {
       DossierBucket.rapportEnvoye,
     );
   });
+
+  test(
+    'an older report does not hide a new scheduled visit or its pending report',
+    () {
+      final input = dossier(
+        stage: '1b. Rendez-vous pris',
+        visit: '2026-10-21T14:15:00Z',
+        sent: '2026-02-06',
+      );
+      expect(bucket(input), DossierBucket.visiteAFaire);
+      expect(
+        dossierBucket(input, now: DateTime.utc(2026, 10, 22, 12)),
+        DossierBucket.rapportAFaire,
+      );
+      expect(
+        bucket(
+          dossier(
+            stage: '1b. Rendez-vous pris',
+            visit: '2026-10-15T14:15:00Z',
+            sent: '2026-10-16',
+          ),
+        ),
+        DossierBucket.rapportEnvoye,
+      );
+    },
+  );
 
   test(
     'a past appointment without sending is pending regardless of stale status',
@@ -106,7 +138,13 @@ void main() {
     () {
       for (final visit in [null, '2026-10-15', '2026-10-20']) {
         expect(
-          bucket(dossier(visit: visit, sent: '2026-10-16')),
+          bucket(
+            dossier(
+              stage: '3. Suivi de dossier',
+              visit: visit,
+              sent: '2026-10-16',
+            ),
+          ),
           DossierBucket.rapportEnvoye,
         );
       }

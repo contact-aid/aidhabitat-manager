@@ -10,6 +10,8 @@ Le classement des dossiers actualisés utilise ces règles, dans cet ordre :
 
 - Un dossier annulé reste exclu des trois sections.
 - Une date d’envoi renseignée place le dossier dans « Rapport envoyé ».
+  Pour les étapes 1A et 1B, un envoi antérieur au jour du rendez-vous concerne
+  un rapport précédent et ne masque pas la nouvelle visite ni son rapport à faire.
 - Un rendez-vous antérieur à aujourd’hui place le dossier sans envoi dans
   « Rapport à faire », quelle que soit son étape.
 - Un rendez-vous aujourd’hui ou à venir apparaît dans « Visite à faire »
