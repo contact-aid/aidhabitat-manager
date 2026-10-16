@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/dossier_occupants.dart';
+import '../../components/occupant_identity_dialog.dart';
 import '../../models/mobility_aids.dart';
 import '../../models/aggir_eligibility.dart';
 import '../../services/data_service.dart';
@@ -189,6 +191,8 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
 
   // Per-occupant fields
   late List<Occupant> _occupants;
+  bool _identityProjectionPending = true;
+  late Patient _identitySourcePatient;
   final Map<int, List<_RetirementFundKind>> _pendingRetirementFundFields = {};
 
   // References
@@ -367,16 +371,16 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     _occupationStatus = p.occupationStatus;
     _incomeCategory = p.incomeCategory;
     _fiscalRevenue = p.fiscalRevenue;
-    _numberPeople = p.numberPeople != null && p.numberPeople! > 0
-        ? p.numberPeople!
-        : 1;
     _trustedName = p.trustedPerson.name;
     _trustedPhone = p.trustedPerson.phone;
     _trustedEmail = p.trustedPerson.email;
     _compteAnah = widget.dossier.compteAnah;
     _envoiRapport = widget.dossier.envoiRapport;
     _personnesPresentesVisite = widget.dossier.personnesPresentesVisite;
-    _occupants = _buildOccupantsFromPatient(p, _numberPeople);
+    _identityProjectionPending = true;
+    _identitySourcePatient = p;
+    _occupants = dossierOccupants(p);
+    _numberPeople = _occupants.length;
     // Compare serialized form values, including legacy fallbacks, not SQLite.
     _savedPatient = _buildPatientSaveMap();
     _savedAdmin = _buildAdminSaveMap();
@@ -386,60 +390,6 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     _observedAdmin = widget.dossier.dossierEditBaseline == null
         ? null
         : Map.of(widget.dossier.dossierEditBaseline!);
-  }
-
-  List<Occupant> _buildOccupantsFromPatient(Patient p, int count) {
-    final existing = List<Occupant>.from(p.occupants);
-    final fallbacks = <Occupant>[
-      Occupant(
-        firstName: p.firstName,
-        lastName: p.lastName,
-        birthDate: p.birthDate,
-        apa: p.apa,
-        invalidity: p.invalidity,
-        invalidityTxt: p.invalidityTxt,
-        homeHelp: p.homeHelp,
-        homeHelpTxt: p.homeHelpTxt,
-        dependenceTxt: p.dependenceTxt,
-        caisseRetraitePrincipale: p.caisseRetraitePrincipale,
-        caissesRetraiteComplementaires: p.caissesRetraiteComplementaires,
-      ),
-      if (p.secondFirstName.isNotEmpty || p.secondLastName.isNotEmpty)
-        Occupant(firstName: p.secondFirstName, lastName: p.secondLastName),
-    ];
-    final merged = <Occupant>[];
-    final targetLen = count < 1 ? 1 : count;
-    for (var i = 0; i < targetLen; i++) {
-      Occupant occ;
-      if (i < existing.length) {
-        occ = existing[i];
-      } else if (i < fallbacks.length) {
-        occ = fallbacks[i];
-      } else {
-        occ = const Occupant();
-      }
-      // Override firstName/lastName depuis les champs TOP-LEVEL du
-      // patient pour les 2 premiers occupants. Source de vérité :
-      //   - occupant 0 → `p.firstName` / `p.lastName`
-      //   - occupant 1 → `p.secondFirstName` / `p.secondLastName`
-      // Sans cet override, quand l'ergo change le nom dans
-      // `dossier_screen`, le header occupant restait sur l'ancienne
-      // valeur stockée dans `p.occupants[0]` (qui n'est sync'é qu'au
-      // save différé) — bug signalé 2026-04-29 : « quand je change le
-      // nom, le changement n'est pas instantané pour le nom de
-      // l'occupant s'il y'en a plusieurs ».
-      if (i == 0) {
-        occ = occ.copyWith(firstName: p.firstName, lastName: p.lastName);
-      } else if (i == 1 &&
-          (p.secondFirstName.isNotEmpty || p.secondLastName.isNotEmpty)) {
-        occ = occ.copyWith(
-          firstName: p.secondFirstName,
-          lastName: p.secondLastName,
-        );
-      }
-      merged.add(occ);
-    }
-    return merged;
   }
 
   @override
@@ -492,6 +442,8 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
         oldP.birthDate != newP.birthDate ||
         oldP.secondFirstName != newP.secondFirstName ||
         oldP.secondLastName != newP.secondLastName ||
+        jsonEncode(oldP.occupants.map((o) => o.toJson()).toList()) !=
+            jsonEncode(newP.occupants.map((o) => o.toJson()).toList()) ||
         numberPeopleChanged ||
         oldWidget.dossier.compteAnah != widget.dossier.compteAnah ||
         oldWidget.dossier.envoiRapport != widget.dossier.envoiRapport;
@@ -658,11 +610,19 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
       primary.caissesRetraiteComplementaires,
     );
     return {
-      'first_name': primary.firstName,
-      'last_name': primary.lastName,
+      'first_name': _identityProjectionPending
+          ? _identitySourcePatient.firstName
+          : primary.firstName,
+      'last_name': _identityProjectionPending
+          ? _identitySourcePatient.lastName
+          : primary.lastName,
       'birth_date': primary.birthDate,
-      'second_first_name': secondary.firstName,
-      'second_last_name': secondary.lastName,
+      'second_first_name': _identityProjectionPending
+          ? _identitySourcePatient.secondFirstName
+          : secondary.firstName,
+      'second_last_name': _identityProjectionPending
+          ? _identitySourcePatient.secondLastName
+          : secondary.lastName,
       'address': _address,
       'city': _city,
       'zip_code': _zipCode,
@@ -699,8 +659,31 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
       'caisses_retraite_complementaires': primaryComplementaryFunds.isEmpty
           ? ''
           : primaryComplementaryFunds.first,
-      'occupants_json': jsonEncode(_occupants.map((o) => o.toJson()).toList()),
+      'occupants_json': jsonEncode([
+        for (var i = 0; i < _occupants.length; i++)
+          _occupantForSave(i).toJson(),
+      ]),
     };
+  }
+
+  Occupant _occupantForSave(int index) {
+    final occupant = _occupants[index];
+    if (!_identityProjectionPending) return occupant;
+    final patient = _identitySourcePatient;
+    final source = index < patient.occupants.length
+        ? patient.occupants[index]
+        : index == 0
+        ? Occupant(firstName: patient.firstName, lastName: patient.lastName)
+        : index == 1
+        ? Occupant(
+            firstName: patient.secondFirstName,
+            lastName: patient.secondLastName,
+          )
+        : const Occupant();
+    return occupant.copyWith(
+      firstName: source.firstName,
+      lastName: source.lastName,
+    );
   }
 
   Map<String, dynamic> _buildAdminSaveMap() => {
@@ -742,9 +725,24 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     _scheduleSave();
   }
 
-  // Note: numberPeople is controlled from the dossier screen. When it
-  // changes, the visit report's didUpdateWidget re-hydrates _occupants via
-  // _loadFromDossier so the per-occupant sections automatically adapt.
+  Future<void> _editOccupantIdentity(int index) async {
+    final edited = await showDialog<List<Occupant>>(
+      context: context,
+      builder: (_) =>
+          OccupantIdentityDialog(occupants: _occupants, initialIndex: index),
+    );
+    if (!mounted || edited == null) return;
+    // Explicit identity confirmation also commits the legacy name projection.
+    // Unrelated edits keep using the projected baseline without rewriting names.
+    _identityProjectionPending = false;
+    setState(() {
+      _occupants = edited;
+      _numberPeople = edited.length;
+      _currentOccupantIndex = index.clamp(0, edited.length - 1);
+    });
+    _recomputeIncomeCategory();
+    await _save();
+  }
 
   // ---------------------------------------------------------------------------
   // Build
@@ -1183,8 +1181,8 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
   /// précédent. Le header + la partie "per occupant" changent ;
   /// `sharedContent` reste identique.
   ///
-  /// Quand le foyer n'a qu'une personne, le header et les dots
-  /// disparaissent (pas de navigation nécessaire).
+  /// Le profil conserve le nom pour ouvrir l'éditeur même avec une personne.
+  /// Les autres sections masquent la navigation quand il n'y a qu'un occupant.
   Widget _buildOccupantSwipeContainer({
     required Widget perOccupantContent,
     Widget? sharedContent,
@@ -1198,6 +1196,10 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_subSectionIndex == 0) ...[
+              _buildOccupantHeader(0),
+              const SizedBox(height: 12),
+            ],
             perOccupantContent,
             if (sharedContent != null) ...[
               const SizedBox(height: 24),
@@ -1277,7 +1279,7 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
     final fallback = "Occupant ${idx + 1}";
     final display = (first.isEmpty && last.isEmpty)
         ? fallback
-        : [first, last.toUpperCase()].where((s) => s.isNotEmpty).join(' ');
+        : [last.toUpperCase(), first].where((s) => s.isNotEmpty).join(' ');
     final total = _occupants.length;
     final hasNav = total > 1;
     // `role` (BÉNÉFICIAIRE PRINCIPAL / CONJOINT·E) retiré sur demande user
@@ -1319,20 +1321,29 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
         children: [
           arrow(LucideIcons.chevronLeft, _occupantPrev),
           Expanded(
-            child: Center(
-              child: Text(
-                display,
-                style: GoogleFonts.nunito(
-                  fontSize: 17,
-                  // w700 → w600 (demande user 2026-05-13 : nom occupant
-                  // « moins épais »).
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.25,
-                  height: 1.15,
-                  color: const Color(0xFF0E1116),
+            child: Tooltip(
+              message: 'Double-cliquez pour modifier les occupants',
+              child: InkWell(
+                key: const ValueKey('edit-occupant-identity'),
+                onDoubleTap: _subSectionIndex == 0
+                    ? () => _editOccupantIdentity(idx)
+                    : null,
+                child: Center(
+                  child: Text(
+                    display,
+                    style: GoogleFonts.nunito(
+                      fontSize: 17,
+                      // w700 → w600 (demande user 2026-05-13 : nom occupant
+                      // « moins épais »).
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.25,
+                      height: 1.15,
+                      color: const Color(0xFF0E1116),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
           ),

@@ -164,7 +164,7 @@ String dossierBeneficiaryTitle(Patient patient, {List<Occupant>? occupants}) {
   if (named.length <= 1) {
     final primary = named.isEmpty ? null : named.first;
     return '${(primary?.lastName ?? patient.lastName).trim().toUpperCase()} '
-            '${(primary?.firstName ?? patient.firstName).trim()}'
+            '${_displayName(primary?.firstName ?? patient.firstName)}'
         .trim();
   }
   final surname = named.first.lastName;
@@ -174,14 +174,14 @@ String dossierBeneficiaryTitle(Patient patient, {List<Occupant>? occupants}) {
             occupant.firstName.trim().isNotEmpty &&
             _normalizedName(occupant.lastName) == _normalizedName(surname),
       )) {
-    return '${named.map((o) => _displayName(o.firstName)).join(' et ')} '
-        '${_displayName(surname)}';
+    return '${surname.trim().toUpperCase()} '
+        '${named.map((o) => _displayName(o.firstName)).join(' et ')}';
   }
   return named
       .map(
         (o) => [
+          o.lastName.trim().toUpperCase(),
           _displayName(o.firstName),
-          _displayName(o.lastName),
         ].where((value) => value.isNotEmpty).join(' '),
       )
       .join(' et ');

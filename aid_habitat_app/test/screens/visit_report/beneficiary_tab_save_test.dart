@@ -8,6 +8,7 @@ import 'package:aid_habitat_app/services/dossier_repository.dart';
 import 'package:aid_habitat_app/services/save_debounce.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 // The storage maps can change independently of the loaded form, like a pull.
 // Unexpected repository calls (including reads) fail through Fake.noSuchMethod.
@@ -60,6 +61,9 @@ class _Repository extends Fake implements DossierRepository {
 }
 
 Dossier _dossier({
+  String firstName = 'Alice',
+  String lastName = 'Test',
+  int numberPeople = 0,
   String phone = '0102030405',
   String email = 'old@test.fr',
   List<Occupant> occupants = const [],
@@ -68,8 +72,8 @@ Dossier _dossier({
       id: 'dossier-1',
       patient: Patient(
         id: 'patient-1',
-        firstName: 'Alice',
-        lastName: 'Test',
+        firstName: firstName,
+        lastName: lastName,
         birthDate: '',
         phone: phone,
         email: email,
@@ -80,7 +84,7 @@ Dossier _dossier({
         familySituation: '',
         incomeCategory: '',
         // Legacy values are normalized by the form but must not become edits.
-        numberPeople: 0,
+        numberPeople: numberPeople,
         fiscalRevenue: 12000,
         caisseRetraitePrincipale: 'Carsat; MSA',
         trustedPerson: TrustedPerson(name: 'Bob', phone: '', email: ''),
@@ -164,6 +168,182 @@ Future<void> _exhaustRetries(WidgetTester tester) async {
 }
 
 void main() {
+  Future<void> openIdentity(WidgetTester tester) async {
+    final label = find.byKey(const ValueKey('edit-occupant-identity'));
+    await tester.tap(label);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tap(label);
+    await tester.pumpAndSettle();
+    expect(find.text('Modifier les occupants'), findsOneWidget);
+  }
+
+  Future<void> editIdentity(
+    WidgetTester tester,
+    String key,
+    String value,
+  ) async {
+    await tester.enterText(
+      find.descendant(
+        of: find.byKey(ValueKey(key)),
+        matching: find.byType(TextFormField),
+      ),
+      value,
+    );
+    await tester.pump();
+  }
+
+  testWidgets(
+    'grouped household names match the dossier without writing on read',
+    (tester) async {
+      final repository = _Repository();
+      await _mount(
+        tester,
+        repository,
+        dossier: _dossier(
+          firstName: 'René et Madeleine',
+          lastName: 'LETORT',
+          numberPeople: 2,
+          occupants: const [
+            Occupant(
+              firstName: 'René et Madeleine',
+              lastName: 'LETORT',
+              birthDate: '1943-03-23',
+            ),
+            Occupant(birthDate: '1947-08-15'),
+          ],
+        ),
+      );
+      expect(find.text('LETORT René'), findsOneWidget);
+      await tester.tap(find.byIcon(LucideIcons.chevronRight));
+      await tester.pumpAndSettle();
+      expect(find.text('LETORT Madeleine'), findsOneWidget);
+      expect(repository.patientWrites, isEmpty);
+      await _edit(tester, 'Téléphone', '0601020304');
+      await _flush(tester);
+      expect(repository.patientWrites.single.keys, ['phone']);
+    },
+  );
+
+  testWidgets(
+    'identity dialog adds a third person and synchronizes legacy and structured names',
+    (tester) async {
+      final repository = _Repository();
+      var notifications = 0;
+      await _mount(
+        tester,
+        repository,
+        onChanged: () => notifications++,
+        dossier: _dossier(
+          firstName: 'René et Madeleine',
+          lastName: 'LETORT',
+          numberPeople: 2,
+          occupants: const [
+            Occupant(
+              firstName: 'René et Madeleine',
+              lastName: 'LETORT',
+              birthDate: '1943-03-23',
+              apa: true,
+              apaGir: '3',
+            ),
+            Occupant(birthDate: '1947-08-15', homeHelpTxt: 'Aide conservée'),
+          ],
+        ),
+      );
+      await openIdentity(tester);
+      await tester.tap(find.text('Occupant 2'));
+      await tester.pump();
+      await editIdentity(tester, 'identity-maiden-name', 'Martin');
+      await tester.tap(find.text('Madame').last);
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('add-occupant')));
+      await tester.pump();
+      await editIdentity(tester, 'identity-last-name', 'DUPONT');
+      await editIdentity(tester, 'identity-first-name', 'Camille');
+      await tester.tap(find.text('Enregistrer'));
+      await tester.pumpAndSettle();
+      final saved = repository.patientWrites.single;
+      expect(saved['first_name'], 'René');
+      expect(saved['second_first_name'], 'Madeleine');
+      expect(saved['second_last_name'], 'LETORT');
+      expect(saved['number_people'], 3);
+      final occupants = jsonDecode(saved['occupants_json']) as List;
+      expect(occupants, hasLength(3));
+      expect(occupants[0]['firstName'], 'René');
+      expect(occupants[0]['birthDate'], '1943-03-23');
+      expect(occupants[0]['apaGir'], '3');
+      expect(occupants[1]['firstName'], 'Madeleine');
+      expect(occupants[1]['birthDate'], '1947-08-15');
+      expect(occupants[1]['homeHelpTxt'], 'Aide conservée');
+      expect(occupants[1]['gender'], 'Femme');
+      expect(occupants[1]['maidenName'], 'Martin');
+      expect(occupants[2]['firstName'], 'Camille');
+      expect(occupants[2]['lastName'], 'DUPONT');
+      expect(notifications, 1);
+    },
+  );
+
+  testWidgets(
+    'single occupant can open the dialog and cancel every draft change',
+    (tester) async {
+      final repository = _Repository();
+      await _mount(tester, repository);
+      await openIdentity(tester);
+      await editIdentity(tester, 'identity-first-name', 'Changement annulé');
+      await tester.tap(find.byKey(const ValueKey('add-occupant')));
+      await tester.pump();
+      await tester.tap(find.text('Annuler'));
+      await tester.pumpAndSettle();
+      expect(find.text('TEST Alice'), findsOneWidget);
+      expect(repository.patientWrites, isEmpty);
+    },
+  );
+
+
+  testWidgets('confirming projected names alone persists both occupants', (tester) async {
+    final repository = _Repository();
+    await _mount(tester, repository, dossier: _dossier(
+      firstName: 'René et Madeleine', lastName: 'LETORT', numberPeople: 2,
+      occupants: const [
+        Occupant(firstName: 'René et Madeleine', lastName: 'LETORT'),
+        Occupant(birthDate: '1947-08-15'),
+      ],
+    ));
+    await openIdentity(tester);
+    await tester.tap(find.text('Enregistrer'));
+    await tester.pumpAndSettle();
+    final saved = repository.patientWrites.single;
+    expect(saved['first_name'], 'René');
+    expect(saved['second_first_name'], 'Madeleine');
+    final people = jsonDecode(saved['occupants_json']) as List;
+    expect(people[0]['firstName'], 'René');
+    expect(people[1]['firstName'], 'Madeleine');
+    expect(people[1]['birthDate'], '1947-08-15');
+  });
+
+  testWidgets('health edits retain unconfirmed imported identities', (tester) async {
+    final repository = _Repository();
+    await _mount(tester, repository, dossier: _dossier(
+      firstName: 'René et Madeleine', lastName: 'LETORT', numberPeople: 2,
+      occupants: const [
+        Occupant(firstName: 'René et Madeleine', lastName: 'LETORT'),
+        Occupant(birthDate: '1947-08-15'),
+      ],
+    ));
+    final civility = find.byWidgetPredicate(
+      (widget) => widget is FormToggleGroup && widget.label == 'Civilité',
+    );
+    tester.widget<FormToggleGroup>(civility).onChanged!('Monsieur');
+    await tester.pump();
+    await _flush(tester);
+    final saved = repository.patientWrites.single;
+    expect(saved.keys, ['occupants_json']);
+    final people = jsonDecode(saved['occupants_json']) as List;
+    expect(people[0]['firstName'], 'René et Madeleine');
+    expect(people[0]['gender'], 'Homme');
+    expect(people[1]['firstName'], '');
+    expect(people[1]['birthDate'], '1947-08-15');
+  });
+
   testWidgets('civilité saves the occupant without changing other patient columns', (
     tester,
   ) async {
