@@ -1,3 +1,4 @@
+import { joinReportNotePagesText } from './noteText.mjs';
 import { drawReportFrame, drawPaginatedReportText, drawBeneficiaryOccupants, drawTrustedPerson, wrapReportLines } from './adaptiveReportLayout.mjs';
 import { formatMobilityAidsForReport, printableMobilityAidsForReport, applyMobilityAidsToReport } from './mobilityAids.mjs';
 // Génère un rapport de visite PDF depuis le template
@@ -761,57 +762,6 @@ function amoLabelForNature(rawNatureAccompagnement) {
  * @param {object} [args.sanitaires] — payload /api/diagnostic-sanitaires
  * @param {object} [args.observations] — payload /api/observations
  */
-/**
- * Concatène les `textContent` de toutes les pages d'un sous-onglet
- * de la note Contexte de vie (Médical ou Autonomie). Si l'ergo a
- * plusieurs pages dans la même note, on les sépare par une ligne
- * vide. Strip les whitespaces périphériques pour éviter les blocs
- * vides en tête/fin de section dans le PDF.
- */
-function joinNotePagesText(pages) {
-  // Extraction du texte depuis le `drawing_json` (NotesWidget bundle
-  // text + strokes en `{"text":"…","strokes":[...]}`). Fallback sur
-  // `textContent` si le JSON est invalide ou si la page legacy
-  // utilisait directement la colonne text. Sans ce parsing, la lecture
-  // brute de `textContent` retournait toujours vide → bug reporté
-  // 2026-04-29 (« Habitudes de vie et environnement dans le PDF ne
-  // sont pas connectés à un espace de l'application »).
-  const extractText = (pg) => {
-    const drawingRaw = String(pg?.drawingJson || '');
-    if (drawingRaw) {
-      try {
-        const decoded = JSON.parse(drawingRaw);
-        if (
-          decoded &&
-          typeof decoded === 'object' &&
-          typeof decoded.text === 'string' &&
-          decoded.text.trim()
-        ) {
-          return decoded.text.trim();
-        }
-      } catch {
-        // drawing_json non-JSON → on tombe sur le fallback textContent
-      }
-    }
-    return String(pg?.textContent || '').trim();
-  };
-  const seen = new Set();
-  return pages
-    .map(extractText)
-    .filter((s) => s.length > 0)
-    .filter((s) => {
-      // Les NotesWidget partagées peuvent produire la même note pour
-      // plusieurs pages internes. Dans le rapport, on ne l'imprime qu'une
-      // fois pour éviter "note A" répétée 3 fois dans Environnement.
-      const key = s.replace(/\s+/g, ' ').trim().toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .join('\n\n')
-    .trim();
-}
-
 // Resolve the two printed birth-date slots by occupant order. The legacy
 // database columns are named Monsieur/Madame but actually store positions 1/2.
 export function reportBirthSlots(patient = {}) {
@@ -1269,8 +1219,8 @@ function buildViewModel({
         (pg) => String(pg?.tabKey || '') === 'Contexte de vie-Autonomie',
       );
       return {
-        environnement: joinNotePagesText(medicalPages),
-        habitudes: joinNotePagesText(autonomyPages),
+        environnement: joinReportNotePagesText(medicalPages),
+        habitudes: joinReportNotePagesText(autonomyPages),
       };
     })(),
     housing: housingView,

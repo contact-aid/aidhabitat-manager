@@ -1,3 +1,5 @@
+import { joinReportNotePagesText } from './reports/noteText.mjs';
+import { splitRetirementFundNames } from './reports/retirementFundNames.mjs';
 import { resolveReportPigPloermel } from './reports/pigPloermel.mjs';
 import { assertCollectionMutationAllowed } from './collectionMutationContract.mjs';
 import { assertMandateImportIdentity } from './mandateImportIdentity.mjs';
@@ -6213,10 +6215,7 @@ const joinCaisseNames = (names) => {
  */
 const resolveCaisseComplementaireLabel = async (caisseInput) => {
   // Normalise l'entrée en tableau de noms.
-  const list = Array.isArray(caisseInput) ? caisseInput : [caisseInput];
-  const trimmedList = list
-    .map((name) => String(name || '').trim())
-    .filter((name) => name.length > 0);
+  const trimmedList = splitRetirementFundNames(caisseInput);
   if (trimmedList.length === 0) return '/';
 
   let records;
@@ -6544,7 +6543,7 @@ const fetchContexteNotePagesForPatient = async (patientId, dossierId) => {
  *                                   par sous-section pour les dossiers déjà
  *                                   saisis avant cette unification.
  *
- * Concatène les `textContent` de toutes les pages d'un même tabKey
+ * Assemble les textes distincts des pages d'un même tabKey
  * (séparateur double-newline) si l'ergo a fait défiler plusieurs
  * pages dans le NotesWidget. Renvoie un objet plat avec :
  *   - `projet` : page 7 PDF
@@ -6628,24 +6627,6 @@ const fetchVadOverlayNotesForReport = async (patientId, dossierId) => {
         tabKey: 'WC-Config. & équipements',
       }),
     ]);
-    // Le texte saisi par l'ergo dans NotesWidget est bundle DANS
-    // `drawing_json` (champ JSON `{"text": "…", "strokes": [...]}`),
-    // pas dans la colonne SQL `text_content` qui reste vide en
-    // pratique (cf. components/notes_widget.dart `_currentDrawingJson`).
-    // On parse donc le JSON pour extraire le texte.
-    const extractTextFromDrawingJson = (raw) => {
-      const s = stringValue(raw);
-      if (!s) return '';
-      try {
-        const decoded = JSON.parse(s);
-        if (decoded && typeof decoded === 'object' && typeof decoded.text === 'string') {
-          return decoded.text;
-        }
-      } catch {
-        // drawing_json non-JSON (data legacy ou tronqué) → on ignore.
-      }
-      return '';
-    };
     const joinPages = (pages) => {
       const filtered = asArray(pages)
         .filter((pg) => !!pg)
@@ -6667,18 +6648,7 @@ const fetchVadOverlayNotesForReport = async (patientId, dossierId) => {
           return false;
         })
         .sort((a, b) => Number(a.pageNumber) - Number(b.pageNumber));
-      const text = filtered
-        .map((pg) => {
-          // Priorité au texte JSON dans drawing_json (NotesWidget).
-          // Fallback sur textContent au cas où certaines pages legacy
-          // utiliseraient cette colonne directement.
-          const fromJson = extractTextFromDrawingJson(pg?.drawingJson).trim();
-          if (fromJson) return fromJson;
-          return stringValue(pg?.textContent).trim();
-        })
-        .filter(Boolean)
-        .join('\n\n');
-      return text || null;
+      return joinReportNotePagesText(filtered) || null;
     };
     // `accessibilite` du PDF (page 5 / champ `Observations1` =
     // « Observations sur l'accessibilité ») : priorité au tabKey
