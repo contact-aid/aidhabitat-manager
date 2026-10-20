@@ -250,7 +250,7 @@ class NotesWidget extends StatefulWidget {
   final int externalRefreshToken;
 
   /// Live text pushed from an external source (detached OS note window)
-  /// — applied immediately if the local TextField isn't focused. This is
+  /// — applied immediately, including while the local TextField has focus. This is
   /// the fast path that keeps the popup and the in-app widget in sync
   /// without waiting for a DB round-trip.
   final String? liveText;
@@ -784,9 +784,7 @@ class _NotesWidgetState extends State<NotesWidget> {
         !_textFocusNode.hasFocus) {
       _reloadCurrentPageFromStore();
     }
-    if (oldWidget.liveText != widget.liveText &&
-        widget.liveText != null &&
-        !_textFocusNode.hasFocus) {
+    if (oldWidget.liveText != widget.liveText && widget.liveText != null) {
       final incoming = widget.liveText!;
       if (_textController.text != incoming) {
         // Sync vrai instantané (demande utilisateur 2026-05-05 : « tout
@@ -815,7 +813,14 @@ class _NotesWidgetState extends State<NotesWidget> {
           ),
         );
         _textController.addListener(_onTextChanged);
-        _pageTexts[_currentPage] = incoming;
+        if (_usesCanonicalSharedText) _sharedTextInitialized = true;
+        if (widget.sharedText) {
+          for (var page = 0; page < _totalPages; page++) {
+            _pageTexts[page] = incoming;
+          }
+        } else {
+          _pageTexts[_currentPage] = incoming;
+        }
       }
     }
   }
@@ -1585,6 +1590,9 @@ class _NotesWidgetState extends State<NotesWidget> {
   // ---------------------------------------------------------------------------
 
   void _onTextChanged() {
+    // Controller listeners also run for selection/composition changes. A click
+    // must never publish an old draft back to the other editor or save it.
+    if (_pageTexts[_currentPage] == _textController.text) return;
     if (_usesCanonicalSharedText) _sharedTextInitialized = true;
     if (widget.sharedText) {
       final txt = _textController.text;
@@ -2385,18 +2393,11 @@ class _NotesWidgetState extends State<NotesWidget> {
     final overlay = Overlay.of(context, rootOverlay: true);
     final entry = OverlayEntry(
       builder: (_) => _FloatingTextModal(
-        initialText: _textController.text,
+        controller: _textController,
         placeholder: widget.placeholder,
         title: widget.title,
         rewriteContext: aiRewriteContextForTab(widget.tabKey),
         startFullscreen: widget.expandModalFullscreen,
-        onChanged: (value) {
-          if (_textController.text == value) return;
-          _textController.value = TextEditingValue(
-            text: value,
-            selection: TextSelection.collapsed(offset: value.length),
-          );
-        },
         onClose: _closeTextModal,
       ),
     );
@@ -4372,19 +4373,17 @@ class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
 
 class _FloatingTextModal extends StatefulWidget {
   const _FloatingTextModal({
-    required this.initialText,
+    required this.controller,
     required this.placeholder,
     required this.title,
-    required this.onChanged,
     required this.onClose,
     required this.rewriteContext,
     this.startFullscreen = false,
   });
 
-  final String initialText;
+  final TextEditingController controller;
   final String placeholder;
   final String title;
-  final ValueChanged<String> onChanged;
   final VoidCallback onClose;
   final String rewriteContext;
 
@@ -4404,7 +4403,7 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
 
   late Offset _pos;
   late Size _size;
-  late final TextEditingController _controller;
+  TextEditingController get _controller => widget.controller;
   final FocusNode _focusNode = FocusNode();
   late bool _fullscreen;
   bool _isVoiceDictating = false;
@@ -4422,8 +4421,6 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
     _pos = _sharedPos;
     _size = _sharedSize;
     _fullscreen = widget.startFullscreen;
-    _controller = TextEditingController(text: widget.initialText);
-    _controller.addListener(() => widget.onChanged(_controller.text));
     _entryController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -4434,7 +4431,6 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
   void dispose() {
     _sharedPos = _pos;
     _sharedSize = _size;
-    _controller.dispose();
     _focusNode.dispose();
     _entryController.dispose();
     super.dispose();
