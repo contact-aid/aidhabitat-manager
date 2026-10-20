@@ -70,7 +70,7 @@ async function runReportRoute() {
     { Id: 704, nom: 'Fonds D', a_une_aide_specifique: false },
   ] } });
   base.row('beneficiaire').occupants_json = JSON.stringify([
-    { firstName: 'Alice', lastName: 'EXEMPLE', caissesRetraiteComplementaires: 'Fonds A; Fonds B' },
+    { firstName: 'Alice', lastName: 'EXEMPLE', caisseRetraitePrincipale: 'PRINCIPALE A; PRINCIPALE B', caissesRetraiteComplementaires: 'Fonds A; Fonds B' },
     { firstName: 'Paul', lastName: 'EXEMPLE', caissesRetraiteComplementaires: 'Fonds B; Fonds C; Fonds D' },
   ]);
   const sharedText = 'Observation unique depuis quatre pages manuscrites.';
@@ -245,14 +245,15 @@ async function runReportRoute() {
     try {
       const pdfPath = path.join(previewDir, 'report.pdf');
       await writeFile(pdfPath, responseBytes);
-      const { stdout: pdfText } = await promisify(execFile)('pdftotext', ['-layout', pdfPath, '-']);
+      const { stdout: pdfText } = await promisify(execFile)('pdftotext', ['-raw', pdfPath, '-']);
       assert.equal(pdfText.split(sharedText).length - 1, 1,
         'the same written accessibility note must print once across four handwritten pages');
-      assert(/Occupant 1 : Fonds B[\s\S]{0,100}Occupant 2 : Fonds B, Fonds C[\s\S]{0,100}sous conditions\*/.test(pdfText),
+      assert(pdfText.replace(/\s+/g, ' ').includes('Fonds A, Fonds B, Fonds C, Fonds D sous conditions*'),
         pdfText.slice(pdfText.indexOf('Descriptif des aides'), pdfText.indexOf('Descriptif des aides') + 1400));
-      assert.doesNotMatch(pdfText, /Fonds A|Fonds D/);
+      assert.doesNotMatch(pdfText, /PRINCIPALE A|PRINCIPALE B/);
+      assert.equal(pdfText.split('Fonds B').length - 1, 1);
     } finally { await rm(previewDir, { recursive: true, force: true }); }
-    console.log('PASS report: shared note once, multi-select eligible funds combined once');
+    console.log('PASS report: shared note once, all complementary funds once, principal funds excluded');
 
     // The inline copy is preferred, while the other remote visit photo is fetched.
     assert(!contentReads.includes('remote-photo-a'));

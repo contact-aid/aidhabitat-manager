@@ -1,5 +1,5 @@
 // Flutter stores multi-selections with semicolons; older web forms use commas.
-// Accept both without changing the eligibility rules for individual funds.
+// Accept both representations when collecting the selected complementary funds.
 export function splitRetirementFundNames(input) {
   return (Array.isArray(input) ? input : [input])
     .flatMap(value => String(value || '').split(/[,;\r\n]+/u))
@@ -7,23 +7,15 @@ export function splitRetirementFundNames(input) {
     .filter(Boolean);
 }
 
-// Keep the occupant index throughout resolution. The same eligible fund can
-// belong to two people; only duplicates within one person's selection collapse.
-export function retirementFundAidLabelsByOccupant(input, resolveEligibleName) {
-  const groups = Array.isArray(input) ? input : [input];
-  const labels = groups.map(selection => {
-    const seen = new Set();
-    return splitRetirementFundNames(selection).map(resolveEligibleName).filter(name => {
-      if (!name) return false;
-      const key = name.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).join(', ');
+// The report lists every selected complementary fund, once for the household.
+// Reference eligibility flags do not remove a selected fund from this summary.
+export function retirementFundLabelsForReport(input) {
+  const seen = new Set();
+  const names = splitRetirementFundNames(input).filter(name => {
+    const key = name.replace(/\s+/g, ' ').toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
-  if (!labels.some(Boolean)) return '/';
-  if (labels.length === 1) return `${labels[0]} sous conditions*`;
-  return labels.map((label, index) =>
-    `Occupant ${index + 1} : ${label || '/'}`,
-  ).join('\n') + '\nsous conditions*';
+  return names.length ? `${names.join(', ')} sous conditions*` : '/';
 }

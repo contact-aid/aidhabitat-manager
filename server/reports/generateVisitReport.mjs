@@ -1166,7 +1166,7 @@ function buildViewModel({
       incomeCategory: String(patient.incomeCategory || '').trim(),
       // Cellule « Caisse de retraite complémentaire » de la page
       // « Descriptif des aides prévisionnelles » — pré-résolu côté
-      // `index.mjs` (cf. `resolveCaisseComplementaireLabel`). Vaut
+      // `index.mjs` (cf. `retirementFundLabelsForReport`). Vaut
       // soit `'/'` soit `'<nom de caisse> sous conditions*'`.
       // Demande utilisateur 2026-04-29.
       caisseComplementaireLabel: (() => {
@@ -2884,7 +2884,7 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
       while (size > 7 && wrapReportLines(value, regular, size, cell.width).length * size * 1.15 > cell.height - 6) size -= .25;
       if (wrapReportLines(value, regular, size, cell.width).length * size * 1.15 > cell.height - 6) {
         retirementFundsAppendix = value;
-        value = 'Voir le détail des caisses par occupant en annexe';
+        value = 'Voir le détail des caisses complémentaires en annexe';
         size = 9;
       }
       cell.fontSize = size;
@@ -4018,9 +4018,9 @@ export async function generateVisitReport({
   if (retirementFundsAppendix) {
     const appendix = numberedDoc.addPage();
     const bold = await numberedDoc.embedFont(StandardFonts.HelveticaBold);
-    drawReportFrame(appendix, 'Caisses de retraite par occupant', bold);
+    drawReportFrame(appendix, 'Caisses de retraite complémentaires', bold);
     await drawPaginatedReportText(numberedDoc, { page: appendix, text: retirementFundsAppendix,
-      title: 'Caisses de retraite par occupant', yTop: 775 });
+      title: 'Caisses de retraite complémentaires', yTop: 775 });
   }
   await drawGeneratedPageNumbers(numberedDoc);
 
