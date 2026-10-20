@@ -82,7 +82,7 @@ export function reportOccupants(patient = {}) {
   const stored = Array.isArray(patient.occupants) ? patient.occupants : [];
   const countValue = Number(patient.numberPeople);
   const count = Math.min(3, Math.max(1, Number.isInteger(countValue) && countValue > 0 ? countValue : stored.length || (patient.secondFirstName || patient.secondLastName ? 2 : 1)));
-  return Array.from({ length: count }, (_, index) => {
+  const occupants = Array.from({ length: count }, (_, index) => {
     const fallback = index === 0 ? {
       firstName: patient.firstName, lastName: patient.lastName,
       birthDate: patient.birthDate ?? patient.birthDateMr,
@@ -96,6 +96,29 @@ export function reportOccupants(patient = {}) {
     // An explicitly empty occupant field is authoritative.
     return { ...fallback, ...(stored[index] ?? {}) };
   });
+  // Legacy imports may keep two given names in the dossier's primary field.
+  // Project their identities for display without moving health/admin data.
+  const normalized = value => String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const unnamed = occupant => !normalized(occupant.firstName) && !normalized(occupant.lastName);
+  if (unnamed(occupants[0])) {
+    occupants[0] = { ...occupants[0], firstName: patient.firstName, lastName: patient.lastName };
+  }
+  if (occupants[1] && unnamed(occupants[1]) && (patient.secondFirstName || patient.secondLastName)) {
+    occupants[1] = { ...occupants[1], firstName: patient.secondFirstName, lastName: patient.secondLastName };
+  }
+  const joint = /^([A-Za-zÀ-ÖØ-öø-ÿŒœ]+(?:[-’'][A-Za-zÀ-ÖØ-öø-ÿŒœ]+)*)\s+(?:et|&)\s+([A-Za-zÀ-ÖØ-öø-ÿŒœ]+(?:[-’'][A-Za-zÀ-ÖØ-öø-ÿŒœ]+)*)$/iu.exec(String(patient.firstName ?? '').trim());
+  const surname = String(patient.lastName ?? '').trim();
+  if (occupants.length === 2 && joint && surname &&
+      normalized(joint[1]) !== normalized(joint[2]) &&
+      normalized(occupants[0].firstName) === normalized(patient.firstName) &&
+      normalized(occupants[0].lastName) === normalized(surname) &&
+      !/\s+(?:et|&)\s+/iu.test(surname) &&
+      (!normalized(occupants[1].firstName) || normalized(occupants[1].firstName) === normalized(joint[2])) &&
+      (!normalized(occupants[1].lastName) || normalized(occupants[1].lastName) === normalized(surname))) {
+    occupants[0] = { ...occupants[0], firstName: joint[1], lastName: surname };
+    occupants[1] = { ...occupants[1], firstName: joint[2], lastName: surname };
+  }
+  return occupants;
 }
 
 // Only affirmative occupant statuses contribute; stale details after unchecking
@@ -134,7 +157,7 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
   for (const [index, occupant] of occupants.entries()) {
     const iso = String(occupant.birthDate ?? '');
     const date = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-    const values = [`Occupant ${index + 1}`, occupant.lastName ?? '', occupant.firstName ?? '', date ? `${date[3]}/${date[2]}/${date[1]}` : iso,
+    const values = [`Occupant ${index + 1}`, String(occupant.lastName ?? '').trim().toUpperCase(), occupant.firstName ?? '', date ? `${date[3]}/${date[2]}/${date[1]}` : iso,
       printableMobilityAidsForReport(occupant.dependenceTxt, regular)];
     const cells = values.map((value, i) => wrapReportLines(value, regular, 9, columns[i].width));
     const rowLines = Math.min(2, Math.max(...cells.map(cell => cell.length)));

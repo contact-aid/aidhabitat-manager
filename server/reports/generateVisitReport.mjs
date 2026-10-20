@@ -2848,6 +2848,7 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
       fontSize: 10,
       lineHeight: 12,
       maxLines: 2,
+      retirementFunds: true,
     },
     {
       value: view?.patient?.epciLabel,
@@ -2862,7 +2863,14 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
     },
   ];
 
+  let retirementFundsAppendix = '';
   for (const cell of cells) {
+    if (cell.retirementFunds) {
+      // Use the full row height and fit every occupant line, rather than
+      // silently clipping all but the first two lines in the static template.
+      cell.y = 566;
+      cell.height = 33.8;
+    }
     page.drawRectangle({
       x: cell.x - 2,
       y: cell.y - 2,
@@ -2870,7 +2878,19 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
       height: cell.height + 4,
       color: rgb(1, 1, 1),
     });
-    const value = String(cell.value ?? '').trim() || cell.fallback || '/';
+    let value = String(cell.value ?? '').trim() || cell.fallback || '/';
+    if (cell.retirementFunds) {
+      let size = 10;
+      while (size > 7 && wrapReportLines(value, regular, size, cell.width).length * size * 1.15 > cell.height - 6) size -= .25;
+      if (wrapReportLines(value, regular, size, cell.width).length * size * 1.15 > cell.height - 6) {
+        retirementFundsAppendix = value;
+        value = 'Voir le détail des caisses par occupant en annexe';
+        size = 9;
+      }
+      cell.fontSize = size;
+      cell.lineHeight = size * 1.15;
+      cell.maxLines = 100;
+    }
     drawWrappedText(page, value, {
       x: cell.x,
       yTop: cell.y + cell.height - 5,
@@ -2911,6 +2931,7 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
       color: rgb(0, 0, 0),
     });
   }
+  return retirementFundsAppendix;
 }
 
 async function drawGeneratedPageNumbers(pdfDoc) {
@@ -3257,6 +3278,8 @@ export async function generateVisitReport({
   } : null;
   const emptyPlanPageRefs = [];
 
+  let retirementFundsAppendix = '';
+
   // Index par nom pour éviter le for-each * field-by-name.
   const fieldsByName = new Map();
   for (const field of form.getFields()) {
@@ -3281,7 +3304,7 @@ export async function generateVisitReport({
   };
 
   for (const [fieldName, entry] of Object.entries(mapping)) {
-    if (isFlat2026Template && fieldName === 'Habitudes') continue;
+    if (isFlat2026Template && ['Habitudes', 'Nom', 'Prénom'].includes(fieldName)) continue;
     if (fieldName.startsWith('$')) continue; // commentaires/meta dans le JSON
     if (isFlat2026Template && FLAT_2026_CUSTOM_FIELDS.has(fieldName)) {
       continue;
@@ -3312,7 +3335,9 @@ export async function generateVisitReport({
   // Le dropdown du template n'accepte que les 3 options figées
   // ('Oui'/'Non'/'En cours') — on ne peut pas y mettre "Oui (GIR 4)".
   // On dessine donc le GIR en texte libre juste à droite de la pill.
-  if (isFlat2026Template) fieldsByName.get('Habitudes')?.setText('');
+  if (isFlat2026Template) {
+    for (const name of ['Habitudes', 'Nom', 'Prénom']) fieldsByName.get(name)?.setText('');
+  }
   await applyApaGirOverlay({ pdfDoc, fieldsByName, view });
 
   // Descend de quelques points le rectangle des champs « aide à
@@ -3753,7 +3778,7 @@ export async function generateVisitReport({
   drawBirthCivilitiesOverlay({ pdfDoc, view, font: reportTextFont });
 
   if (isFlat2026Template) {
-    await drawFlat2026AidSummary({
+    retirementFundsAppendix = await drawFlat2026AidSummary({
       pdfDoc,
       page: flat2026AidSummaryPage,
       view,
@@ -3989,6 +4014,13 @@ export async function generateVisitReport({
     stats.habitsFlow = await drawPaginatedReportText(numberedDoc, { page: pages.habits, text: sanitizeForPdfFont(view.contexte.habitudes), title: 'Habitudes de vie', yTop: 556, x: 40, width: 510 });
     stats.accessibilityFlow = await drawPaginatedReportText(numberedDoc, { page: pages.accessibility, text: sanitizeForPdfFont(view.housing.accessObservation), title: 'Observations sur l’accessibilité', yTop: 432, x: 46, width: 506 });
     stats.summaryFlow = await drawPaginatedReportText(numberedDoc, { page: pages.summary, text: sanitizeForPdfFont(view.observations.resumePreconisations), title: 'Résumé des préconisations', yTop: 780 });
+  }
+  if (retirementFundsAppendix) {
+    const appendix = numberedDoc.addPage();
+    const bold = await numberedDoc.embedFont(StandardFonts.HelveticaBold);
+    drawReportFrame(appendix, 'Caisses de retraite par occupant', bold);
+    await drawPaginatedReportText(numberedDoc, { page: appendix, text: retirementFundsAppendix,
+      title: 'Caisses de retraite par occupant', yTop: 775 });
   }
   await drawGeneratedPageNumbers(numberedDoc);
 

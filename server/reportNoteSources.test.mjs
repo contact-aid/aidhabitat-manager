@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { joinReportNotePagesText } from './reports/noteText.mjs';
-import { splitRetirementFundNames } from './reports/retirementFundNames.mjs';
+import { splitRetirementFundNames, retirementFundAidLabelsByOccupant } from './reports/retirementFundNames.mjs';
 
 const page = (number, text, strokes = []) => ({
   pageNumber: number,
@@ -38,4 +38,17 @@ test('retirement multi-selections from each occupant split semicolons, commas an
     ['Fonds A', 'Fonds B', 'Fonds A', 'Fonds C', 'Fonds D']);
   assert.deepEqual(splitRetirementFundNames('Fonds A'), ['Fonds A']);
   assert.deepEqual(splitRetirementFundNames([null, '', ' ; , ']), []);
+});
+
+
+test('eligible retirement funds stay associated with each occupant, including a shared fund', () => {
+  const eligible = name => ['AG2R', 'Malakoff'].includes(name) ? name : null;
+  assert.equal(retirementFundAidLabelsByOccupant(['AG2R; AG2R', 'Malakoff'], eligible),
+    'Occupant 1 : AG2R\nOccupant 2 : Malakoff\nsous conditions*');
+  assert.equal(retirementFundAidLabelsByOccupant(['AG2R', 'AG2R'], eligible),
+    'Occupant 1 : AG2R\nOccupant 2 : AG2R\nsous conditions*');
+  assert.equal(retirementFundAidLabelsByOccupant(['Inéligible', 'AG2R'], eligible),
+    'Occupant 1 : /\nOccupant 2 : AG2R\nsous conditions*');
+  assert.equal(retirementFundAidLabelsByOccupant(['Inéligible', ''], eligible), '/');
+  assert.equal(retirementFundAidLabelsByOccupant('AG2R', eligible), 'AG2R sous conditions*');
 });

@@ -1,5 +1,5 @@
 import { joinReportNotePagesText } from './reports/noteText.mjs';
-import { splitRetirementFundNames } from './reports/retirementFundNames.mjs';
+import { splitRetirementFundNames, retirementFundAidLabelsByOccupant } from './reports/retirementFundNames.mjs';
 import { resolveReportPigPloermel } from './reports/pigPloermel.mjs';
 import { assertCollectionMutationAllowed } from './collectionMutationContract.mjs';
 import { assertMandateImportIdentity } from './mandateImportIdentity.mjs';
@@ -6173,45 +6173,10 @@ const resolveCaisseAideName = (caisseName, records) => {
 };
 
 /**
- * Joint une liste de noms de caisses à la française :
- *   - 1 nom        → "Nom"
- *   - 2 noms       → "Nom1 et Nom2"
- *   - 3 noms et +  → "Nom1, Nom2 et Nom3" (virgules + dernier `et`,
- *                    pas de virgule d'Oxford).
- */
-const joinCaisseNames = (names) => {
-  if (names.length === 0) return '';
-  if (names.length === 1) return names[0];
-  if (names.length === 2) return `${names[0]} et ${names[1]}`;
-  const last = names[names.length - 1];
-  const head = names.slice(0, -1).join(', ');
-  return `${head} et ${last}`;
-};
-
-/**
- * Résout le libellé à afficher dans le champ PDF
- * « Caisse de retraite complémentaire » selon la règle métier (demande
- * utilisateur 2026-04-29 / 2026-04-30).
- *
- * Accepte soit un nom unique (string) — compat avec les anciens
- * appelants — soit un tableau de noms quand le dossier a plusieurs
- * occupants. Règles :
- *
- *   - Toutes les caisses résolvent à `null` (aucune aide / vide /
- *     hors-table) → `'/'`.
- *   - Au moins une caisse ouvre droit à une aide :
- *       • 1 nom unique          → `'<Nom> sous conditions*'`
- *       • 2 noms uniques        → `'<Nom1> et <Nom2> sous conditions*'`
- *       • 3+ noms uniques       → `'<Nom1>, <Nom2> et <Nom3> sous conditions*'`
- *     (les caisses qui ne donnent pas droit à une aide sont
- *     silencieusement filtrées — cas mixte : choix utilisateur 2026-04-30,
- *     option A : on ignore les occupants qui n'ouvrent pas de droit).
- *
- * Pourquoi un drapeau dédié et pas un parsing du champ libre
- * `aide_complementaire` : ce dernier sert de NOTE INFORMATIVE pour
- * l'écran « Caisses de retraite » de l'app. On garde donc les deux
- * champs séparés : `aide_complementaire` = note libre,
- * `a_une_aide_specifique` = drapeau pour le PDF.
+ * Resolves eligible complementary funds independently for each occupant.
+ * A single-person input keeps the legacy label; a household prints numbered
+ * occupant lines. Duplicates collapse only within one person's selection.
+ * The dedicated a_une_aide_specifique flag still controls eligibility.
  */
 const resolveCaisseComplementaireLabel = async (caisseInput) => {
   // Normalise l'entrée en tableau de noms.
@@ -6231,20 +6196,8 @@ const resolveCaisseComplementaireLabel = async (caisseInput) => {
     return '/';
   }
 
-  // Dédup tout en préservant l'ordre d'apparition (occupant 0 d'abord).
-  const seen = new Set();
-  const aides = [];
-  for (const name of trimmedList) {
-    const canonical = resolveCaisseAideName(name, records);
-    if (!canonical) continue;
-    const key = canonical.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    aides.push(canonical);
-  }
-
-  if (aides.length === 0) return '/';
-  return `${joinCaisseNames(aides)} sous conditions*`;
+  return retirementFundAidLabelsByOccupant(caisseInput,
+    name => resolveCaisseAideName(name, records));
 };
 
 /**
