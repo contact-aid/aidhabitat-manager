@@ -181,6 +181,6 @@ test('PDF prints two individual identities and retains very long fund lists in a
   assert.match(beneficiary, /Occupant 1[\s\S]*EXEMPLE[\s\S]*Alice/);
   assert.match(beneficiary, /Occupant 2[\s\S]*EXEMPLE[\s\S]*Paul/);
   assert.doesNotMatch(beneficiary, /Alice et Paul/);
-  assert.match(text, /Caisses de retraite par occupant/);
+  assert.match(text, /Caisses de retraite complémentaires/);
   assert.match(text, /Fonds complémentaire au libellé long 15/);
 });

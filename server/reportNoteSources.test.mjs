@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { joinReportNotePagesText } from './reports/noteText.mjs';
-import { splitRetirementFundNames, retirementFundAidLabelsByOccupant } from './reports/retirementFundNames.mjs';
+import { splitRetirementFundNames, retirementFundLabelsForReport } from './reports/retirementFundNames.mjs';
 
 const page = (number, text, strokes = []) => ({
   pageNumber: number,
@@ -41,14 +41,11 @@ test('retirement multi-selections from each occupant split semicolons, commas an
 });
 
 
-test('eligible retirement funds stay associated with each occupant, including a shared fund', () => {
-  const eligible = name => ['AG2R', 'Malakoff'].includes(name) ? name : null;
-  assert.equal(retirementFundAidLabelsByOccupant(['AG2R; AG2R', 'Malakoff'], eligible),
-    'Occupant 1 : AG2R\nOccupant 2 : Malakoff\nsous conditions*');
-  assert.equal(retirementFundAidLabelsByOccupant(['AG2R', 'AG2R'], eligible),
-    'Occupant 1 : AG2R\nOccupant 2 : AG2R\nsous conditions*');
-  assert.equal(retirementFundAidLabelsByOccupant(['Inéligible', 'AG2R'], eligible),
-    'Occupant 1 : /\nOccupant 2 : AG2R\nsous conditions*');
-  assert.equal(retirementFundAidLabelsByOccupant(['Inéligible', ''], eligible), '/');
-  assert.equal(retirementFundAidLabelsByOccupant('AG2R', eligible), 'AG2R sous conditions*');
+test('the report lists all complementary funds once, regardless of occupant or aid flag', () => {
+  assert.equal(retirementFundLabelsForReport(['IRCANTEC; AG2R', 'IRCANTEC; ircem']),
+    'IRCANTEC, AG2R, ircem sous conditions*');
+  assert.equal(retirementFundLabelsForReport(['AG2R; ag2r', 'AG2R']), 'AG2R sous conditions*');
+  assert.equal(retirementFundLabelsForReport(['Fonds A', 'Fonds B']),
+    'Fonds A, Fonds B sous conditions*');
+  assert.equal(retirementFundLabelsForReport(['', null]), '/');
 });

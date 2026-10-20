@@ -1,5 +1,5 @@
 import { joinReportNotePagesText } from './reports/noteText.mjs';
-import { splitRetirementFundNames, retirementFundAidLabelsByOccupant } from './reports/retirementFundNames.mjs';
+import { retirementFundLabelsForReport } from './reports/retirementFundNames.mjs';
 import { resolveReportPigPloermel } from './reports/pigPloermel.mjs';
 import { assertCollectionMutationAllowed } from './collectionMutationContract.mjs';
 import { assertMandateImportIdentity } from './mandateImportIdentity.mjs';
@@ -6135,72 +6135,6 @@ const fetchSanitairesForDossier = async (dossierId) => {
 };
 
 /**
- * Vérifie si une caisse complémentaire donnée ouvre droit à une aide
- * (drapeau `a_une_aide_specifique` coché dans la table de référence).
- * Renvoie le libellé canonique de la caisse en cas de match, sinon
- * `null`. Sépare la lecture du drapeau de la mise en forme finale du
- * label, pour pouvoir agréger plusieurs occupants côté
- * `resolveCaisseComplementaireLabel`.
- *
- * @param {string} caisseName  Nom saisi côté patient (peut différer un
- *   poil du libellé canonique — `findByLabel` tolère accents/casse).
- * @param {Array}  records     Records pré-chargés de la table de
- *   référence pour éviter un round-trip par occupant.
- * @returns {string|null}      Nom canonique si aide active, sinon null.
- */
-const resolveCaisseAideName = (caisseName, records) => {
-  const trimmed = String(caisseName || '').trim();
-  if (!trimmed) return null;
-  const match = findByLabel(records, trimmed);
-  if (!match) {
-    // Caisse libellée côté patient mais absente de la table de
-    // référence (donnée historique ou typo) → on préfère ignorer
-    // plutôt que d'écrire un nom qui ne correspond à rien.
-    return null;
-  }
-  // NocoDB renvoie les Checkbox comme booléens natifs (true/false)
-  // mais on tolère aussi les variantes string ('1', 'true', 'yes')
-  // qu'on rencontre via certaines surfaces (REST sans cast).
-  const flag = field(match, 'a_une_aide_specifique');
-  const hasAide = flag === true
-    || flag === 1
-    || /^(1|true|yes|oui|on)$/i.test(String(flag || '').trim());
-  if (!hasAide) return null;
-  // On retourne le libellé tel que saisi (`trimmed`) pour rester fidèle
-  // à la donnée patient ; les libellés canoniques de la table NocoDB
-  // sont normalement identiques au caractère près.
-  return trimmed;
-};
-
-/**
- * Resolves eligible complementary funds independently for each occupant.
- * A single-person input keeps the legacy label; a household prints numbered
- * occupant lines. Duplicates collapse only within one person's selection.
- * The dedicated a_une_aide_specifique flag still controls eligibility.
- */
-const resolveCaisseComplementaireLabel = async (caisseInput) => {
-  // Normalise l'entrée en tableau de noms.
-  const trimmedList = splitRetirementFundNames(caisseInput);
-  if (trimmedList.length === 0) return '/';
-
-  let records;
-  try {
-    records = await queryAll(TABLES.caissesRetraiteComplementaires, {
-      fields: FIELD_SETS.caissesRetraiteComplementaires,
-    });
-  } catch (error) {
-    console.warn(
-      '[report] échec chargement table caisses_retraite_complementaires :',
-      error?.message || error,
-    );
-    return '/';
-  }
-
-  return retirementFundAidLabelsByOccupant(caisseInput,
-    name => resolveCaisseAideName(name, records));
-};
-
-/**
  * Résout la communauté de communes associée à la commune du bénéficiaire
  * pour la ligne EPCI du descriptif des aides prévisionnelles.
  *
@@ -7283,15 +7217,9 @@ app.post(
       patientId
         ? fetchVadOverlayNotesForReport(patientId, dossierId)
         : Promise.resolve({ projet: null, resume: null, observation: null }),
-      // NEW (2026-04-29 / mis à jour 2026-04-30) : résolution de la
-      // caisse de retraite complémentaire en `'/'` ou
-      // `'<caisse> sous conditions*'`. Quand le dossier a plusieurs
-      // occupants, on agrège leurs caisses respectives — voir la
-      // règle complète dans `resolveCaisseComplementaireLabel`.
-      // On lit `caissesRetraiteComplementaires` de chaque occupant ;
-      // le top-level `patient.caissesRetraiteComplementaires` reste un
-      // fallback pour les dossiers historiques sans `occupants_json`.
-      resolveCaisseComplementaireLabel(
+      // All selected complementary funds, globally deduplicated. Principal
+      // funds belong in the correspondence and are excluded from this cell.
+      retirementFundLabelsForReport(
         Array.isArray(dossier?.patient?.occupants)
           && dossier.patient.occupants.length > 0
           ? dossier.patient.occupants.map(
@@ -7376,10 +7304,8 @@ app.post(
       recommendations,
       // Libellé pré-résolu pour la cellule « Caisse de retraite
       // complémentaire » de la page descriptif des aides
-      // prévisionnelles. La règle métier (lookup
-      // `aide_complementaire`) vit dans `resolveCaisseComplementaireLabel`
-      // côté `index.mjs` car le générateur n'accède pas directement à
-      // NocoDB.
+      // prévisionnelles : toutes les complémentaires sélectionnées,
+      // dédupliquées pour l'ensemble du foyer, sans les principales.
       caisseComplementaireResolved,
       epciResolved,
       ergoProfile,
