@@ -16,6 +16,7 @@ class ConflictResolutionScreen extends StatefulWidget {
     this.onReviewApplied,
     this.loadReviews,
     this.resolveReview,
+    this.resolveFields,
   });
 
   final Dossier localDossier;
@@ -23,6 +24,7 @@ class ConflictResolutionScreen extends StatefulWidget {
   final ValueChanged<String>? onReviewApplied;
   final Future<List<SyncConflictReview>> Function()? loadReviews;
   final Future<void> Function(SyncConflictReview, bool)? resolveReview;
+  final Future<void> Function(SyncConflictReview, Set<String>)? resolveFields;
 
   @override
   State<ConflictResolutionScreen> createState() =>
@@ -34,6 +36,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
   bool _loading = true;
   bool _resolving = false;
   String? _error;
+  final Map<String, Map<String, bool>> _fieldChoices = {};
 
   @override
   void initState() {
@@ -54,6 +57,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
       if (!mounted) return;
       setState(() {
         _reviews = reviews;
+        _fieldChoices.clear();
         _loading = false;
       });
     } catch (error) {
@@ -67,19 +71,26 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
     }
   }
 
-  Future<void> _resolve(SyncConflictReview review, bool keepLocal) async {
+  Future<void> _resolve(
+    SyncConflictReview review,
+    bool keepLocal, {
+    Set<String>? localFields,
+  }) async {
     if (_resolving || _loading || _error != null) return;
     setState(() {
       _resolving = true;
       _error = null;
     });
     try {
-      if (widget.resolveReview != null) {
+      if (localFields != null && widget.resolveFields != null) {
+        await widget.resolveFields!(review, localFields);
+      } else if (localFields == null && widget.resolveReview != null) {
         await widget.resolveReview!(review, keepLocal);
       } else {
         await DataService().resolveReviewedConflict(
           review,
           keepLocal: keepLocal,
+          localFields: localFields,
         );
       }
       if (!mounted) return;
@@ -185,6 +196,11 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
       'visit_recommendations' => 'Préconisations',
       _ => 'Dossier',
     };
+    final selective =
+        review.entityType == 'patient' &&
+        review.remoteExists &&
+        review.localValues.length > 1;
+    final choices = _fieldChoices.putIfAbsent(review.operationId, () => {});
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 20),
       child: Column(
@@ -213,6 +229,30 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                     _fieldLabels[key] ?? key,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
+                  if (selective)
+                    DropdownButton<bool>(
+                      key: ValueKey('choice-${review.operationId}-$key'),
+                      value: choices[key],
+                      hint: const Text('Choisir la valeur à conserver'),
+                      isExpanded: true,
+                      items: const [
+                        DropdownMenuItem(
+                          value: true,
+                          child: Text('Conserver la valeur de cet appareil'),
+                        ),
+                        DropdownMenuItem(
+                          value: false,
+                          child: Text('Conserver la valeur du serveur'),
+                        ),
+                      ],
+                      onChanged: _resolving || _error != null
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setState(() => choices[key] = value);
+                              }
+                            },
+                    ),
                   const SizedBox(height: 6),
                   LayoutBuilder(
                     builder: (context, constraints) {
@@ -307,6 +347,25 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
             spacing: 12,
             runSpacing: 8,
             children: [
+              if (selective)
+                FilledButton.icon(
+                  key: ValueKey('apply-fields-${review.operationId}'),
+                  onPressed:
+                      _resolving ||
+                          _error != null ||
+                          !review.localValues.keys.every(choices.containsKey)
+                      ? null
+                      : () => _resolve(
+                          review,
+                          true,
+                          localFields: {
+                            for (final key in review.localValues.keys)
+                              if (choices[key] == true) key,
+                          },
+                        ),
+                  icon: const Icon(LucideIcons.check),
+                  label: const Text('Appliquer mes choix par champ'),
+                ),
               if (review.entityType == 'patient' &&
                   canRetryOriginalOccupantConflict(
                     jsonDecode(review.payloadJson) as Map<String, dynamic>,
@@ -384,6 +443,8 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
 }
 
 const _fieldLabels = {
+  'caisseRetraitePrincipale': 'Caisse de retraite principale',
+  'caissesRetraiteComplementaires': 'Caisses de retraite complémentaires',
   'items': 'Liste des préconisations',
   'firstName': 'Prenom',
   'lastName': 'Nom',

@@ -438,6 +438,8 @@ class _BeneficiaryTabState extends State<BeneficiaryTab>
         oldP.zipCode != newP.zipCode ||
         oldP.phone != newP.phone ||
         oldP.email != newP.email ||
+        oldP.caisseRetraitePrincipale != newP.caisseRetraitePrincipale ||
+        oldP.caissesRetraiteComplementaires != newP.caissesRetraiteComplementaires ||
         oldP.address != newP.address ||
         oldP.birthDate != newP.birthDate ||
         oldP.secondFirstName != newP.secondFirstName ||
