@@ -2322,7 +2322,7 @@ async function drawVisitPhotosWithFlow({
  * moment de la génération : il gagne sur l'ordre distant NocoDB pour
  * refléter immédiatement les drag/reorder de l'onglet Photos.
  */
-function photosForVisitTag(documents, tag) {
+export function photosForVisitTag(documents, tag) {
   // Comparaison normalisée (lowercase + NFD strip-accents + spaces
   // collapse) — même logique que dans `fetchVisitPhotosForPatient`
   // côté serveur. Garantit qu'un tag NocoDB stocké sous une forme
@@ -2348,8 +2348,8 @@ function photosForVisitTag(documents, tag) {
     if (hasAo && hasBo && ao !== bo) return ao - bo;
     if (hasAo && !hasBo) return -1;
     if (!hasAo && hasBo) return 1;
-    const ad = Date.parse(a?.updatedAt || a?.createdAt || a?.date || 0) || 0;
-    const bd = Date.parse(b?.updatedAt || b?.createdAt || b?.date || 0) || 0;
+    const ad = Date.parse(a?.createdAt || a?.date || 0) || 0;
+    const bd = Date.parse(b?.createdAt || b?.date || 0) || 0;
     if (ad !== bd) return bd - ad;
     return String(a?.id || '').localeCompare(String(b?.id || ''));
   });

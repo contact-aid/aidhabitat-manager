@@ -7017,8 +7017,8 @@ const mergeInlineDocuments = (remoteDocs, inlineMap, orderMap = new Map()) => {
       fileName: inline.fileName,
       mimeType: inline.mimeType,
       tags: inline.tags,
-      categoryOrder: parseOptionalFiniteNumber(inline.categoryOrder)
-        ?? orderMap.get(String(inline.id))
+      categoryOrder: orderMap.get(String(inline.id))
+        ?? parseOptionalFiniteNumber(inline.categoryOrder)
         ?? null,
       dossierId: inline.dossierId,
     });

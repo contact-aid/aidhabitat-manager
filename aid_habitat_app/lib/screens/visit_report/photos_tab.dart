@@ -76,6 +76,9 @@ class _PhotosTabState extends State<PhotosTab>
   int _refreshGeneration = 0;
   String? _activePhotoDragId;
   String? _lastPhotoReorderTargetKey;
+  bool _photoOrderSaving = false;
+  bool _photoOrderChanged = false;
+  List<DocItem>? _photoDragSnapshot;
 
   /// Sections SUPPLÉMENTAIRES ajoutées par l'ergo via le bouton
   /// « + Ajouter une partie » (en plus des 5 sections de base toujours
@@ -147,6 +150,7 @@ class _PhotosTabState extends State<PhotosTab>
   /// remote en arrière-plan. L'écran reste utilisable même si l'API met
   /// quelques secondes à répondre.
   Future<void> _refresh({bool silent = false}) async {
+    if (_activePhotoDragId != null || _photoOrderSaving) return;
     final generation = ++_refreshGeneration;
     try {
       // 1) Lecture locale immédiate (SQLite cache).
@@ -186,7 +190,13 @@ class _PhotosTabState extends State<PhotosTab>
       final refreshed = await _dataService.refreshDocumentsFromRemote(
         widget.dossier.patient.id,
       );
-      if (!mounted || generation != _refreshGeneration || !refreshed) return;
+      if (!mounted ||
+          generation != _refreshGeneration ||
+          !refreshed ||
+          _activePhotoDragId != null ||
+          _photoOrderSaving) {
+        return;
+      }
       // Re-lit la SQLite après merge — si remote a apporté du nouveau,
       // l'UI se met à jour silencieusement.
       final remoteDocs = await _dataService.fetchDocuments(
@@ -288,10 +298,11 @@ class _PhotosTabState extends State<PhotosTab>
       ..sort((a, b) {
         final ao = a.categoryOrder;
         final bo = b.categoryOrder;
-        if (ao != null && bo != null) return ao.compareTo(bo);
-        if (ao != null) return -1;
-        if (bo != null) return 1;
-        return b.date.compareTo(a.date);
+        if (ao != null && bo != null && ao != bo) return ao.compareTo(bo);
+        if (ao != null && bo == null) return -1;
+        if (ao == null && bo != null) return 1;
+        final date = b.date.compareTo(a.date);
+        return date != 0 ? date : a.id.compareTo(b.id);
       });
     return filtered;
   }
@@ -597,6 +608,10 @@ class _PhotosTabState extends State<PhotosTab>
     required DocItem doc,
     required String? newTag,
   }) async {
+    _photoOrderChanged = false;
+    _photoDragSnapshot = null;
+    _activePhotoDragId = null;
+    _refreshGeneration++;
     // Conserve les tags non-visite (Photo, Plan, …) pour ne pas
     // perdre la classification d'origine côté DocumentsScreen.
     final preserved = doc.tags
@@ -660,22 +675,57 @@ class _PhotosTabState extends State<PhotosTab>
           })
           .toList(growable: false);
       _lastPhotoReorderTargetKey = targetKey;
+      _photoOrderChanged = true;
     });
   }
 
   void _startPhotoReorder(String draggedId) {
+    _refreshGeneration++;
+    _photoOrderChanged = false;
+    _photoDragSnapshot = List<DocItem>.from(_photos);
     _activePhotoDragId = draggedId;
     _lastPhotoReorderTargetKey = null;
   }
 
-  Future<void> _commitPhotoOrder(String tag) async {
+  void _cancelPhotoReorder() {
+    final snapshot = _photoDragSnapshot;
+    _photoDragSnapshot = null;
+    _photoOrderChanged = false;
     _activePhotoDragId = null;
     _lastPhotoReorderTargetKey = null;
+    _refreshGeneration++;
+    if (!mounted) return;
+    if (snapshot != null) setState(() => _photos = snapshot);
+    unawaited(_refresh(silent: true));
+  }
+
+  Future<void> _commitPhotoOrder(String tag) async {
+    if (_photoOrderSaving) return;
+    _photoDragSnapshot = null;
+    if (!_photoOrderChanged) {
+      _activePhotoDragId = null;
+      _lastPhotoReorderTargetKey = null;
+      if (mounted) unawaited(_refresh(silent: true));
+      return;
+    }
+    _photoOrderChanged = false;
     final current = _photosForCategory(tag);
-    await _dataService.reorderVisitCategoryDocuments(
-      orderedDocumentIds: current.map((doc) => doc.id).toList(),
-    );
-    await _refresh();
+    _photoOrderSaving = true;
+    _refreshGeneration++;
+    _activePhotoDragId = null;
+    _lastPhotoReorderTargetKey = null;
+    try {
+      await _dataService.reorderVisitCategoryDocuments(
+        orderedDocumentIds: current.map((doc) => doc.id).toList(),
+      );
+    } catch (_) {
+      if (mounted) {
+        _showError('L’ordre des photos n’a pas pu être enregistré. Réessayez.');
+      }
+    } finally {
+      _photoOrderSaving = false;
+    }
+    if (mounted) await _refresh();
   }
 
   void _showError(String message) {
@@ -1071,6 +1121,7 @@ class _PhotosTabState extends State<PhotosTab>
       onDragStarted: _startPhotoReorder,
       onPreviewReorder: _previewPhotoReorder,
       onCommitOrder: _commitPhotoOrder,
+      onCancelOrder: _cancelPhotoReorder,
       onMoveToCategory: _moveToCategory,
       onOpen: _openFullscreenWithDelete,
     );
@@ -1308,6 +1359,7 @@ class _PhotoDragSlot extends StatefulWidget {
     required this.onDragStarted,
     required this.onPreviewReorder,
     required this.onCommitOrder,
+    required this.onCancelOrder,
     required this.onMoveToCategory,
     required this.onOpen,
   });
@@ -1324,6 +1376,7 @@ class _PhotoDragSlot extends StatefulWidget {
   })
   onPreviewReorder;
   final Future<void> Function(String tag) onCommitOrder;
+  final VoidCallback onCancelOrder;
   final Future<void> Function({required DocItem doc, required String newTag})
   onMoveToCategory;
   final void Function(DocItem doc) onOpen;
@@ -1423,7 +1476,13 @@ class _PhotoDragSlotState extends State<_PhotoDragSlot> {
                 hitTestBehavior: HitTestBehavior.opaque,
                 maxSimultaneousDrags: 1,
                 onDragStarted: () => widget.onDragStarted(_doc.id),
-                onDragEnd: (_) => widget.onCommitOrder(widget.tag),
+                onDragEnd: (details) {
+                  if (details.wasAccepted) {
+                    widget.onCommitOrder(widget.tag);
+                  } else {
+                    widget.onCancelOrder();
+                  }
+                },
                 feedback: Material(
                   color: Colors.transparent,
                   elevation: 0,
