@@ -506,7 +506,29 @@ class DossierRepository {
   Future<void> resolveReviewedConflict(
     SyncConflictReview review, {
     required bool keepLocal,
+    Set<String>? localFields,
   }) async {
+    if (localFields != null &&
+        (review.entityType != 'patient' ||
+            !review.remoteExists ||
+            !localFields.every(review.localValues.containsKey))) {
+      throw StateError('Sélection de champs invalide.');
+    }
+    final selectedLocal = localFields == null
+        ? (keepLocal ? review.localValues.keys.toSet() : <String>{})
+        : Set<String>.of(localFields);
+    final hasLocal = selectedLocal.isNotEmpty;
+    final chosenUpdates = {
+      for (final key in selectedLocal) key: review.localValues[key],
+    };
+    final restoredColumns = {
+      for (final entry in review.remoteColumns.entries)
+        if (localFields == null ||
+            !_mapPatientFieldsToApi({
+              entry.key: entry.value,
+            }).keys.any(selectedLocal.contains))
+          entry.key: entry.value,
+    };
     final db = await _database.database;
     await db.transaction((txn) async {
       final rows = await txn.query(
@@ -561,11 +583,16 @@ class DossierRepository {
         'operation_id': review.operationId,
         'entity_type': review.entityType,
         'entity_local_id': review.entityLocalId,
-        'decision': keepLocal ? 'keep_local' : 'take_remote',
+        'decision': localFields != null
+            ? 'merge_fields'
+            : keepLocal
+            ? 'keep_local'
+            : 'take_remote',
         'snapshot_json': await OfflineVault.instance.sealString(
           jsonEncode({
             'mutation': jsonDecode(review.payloadJson),
             'remoteValues': review.remoteValues,
+            if (localFields != null) 'localFields': selectedLocal.toList(),
             if (review.entityType == 'visit_recommendations') ...{
               'localValues': review.localValues,
               'remoteRevision': review.recommendationsRevision,
@@ -641,7 +668,9 @@ class DossierRepository {
       payload.remove('conflict');
       payload.remove('localReference');
       payload.remove('retryMutation');
-      payload['updates'] = review.localValues;
+      payload['updates'] = localFields == null
+          ? review.localValues
+          : chosenUpdates;
       if (review.entityType == 'diagnostic_sanitaires') {
         for (final key in _secondaryFields['diagnostic_sanitaires']!.keys) {
           payload[key] = review.localValues[key];
@@ -664,7 +693,7 @@ class DossierRepository {
           'payload_json': await OfflineVault.instance.sealString(
             jsonEncode(payload),
           ),
-          'status': keepLocal ? 'pending' : 'completed',
+          'status': hasLocal ? 'pending' : 'completed',
           'last_error': null,
           'attempt_count': 0,
           'updated_at': now,
@@ -675,7 +704,7 @@ class DossierRepository {
       final changed = await txn.update(
         review.table,
         {
-          if (!keepLocal) ...review.remoteColumns,
+          if (localFields != null || !keepLocal) ...restoredColumns,
           if (review.contextReferenceJson == null &&
               review.remoteUpdatedAt != null)
             'remote_updated_at': review.remoteUpdatedAt,
@@ -686,7 +715,7 @@ class DossierRepository {
             'remote_reference_known': 1,
           },
           'updated_at': now,
-          'sync_state': keepLocal ? 'pendingSync' : 'synced',
+          'sync_state': hasLocal ? 'pendingSync' : 'synced',
         },
         where: 'local_id = ?',
         whereArgs: [review.localRowId],

@@ -176,6 +176,94 @@ void main() {
     },
   );
 
+  for (final keepFunds in [true, false]) {
+    test(
+      'mixed pension and email resolution preserves selected values $keepFunds',
+      () async {
+        final occupants = [
+          {
+            'firstName': 'Local',
+            'caisseRetraitePrincipale': 'CNAV',
+            'caissesRetraiteComplementaires': 'Malakoff Humanis',
+          },
+        ];
+        await dossiers.updatePatient('patient-1', {
+          'caisse_retraite_principale': 'CNAV',
+          'caisses_retraite_complementaires': 'Malakoff Humanis',
+          'occupants_json': jsonEncode(occupants),
+          'email': 'old-local@example.test',
+        });
+        await conflict('patient');
+        final raw = remote(version: _new);
+        raw['patient'] = <String, dynamic>{
+          ...(raw['patient'] as Map<String, dynamic>),
+          'email': 'server@example.test',
+          'caisseRetraitePrincipale': 'CNBF',
+          'caissesRetraiteComplementaires': 'AG2R',
+          'occupants': [
+            {'firstName': 'Local', 'caisseRetraitePrincipale': 'Aucune'},
+          ],
+        };
+        final review = (await dossiers.reviewConflicts(
+          'dossier-1',
+          raw,
+        )).single;
+        final selected = keepFunds
+            ? {
+                'occupants',
+                'caisseRetraitePrincipale',
+                'caissesRetraiteComplementaires',
+              }
+            : <String>{};
+        await dossiers.resolveReviewedConflict(
+          review,
+          keepLocal: true,
+          localFields: selected,
+        );
+        final row = (await db.query('patients')).single;
+        expect(row['email'], 'server@example.test');
+        expect(row['phone'], '123');
+        expect(row['caisse_retraite_principale'], keepFunds ? 'CNAV' : 'CNBF');
+        expect(
+          row['caisses_retraite_complementaires'],
+          keepFunds ? 'Malakoff Humanis' : 'AG2R',
+        );
+        final mutation = await payload();
+        expect((mutation['updates'] as Map).keys.toSet(), selected);
+        expect(
+          mutation['concurrency']['baseValues']['email'],
+          'server@example.test',
+        );
+        expect(mutation['concurrency']['expectedUpdatedAt'], _new);
+        expect(
+          (await db.query('sync_operations')).single['status'],
+          keepFunds ? 'pending' : 'completed',
+        );
+        expect(row['sync_state'], keepFunds ? 'pendingSync' : 'synced');
+        final history = (await db.query('sync_conflict_history')).single;
+        expect(history['decision'], 'merge_fields');
+        final snapshot = jsonDecode(
+          await OfflineVault.instance.openString(
+            history['snapshot_json'] as String,
+          ),
+        );
+        expect(
+          snapshot['mutation']['updates']['email'],
+          'old-local@example.test',
+        );
+        expect((snapshot['localFields'] as List).toSet(), selected);
+        await expectLater(
+          dossiers.resolveReviewedConflict(
+            review,
+            keepLocal: true,
+            localFields: selected,
+          ),
+          throwsStateError,
+        );
+      },
+    );
+  }
+
   test('409 preserves both versions, blocks boot and protects pull', () async {
     await dossiers.updatePatient('patient-1', {'first_name': 'Local'});
     await conflict('patient');

@@ -66,6 +66,7 @@ Dossier _dossier({
   int numberPeople = 0,
   String phone = '0102030405',
   String email = 'old@test.fr',
+  String principalFund = 'Carsat; MSA',
   List<Occupant> occupants = const [],
 }) =>
     Dossier(
@@ -86,7 +87,7 @@ Dossier _dossier({
         // Legacy values are normalized by the form but must not become edits.
         numberPeople: numberPeople,
         fiscalRevenue: 12000,
-        caisseRetraitePrincipale: 'Carsat; MSA',
+        caisseRetraitePrincipale: principalFund,
         trustedPerson: TrustedPerson(name: 'Bob', phone: '', email: ''),
       ),
       status: DossierStatus.TO_VISIT,
@@ -388,6 +389,17 @@ void main() {
     expect(repository.patientWrites, [
       {'phone': ''},
     ]);
+  });
+
+  testWidgets('remote pension change refreshes the form without generating a write', (tester) async {
+    final repository = _Repository();
+    await _mount(tester, repository, dossier: _dossier(principalFund: 'CNBF'), section: 3);
+    expect(find.text('CNBF'), findsWidgets);
+    await _mount(tester, repository, dossier: _dossier(principalFund: 'CNAV'), section: 3);
+    expect(find.text('CNAV'), findsWidgets);
+    expect(find.text('CNBF'), findsNothing);
+    await _flush(tester);
+    expect(repository.patientWrites, isEmpty);
   });
 
   testWidgets('server choice refreshes dependence without saving stale form', (

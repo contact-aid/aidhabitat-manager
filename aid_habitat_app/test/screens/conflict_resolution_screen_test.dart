@@ -110,6 +110,65 @@ void main() {
     );
   }
 
+  testWidgets('mixed resolution requires explicit choices before applying', (
+    tester,
+  ) async {
+    final mixed = (await tester.runAsync(() async {
+      final local = LocalDatabase.forTesting(db);
+      final repository = DossierRepository(database: local);
+      await repository.updatePatient('patient-1', {
+        'email': 'local@example.test',
+      });
+      final raw = <String, dynamic>{
+        'id': 'dossier-1',
+        'patient': {
+          'id': 'patient-1',
+          'firstName': 'Version serveur',
+          'email': 'server@example.test',
+          'updatedAt': '2026-09-02T10:00:00Z',
+        },
+      };
+      return (await repository.reviewConflicts('dossier-1', raw)).single;
+    }))!;
+    Set<String>? selected;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ConflictResolutionScreen(
+          localDossier: dossier,
+          onResolved: () {},
+          loadReviews: () async => [mixed],
+          resolveFields: (_, fields) async {
+            selected = fields;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final apply = find.byKey(ValueKey('apply-fields-${mixed.operationId}'));
+    expect(tester.widget<ButtonStyleButton>(apply).onPressed, isNull);
+    for (final entry in {'firstName': true, 'email': false}.entries) {
+      await tester.tap(
+        find.byKey(ValueKey('choice-${mixed.operationId}-${entry.key}')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find
+            .text(
+              entry.value
+                  ? 'Conserver la valeur de cet appareil'
+                  : 'Conserver la valeur du serveur',
+            )
+            .last,
+      );
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(apply);
+    await tester.tap(apply);
+    await tester.pumpAndSettle();
+    expect(selected, {'firstName'});
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'offline comparison preserves the screen and offers refresh without writing',
     (tester) async {

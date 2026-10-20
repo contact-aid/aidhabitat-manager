@@ -1419,13 +1419,15 @@ class DataService {
   Future<void> resolveReviewedConflict(
     SyncConflictReview review, {
     required bool keepLocal,
+    Set<String>? localFields,
   }) async {
     await _dossierRepository.resolveReviewedConflict(
       review,
       keepLocal: keepLocal,
+      localFields: localFields,
     );
     _dossierRecordsController.add(null);
-    if (keepLocal) SyncEngine().requestSync();
+    if (localFields?.isNotEmpty ?? keepLocal) SyncEngine().requestSync();
   }
 
   /// Recharge l'état distant sans jamais vider le cache local.
