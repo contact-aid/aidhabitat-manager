@@ -7,6 +7,7 @@ bash "$script_dir/test_safely.sh" \
   test/services/media_auth_origin_test.dart \
   test/services/ai_rewrite_service_test.dart \
   test/components/ai_rewrite_preview_dialog_test.dart \
+  test/components/notes_live_popup_test.dart \
   test/services/sync_mutation_test.dart \
   test/services/occupant_conflict_retry_test.dart \
   test/screens/visit_report/wiki_picker_tags_test.dart \

@@ -164,7 +164,6 @@ class _NoteWindowScreenState extends State<NoteWindowScreen>
       }
       final text = args['text']?.toString() ?? '';
       if (_controller.text == text) return;
-      if (_focusNode.hasFocus) return;
       final oldOffset = _controller.selection.baseOffset.clamp(0, text.length);
       _controller.value = TextEditingValue(
         text: text,

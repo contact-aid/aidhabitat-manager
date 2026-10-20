@@ -523,6 +523,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       tabKey: tabKey,
       pageNumber: 0,
     );
+    // A newer edit in either editor supersedes a pending popup save, including
+    // one whose SQLite read was already in flight when focus changed.
+    if (_liveText['$patientId::$tabKey'] != text) return;
     List<dynamic> strokes = const [];
     if (existingJson != null && existingJson.isNotEmpty) {
       try {
@@ -605,7 +608,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       tabKey: sourceTab,
       pageNumber: 0,
     );
-    final initialText = _extractTextFromDrawingJson(existingJson);
+    final initialText =
+        _liveText['${_dossier.patient.id}::$sourceTab'] ??
+        _extractTextFromDrawingJson(existingJson);
     if (!mounted) return;
     await showSoftDialog<void>(
       context: context,
@@ -701,6 +706,12 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// Sur natif : DesktopMultiWindow.invokeMethod ciblé par windowId.
   void _pushDraftToOpenWindow(String tabKey, String text) {
     final patientId = _dossier.patient.id;
+    final key = '$patientId::$tabKey';
+    // Keep the newest draft for reopening/disposal, and do not echo remote
+    // text when a click or drawing-only edit emits an unchanged draft.
+    if (_liveText[key] == text) return;
+    _liveText[key] = text;
+    _saveDebounce.remove(key)?.cancel();
     if (kIsWeb) {
       note_window_web.sendNoteIpc(
         method: 'pushNote',
@@ -708,7 +719,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       );
       return;
     }
-    final key = '$patientId::$tabKey';
     final windowId = _openNoteWindows[key];
     if (windowId == null) return;
     DesktopMultiWindow.invokeMethod(windowId, 'pushNote', {
@@ -868,7 +878,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       tabKey: sourceTab,
       pageNumber: 0,
     );
-    final initialText = _extractTextFromDrawingJson(existingJson);
+    final initialText =
+        _liveText['${_dossier.patient.id}::$sourceTab'] ??
+        _extractTextFromDrawingJson(existingJson);
 
     // Sur web : on tente d'ouvrir une VRAIE fenêtre browser détachée
     // (popup window avec les pastilles macOS rouge/jaune/vert). Marche
