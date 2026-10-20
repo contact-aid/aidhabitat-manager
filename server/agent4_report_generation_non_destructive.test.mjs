@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -23,6 +23,7 @@ if (process.argv.includes('--agent4-report-runner')) {
       ], {
         cwd: root,
         env: {
+          PATH: process.env.PATH,
           NODE_ENV: 'test',
           AIDHABITAT_API_ONLY: '1',
           AIDHABITAT_DATA_DIR_PATH: root,
@@ -62,7 +63,24 @@ async function runReportRoute() {
     password,
     tables,
   } = await import('./test-fixtures/conditionalRoutes.rest.mjs');
-  const base = createRestMock();
+  const base = createRestMock({ referenceRows: { caissesComp: [
+    { Id: 701, nom: 'Fonds A', a_une_aide_specifique: false },
+    { Id: 702, nom: 'Fonds B', a_une_aide_specifique: true },
+    { Id: 703, nom: 'Fonds C', a_une_aide_specifique: true },
+    { Id: 704, nom: 'Fonds D', a_une_aide_specifique: false },
+  ] } });
+  base.row('beneficiaire').occupants_json = JSON.stringify([
+    { firstName: 'Alice', lastName: 'EXEMPLE', caissesRetraiteComplementaires: 'Fonds A; Fonds B' },
+    { firstName: 'Paul', lastName: 'EXEMPLE', caissesRetraiteComplementaires: 'Fonds B; Fonds C; Fonds D' },
+  ]);
+  const sharedText = 'Observation unique depuis quatre pages manuscrites.';
+  const noteRows = Array.from({ length: 4 }, (_, page) => ({
+    Id: 800 + page, uuid_source: `shared-note-${page}`,
+    beneficiaire_id: 'nocodb-beneficiaire-201', dossier_id: dossierId,
+    scope_id: dossierId, scope_type: 'visit_report', tab_key: 'Accessibilité-Notes',
+    sub_tab_key: '', page_number: page, text_content: '',
+    drawing_json: JSON.stringify({ version: 1, text: sharedText, strokes: [] }),
+  }));
   const patientId = 'nocodb-beneficiaire-201';
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -81,7 +99,6 @@ async function runReportRoute() {
   const nativeFetch = globalThis.fetch;
   const emptyReportTables = new Set([
     tables.mobile_document_chunks,
-    tables.mobile_note_pages,
     tables.mobile_visit_recommendations,
     'mdukulxcd18ae3o',
     'mbkuomk0aazes1c',
@@ -106,6 +123,12 @@ async function runReportRoute() {
     );
     const method = init.method || 'GET';
     const tableId = records[1];
+    if (tableId === tables.mobile_note_pages && method === 'GET') {
+      const where = url.searchParams.get('where') || '';
+      const requestedTab = /\(tab_key,eq,([^()]+)\)/.exec(where)?.[1];
+      const list = requestedTab && requestedTab !== 'Accessibilité-Notes' ? [] : noteRows;
+      return json({ list, pageInfo: { totalRows: list.length, isLastPage: true } });
+    }
     if (emptyReportTables.has(tableId)) {
       if (method === 'GET') {
         return json({ list: [], pageInfo: { totalRows: 0, isLastPage: true } });
@@ -217,6 +240,19 @@ async function runReportRoute() {
     assert.equal(response.status, 200, responseBytes.toString('utf8').slice(0, 500));
     assert.match(response.headers.get('content-type') || '', /application\/pdf/);
     assert(responseBytes.subarray(0, 4).equals(Buffer.from('%PDF')));
+
+    const previewDir = await mkdtemp(path.join(tmpdir(), 'report-note-sources-'));
+    try {
+      const pdfPath = path.join(previewDir, 'report.pdf');
+      await writeFile(pdfPath, responseBytes);
+      const { stdout: pdfText } = await promisify(execFile)('pdftotext', ['-layout', pdfPath, '-']);
+      assert.equal(pdfText.split(sharedText).length - 1, 1,
+        'the same written accessibility note must print once across four handwritten pages');
+      assert(/Fonds B et Fonds C sous[\s\S]{0,100}conditions\*/.test(pdfText),
+        pdfText.slice(pdfText.indexOf('Descriptif des aides'), pdfText.indexOf('Descriptif des aides') + 1400));
+      assert.doesNotMatch(pdfText, /Fonds A|Fonds D/);
+    } finally { await rm(previewDir, { recursive: true, force: true }); }
+    console.log('PASS report: shared note once, multi-select eligible funds combined once');
 
     // The inline copy is preferred, while the other remote visit photo is fetched.
     assert(!contentReads.includes('remote-photo-a'));
