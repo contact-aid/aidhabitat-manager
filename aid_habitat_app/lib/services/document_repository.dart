@@ -137,7 +137,60 @@ class DocumentRepository {
     );
   }
 
+  /// Freeze the initial display order of visit photos. New remote photos are
+  /// appended; metadata/upload timestamps must never move an existing photo.
+  Future<void> _ensureVisitPhotoOrder(String patientId) async {
+    final db = await _database.database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'documents',
+        columns: ['local_id', 'category_order', 'tags_json', 'created_at'],
+        where:
+            "patient_local_id = ? AND pending_delete = 0 AND (mime_type LIKE 'image/%' OR LOWER(file_ext) IN ('jpg','jpeg','png','gif','webp','heic'))",
+        whereArgs: [patientId],
+        orderBy: 'updated_at DESC, created_at DESC, local_id ASC',
+      );
+      final initialPositions = {
+        for (var i = 0; i < rows.length; i++) rows[i]['local_id']: i,
+      };
+      final groups = <String, List<Map<String, Object?>>>{};
+      for (final row in rows) {
+        final tags = (jsonDecode(row['tags_json'] as String? ?? '[]') as List)
+            .cast<String>();
+        final visitTags = tags.where((tag) => tag.startsWith('Visite - '));
+        if (visitTags.isEmpty) continue;
+        groups.putIfAbsent(visitTags.first, () => []).add(row);
+      }
+      for (final photos in groups.values) {
+        photos.sort((a, b) {
+          final ao = (a['category_order'] as num?)?.toInt();
+          final bo = (b['category_order'] as num?)?.toInt();
+          if (ao != null && bo != null && ao != bo) return ao.compareTo(bo);
+          if (ao != null && bo == null) return -1;
+          if (ao == null && bo != null) return 1;
+          final date = (b['created_at'] as String? ?? '').compareTo(
+            a['created_at'] as String? ?? '',
+          );
+          if (date != 0) return date;
+          return initialPositions[a['local_id']]!.compareTo(
+            initialPositions[b['local_id']]!,
+          );
+        });
+        for (var i = 0; i < photos.length; i++) {
+          if (photos[i]['category_order'] == i) continue;
+          await txn.update(
+            'documents',
+            {'category_order': i},
+            where: 'local_id = ?',
+            whereArgs: [photos[i]['local_id']],
+          );
+        }
+      }
+    });
+  }
+
   Future<List<DocItem>> fetchDocuments(String patientId) async {
+    await _ensureVisitPhotoOrder(patientId);
     final db = await _database.database;
     final rows = await db.query(
       'documents',
@@ -176,12 +229,13 @@ class DocumentRepository {
   Future<List<InlineDocumentBytes>> fetchVisitReportInlineBytes(
     String patientId,
   ) async {
+    await _ensureVisitPhotoOrder(patientId);
     final db = await _database.database;
     final rows = await db.query(
       'documents',
       where:
           'patient_local_id = ? AND pending_delete = 0 '
-          "AND mime_type LIKE 'image/%' "
+          "AND (mime_type LIKE 'image/%' OR LOWER(file_ext) IN ('jpg','jpeg','png','gif','webp','heic')) "
           "AND tags_json LIKE '%Visite - %'",
       whereArgs: [patientId],
       orderBy:
@@ -257,6 +311,7 @@ class DocumentRepository {
   Future<List<InlineDocumentOrder>> fetchVisitReportPhotoOrder(
     String patientId,
   ) async {
+    await _ensureVisitPhotoOrder(patientId);
     final db = await _database.database;
     final rows = await db.query(
       'documents',
@@ -269,7 +324,7 @@ class DocumentRepository {
       ],
       where:
           'patient_local_id = ? AND pending_delete = 0 '
-          "AND mime_type LIKE 'image/%' "
+          "AND (mime_type LIKE 'image/%' OR LOWER(file_ext) IN ('jpg','jpeg','png','gif','webp','heic')) "
           "AND tags_json LIKE '%Visite - %' "
           'AND category_order IS NOT NULL',
       whereArgs: [patientId],
@@ -1797,14 +1852,16 @@ class DocumentRepository {
           // remet TOUTES les photos visite à `category_order = NULL` →
           // le tri perd son sens.
           'category_order':
-              existing?['category_order'] ?? remote['category_order'],
+              existing?['category_order'] ??
+              remote['categoryOrder'] ??
+              remote['category_order'],
           // Overlays belong to the old content, archived above on replacement.
           'annotations_json': contentChanged
               ? null
               : existing?['annotations_json'],
           'created_at':
-              remote['createdAt']?.toString() ??
               existing?['created_at'] as String? ??
+              remote['createdAt']?.toString() ??
               DateTime.now().toIso8601String(),
           'updated_at':
               remote['updatedAt']?.toString() ??
