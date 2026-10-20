@@ -248,7 +248,7 @@ async function runReportRoute() {
       const { stdout: pdfText } = await promisify(execFile)('pdftotext', ['-layout', pdfPath, '-']);
       assert.equal(pdfText.split(sharedText).length - 1, 1,
         'the same written accessibility note must print once across four handwritten pages');
-      assert(/Fonds B et Fonds C sous[\s\S]{0,100}conditions\*/.test(pdfText),
+      assert(/Occupant 1 : Fonds B[\s\S]{0,100}Occupant 2 : Fonds B, Fonds C[\s\S]{0,100}sous conditions\*/.test(pdfText),
         pdfText.slice(pdfText.indexOf('Descriptif des aides'), pdfText.indexOf('Descriptif des aides') + 1400));
       assert.doesNotMatch(pdfText, /Fonds A|Fonds D/);
     } finally { await rm(previewDir, { recursive: true, force: true }); }

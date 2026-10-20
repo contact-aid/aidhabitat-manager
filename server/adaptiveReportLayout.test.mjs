@@ -145,3 +145,42 @@ test('trusted person uses the full width and preserves long existing text',async
   assert(text.includes('0102030405'));assert(text.includes('contact@example.test'));
  }
 });
+
+
+test('a grouped legacy given name projects two identities without moving personal data', () => {
+  const source = { firstName: 'Alice et Paul', lastName: 'EXEMPLE', numberPeople: 2,
+    occupants: [
+      { firstName: 'Alice et Paul', lastName: 'EXEMPLE', birthDate: '1950-01-01', caissesRetraiteComplementaires: 'AG2R' },
+      { firstName: '', lastName: '', birthDate: '1952-02-02', caissesRetraiteComplementaires: 'Malakoff' },
+    ],
+  };
+  const before = structuredClone(source);
+  const rows = reportOccupants(source);
+  assert.deepEqual(rows.map(o => [o.lastName, o.firstName]), [['EXEMPLE', 'Alice'], ['EXEMPLE', 'Paul']]);
+  assert.equal(rows[0].birthDate, '1950-01-01');
+  assert.equal(rows[1].birthDate, '1952-02-02');
+  assert.equal(rows[1].caissesRetraiteComplementaires, 'Malakoff');
+  assert.deepEqual(source, before);
+  assert.deepEqual(reportOccupants({ ...source, occupants: [
+    { firstName: 'Alice', lastName: 'AUTRE' }, { firstName: 'Jean', lastName: 'DIFFÉRENT' },
+  ] }).map(o => o.firstName), ['Alice', 'Jean']);
+  assert.equal(reportOccupants({ ...source, numberPeople: 1 })[0].firstName, 'Alice et Paul');
+});
+
+test('PDF prints two individual identities and retains very long fund lists in an appendix', async () => {
+  const funds = Array.from({ length: 15 }, (_, i) => `Occupant ${i + 1} : Fonds complémentaire au libellé long ${i + 1}`).join('\n');
+  const { bytes } = await generateVisitReport({
+    dossier: { patient: { firstName: 'Alice et Paul', lastName: 'EXEMPLE', numberPeople: 2,
+      occupants: [{ firstName: 'Alice et Paul', lastName: 'EXEMPLE' }, { firstName: '', lastName: '' }],
+    }, housing: {} },
+    caisseComplementaireResolved: funds,
+    fetchImageBytes: async () => null,
+  });
+  const text = await extract(bytes);
+  const beneficiary = text.split('Renseignements sur le bénéficiaire').slice(-1)[0].split('Renseignements sur l’ergothérapeute')[0];
+  assert.match(beneficiary, /Occupant 1[\s\S]*EXEMPLE[\s\S]*Alice/);
+  assert.match(beneficiary, /Occupant 2[\s\S]*EXEMPLE[\s\S]*Paul/);
+  assert.doesNotMatch(beneficiary, /Alice et Paul/);
+  assert.match(text, /Caisses de retraite par occupant/);
+  assert.match(text, /Fonds complémentaire au libellé long 15/);
+});
