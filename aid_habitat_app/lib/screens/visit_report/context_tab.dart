@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/dossier_occupants.dart';
 import '../../services/dossier_repository.dart';
 import '../../services/save_debounce.dart';
 import '../../components/brand_colors.dart';
@@ -137,6 +137,7 @@ class _ContextTabState extends State<ContextTab>
         oldP.secondFirstName != newP.secondFirstName ||
         oldP.secondLastName != newP.secondLastName ||
         oldP.numberPeople != newP.numberPeople ||
+        oldP.occupants != newP.occupants ||
         oldP.homeHelpTxt != newP.homeHelpTxt;
     if (nameChanged && _loaded) {
       _rebuildOccupantsFromNewPatient();
@@ -199,8 +200,7 @@ class _ContextTabState extends State<ContextTab>
     AutonomyData autonomy,
     MedicalContext medical,
   ) {
-    final patient = widget.dossier.patient;
-    final count = math.max(1, patient.numberPeople ?? 1);
+    final count = dossierOccupants(widget.dossier.patient).length;
     final out = <OccupantAutonomy>[];
     for (var i = 0; i < count; i++) {
       final existing = i < autonomy.occupants.length
@@ -689,19 +689,14 @@ class _ContextTabState extends State<ContextTab>
   ///   - Boutons prev/next 30×30 rounded-8 (transparents, désactivés si
   ///     un seul occupant)
   Widget _buildOccupantHeader(int idx, {Widget? extra}) {
-    final p = widget.dossier.patient;
-    String first = '';
-    String last = '';
-    if (idx == 0) {
-      first = p.firstName.trim();
-      last = p.lastName.trim();
-    } else if (idx < p.occupants.length) {
-      first = p.occupants[idx].firstName.trim();
-      last = p.occupants[idx].lastName.trim();
-    }
+    // Use the same identity projection as Bénéficiaire, including legacy
+    // fallbacks, instead of the dossier's potentially grouped primary name.
+    final occupant = dossierOccupants(widget.dossier.patient)[idx];
+    final first = occupant.firstName.trim();
+    final last = occupant.lastName.trim();
     final display = (first.isEmpty && last.isEmpty)
         ? 'Occupant ${idx + 1}'
-        : [first, last.toUpperCase()].where((s) => s.isNotEmpty).join(' ');
+        : [last.toUpperCase(), first].where((s) => s.isNotEmpty).join(' ');
     final total = _contextOccupants.length;
     final hasNav = total > 1;
     // `role` (BÉNÉFICIAIRE PRINCIPAL / CONJOINT·E) retiré sur demande user

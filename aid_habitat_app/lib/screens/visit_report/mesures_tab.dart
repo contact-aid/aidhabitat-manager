@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../models/types.dart';
+import '../../models/dossier_occupants.dart';
 import '../../services/dossier_repository.dart';
 import '../../components/notes_widget.dart';
 
@@ -30,12 +31,7 @@ class _MesuresTabState extends State<MesuresTab>
   @override
   bool get wantKeepAlive => true;
 
-  int get _occupantCount {
-    final n = widget.dossier.patient.numberPeople;
-    if (n != null && n > 0) return n;
-    final occupantCount = widget.dossier.patient.occupants.length;
-    return occupantCount > 0 ? occupantCount : 1;
-  }
+  int get _occupantCount => dossierOccupants(widget.dossier.patient).length;
 
   // _occupantLabels() retiré : l'en-tête affiche maintenant le nom
   // complet (Prénom NOM) de l'occupant courant via `_buildOccupantHeader`.
@@ -130,19 +126,14 @@ class _MesuresTabState extends State<MesuresTab>
   /// d'occupant » → on aligne l'onglet Mesures sur le même pattern banner
   /// que Bénéficiaire et Contexte de vie.
   Widget _buildOccupantHeader(int idx) {
-    final p = widget.dossier.patient;
-    String first = '';
-    String last = '';
-    if (idx == 0) {
-      first = p.firstName.trim();
-      last = p.lastName.trim();
-    } else if (idx < p.occupants.length) {
-      first = p.occupants[idx].firstName.trim();
-      last = p.occupants[idx].lastName.trim();
-    }
+    // Use the same identity projection as Bénéficiaire, including legacy
+    // fallbacks, instead of the dossier's potentially grouped primary name.
+    final occupant = dossierOccupants(widget.dossier.patient)[idx];
+    final first = occupant.firstName.trim();
+    final last = occupant.lastName.trim();
     final display = (first.isEmpty && last.isEmpty)
         ? 'Occupant ${idx + 1}'
-        : [first, last.toUpperCase()].where((s) => s.isNotEmpty).join(' ');
+        : [last.toUpperCase(), first].where((s) => s.isNotEmpty).join(' ');
     // Note : `_buildOccupantHeader` n'est appelé que quand `hasMultiple`
     // est vrai (cf. build()), donc l'ancien ternaire `hasNav ? ... : ...`
     // était toujours dans la branche "vrai". Simplifié 2026-05-15.
