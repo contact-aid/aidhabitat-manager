@@ -861,8 +861,9 @@ class SyncRepository {
       if (await resumeStaleRunningOperation(
         operationId: row['id'] as String,
         observedUpdatedAt: row['updated_at'] as String,
-      ))
+      )) {
         recovered++;
+      }
     }
     return recovered;
   }
