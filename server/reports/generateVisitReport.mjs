@@ -2272,8 +2272,8 @@ async function drawVisitPhotosWithFlow({
     if (cursorY - titleSpace - rowH - captionHeight < bottomLimit) {
       const insertAt = page8Index + 1 + bonusPagesInserted;
       currentPage = pdfDoc.insertPage(insertAt, [pageWidth, pageHeight]);
-      drawReportFrame(currentPage, row.label === 'Sanitaires' ? 'Sanitaires' : 'Photos du logement', helveticaTitle, { bottom: 42.4, top: 793 });
-      categoryInFrame = row.label === 'Sanitaires';
+      drawReportFrame(currentPage, row.type === 'logement' ? 'Photos du logement' : row.label, helveticaTitle, { bottom: 42.4, top: 793 });
+      categoryInFrame = row.type !== 'logement';
       cursorY = Math.min(pageHeight - bonusMarginTop, 768);
       bottomLimit = bonusMarginBottom;
       bonusPagesInserted += 1;

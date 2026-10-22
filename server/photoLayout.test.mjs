@@ -50,9 +50,11 @@ test('real report renders all photos at the same height across pages', async () 
   }));
   const draws = [];
   const captions = [];
+  const headings = [];
   const originalText = PDFPage.prototype.drawText;
   PDFPage.prototype.drawText = function(text, options) {
     if (text.startsWith('Photo ')) captions.push({text,options,page:this});
+    if (['Photos du logement', 'Accessibilité', 'Sanitaires'].includes(text)) headings.push({text,page:this});
     return originalText.call(this,text,options);
   };
   const original = PDFPage.prototype.drawImage;
@@ -80,6 +82,13 @@ test('real report renders all photos at the same height across pages', async () 
   assert.equal(draws.length, documents.length);
   assert.equal(draws.slice(0,3).filter(d=>d.page===draws[0].page && d.options.y===draws[0].options.y).length,3);
   assert.equal(captions.length,documents.length);
+  const firstCaptionPerPage = [...new Map(captions.slice().reverse().map(c => [c.page, c])).values()];
+  for (const caption of firstCaptionPerPage) {
+    if (caption.page === draws[0].page) continue; // initial heading is baked in the template
+    const n = Number(caption.text.match(/^Photo (\d+)/)[1]);
+    const expected = n <= 10 ? 'Photos du logement' : n <= 20 ? 'Accessibilité' : 'Sanitaires';
+    assert(headings.some(h => h.page === caption.page && h.text === expected), `Continuation page for photo ${n} must be headed ${expected}`);
+  }
   for(let i=0;i<captions.length;i++) {
     assert.equal(captions[i].page,draws[i].page);
     assert(captions[i].options.y < draws[i].options.y);
