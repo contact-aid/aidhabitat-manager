@@ -31,7 +31,7 @@ export function createVisitPhotoOrderStore(directory) {
         const previous = state.categories[categoryTag];
         if (previous && (initializeOnly || previous.mutationId === mutationId ||
             Date.parse(previous.modifiedAt) > Date.parse(modifiedAt))) return previous;
-        const snapshot = { mutationId, modifiedAt, orderedDocumentIds: [...new Set(orderedDocumentIds)] };
+        const snapshot = { mutationId, modifiedAt: initializeOnly ? '1970-01-01T00:00:00.000Z' : modifiedAt, orderedDocumentIds: [...new Set(orderedDocumentIds)] };
         state.categories[categoryTag] = snapshot;
         await write(patient, state);
         return snapshot;
