@@ -23,7 +23,7 @@ test('two browsers share the same saved order across a server restart and metada
 }));
 test('a stale browser initialization and late offline retries cannot replace a newer explicit drag', () => fixture(async store => {
   await store.save('patient', {...payload(['a','b','c'],'init'),initializeOnly:true});
-  await store.save('patient', payload(['c','b','a'],'newer','2026-10-22T09:00:00Z')); 
+  await store.save('patient', payload(['c','b','a'],'newer','2026-10-22T09:00:00Z'));
   await store.save('patient', {...payload(['a','c','b'],'stale-init','2026-10-22T14:00:00Z'),initializeOnly:true});
   await store.save('patient', payload(['b','a','c'],'old-retry','2026-10-22T08:00:00Z'));
   assert.deepEqual(ids(await store.apply('patient',docs)),['c','b','a']);
