@@ -97,12 +97,13 @@ void main() {
         whereArgs: ['housing'],
       );
       expect(housing.single['category_order'], 0);
-      expect(await db.query('sync_operations'), isEmpty);
+      final queued = await db.query('sync_operations');
+      expect(queued.single['entity_type'], 'visit_photo_order');
     },
   );
 
   test(
-    'remote upload timestamps and remote ranks never replace a locally chosen order',
+    'a pending local drag is preserved while a shared remote order is downloaded',
     () async {
       await repository().fetchDocuments('patient');
       await repository().reorderVisitCategory(
@@ -121,12 +122,90 @@ void main() {
             'createdAt': '2099-01-01T00:00:00Z',
             'updatedAt': '2099-01-02T00:00:00Z',
             'categoryOrder': 0,
+            'photoOrderShared': true,
           },
       ]);
       await repository().fetchDocuments('patient');
       expect(await order(), ['b', 'c', 'a']);
       final rows = await db.query('documents');
       expect(rows.every((row) => row['created_at'] == timestamp), isTrue);
+    },
+  );
+
+  test(
+    'a shared remote order replaces the stale browser order after its local changes are acknowledged',
+    () async {
+      await repository().fetchDocuments('patient');
+      await repository().reorderVisitCategory(
+        orderedDocumentIds: ['b', 'c', 'a'],
+      );
+      await db.update('sync_operations', {'status': 'completed'});
+      await repository().mergeRemoteDocuments('patient', [
+        for (final entry in ['c', 'a', 'b'].asMap().entries)
+          {
+            'id': entry.value,
+            'clientDocumentId': entry.value,
+            'title': entry.value,
+            'fileName': '${entry.value}.jpg',
+            'mimeType': 'image/jpeg',
+            'tags': ['Visite - Accessibilité'],
+            'remotePath': '/api/mobile-documents/${entry.value}/content',
+            'createdAt': timestamp,
+            'updatedAt': timestamp,
+            'categoryOrder': entry.key,
+            'photoOrderShared': true,
+          },
+      ]);
+      await repository().fetchDocuments('patient');
+      expect(await order(), ['c', 'a', 'b']);
+      expect(
+        (await db.query(
+          'sync_operations',
+        )).where((r) => r['status'] != 'completed'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'legacy browser order is initialized once without overwriting a pending drag',
+    () async {
+      final remote = [
+        for (final id in ['a', 'b', 'c'])
+          {
+            'id': id,
+            'clientDocumentId': id,
+            'title': id,
+            'fileName': '$id.jpg',
+            'mimeType': 'image/jpeg',
+            'tags': ['Visite - Accessibilité'],
+            'remotePath': '/api/mobile-documents/$id/content',
+            'createdAt': timestamp,
+            'updatedAt': timestamp,
+          },
+      ];
+      await repository().mergeRemoteDocuments('patient', remote);
+      var ops = await db.query('sync_operations');
+      expect(ops.length, 1);
+      final initial = ops.single['payload_json'];
+      await repository().mergeRemoteDocuments('patient', remote);
+      expect(
+        (await db.query('sync_operations')).single['payload_json'],
+        initial,
+      );
+      await repository().reorderVisitCategory(
+        orderedDocumentIds: ['c', 'b', 'a'],
+      );
+      final dragged = (await db.query(
+        'sync_operations',
+      )).single['payload_json'];
+      expect(dragged, isNot(initial));
+      await repository().mergeRemoteDocuments('patient', remote);
+      expect(
+        (await db.query('sync_operations')).single['payload_json'],
+        dragged,
+      );
+      expect(await order(), ['c', 'b', 'a']);
     },
   );
 

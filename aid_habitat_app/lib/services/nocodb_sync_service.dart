@@ -855,6 +855,9 @@ class NocodbSyncService {
       case 'housing':
         await _processHousingOperation(operation, payload);
         return;
+      case 'visit_photo_order':
+        await _processVisitPhotoOrder(payload);
+        return;
       case 'document':
         await _processDocumentOperation(operation, payload);
         return;
@@ -1565,6 +1568,27 @@ class NocodbSyncService {
     throw Exception(
       'Opération dossier non supportée: ${operation.operationType}',
     );
+  }
+
+  Future<void> _processVisitPhotoOrder(Map<String, dynamic> payload) async {
+    final patientId = payload['patientLocalId'] as String;
+    final db = await _database.database;
+    final ids = <String>[];
+    for (final id in (payload['orderedDocumentIds'] as List).cast<String>()) {
+      final rows = await db.query(
+        'documents',
+        columns: ['remote_file_path', 'remote_public_url'],
+        where: 'local_id = ? AND patient_local_id = ?',
+        whereArgs: [id, patientId],
+        limit: 1,
+      );
+      final remoteId = _extractRemoteDocumentIdFromRow(rows.firstOrNull);
+      ids.add(remoteId.isNotEmpty ? remoteId : id);
+    }
+    await _apiClient.saveVisitPhotoOrder(patientId, {
+      ...payload,
+      'orderedDocumentIds': ids,
+    });
   }
 
   Future<void> _processDocumentOperation(

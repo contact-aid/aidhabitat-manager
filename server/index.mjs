@@ -72,6 +72,7 @@ import {
   buildReportFileName,
 } from './reports/generateVisitReport.mjs';
 import { mergeInlineDocuments } from './reports/inlineReportDocuments.mjs';
+import { createVisitPhotoOrderStore } from './visitPhotoOrderStore.mjs';
 import { resolveReportEpciAid } from './reports/reportEpciAid.mjs';
 import { readReportRecommendations } from './reports/reportRecommendationSource.mjs';
 import { readLocalWikiReportImage } from './reports/localWikiReportImage.mjs';
@@ -116,6 +117,7 @@ const DATA_DIR_PATH = process.env.AIDHABITAT_DATA_DIR_PATH
     : LOCAL_DATA_DIR_PATH;
 const DATA_DIR_URL = pathToFileURL(DATA_DIR_PATH.endsWith(path.sep) ? DATA_DIR_PATH : `${DATA_DIR_PATH}${path.sep}`);
 const dataFileUrl = (relativePath) => new URL(relativePath, DATA_DIR_URL);
+const visitPhotoOrderStore = createVisitPhotoOrderStore(path.join(DATA_DIR_PATH, 'visit-photo-order'));
 const AUTH_STORE_URL = dataFileUrl('auth-store.json');
 const PROFILE_PHOTOS_DIR_URL = dataFileUrl('profile-photos/');
 const DOCUMENTS_DIR_URL = dataFileUrl('documents/');
@@ -7168,12 +7170,12 @@ app.post(
 
     // 3) Merge inline + remote. Inline gagne en cas de doublon (state
     // local plus récent que NocoDB pendant la fenêtre intermittente).
-    const documents = mergeInlineDocuments(
+    const documents = await visitPhotoOrderStore.apply(patientId, mergeInlineDocuments(
       remoteDocuments,
       inlineAssets.documents,
       inlineAssets.documentOrder,
       patientId,
-    );
+    ));
     const notePages = mergeInlineNotePages(remoteNotePages, inlineAssets.plans);
 
     // Inline assets are partial: missing local bytes do not imply deletion.
@@ -8012,7 +8014,7 @@ app.get('/api/documents/:patientId', requireAuth, async (req, res, next) => {
       success: true,
       error: null,
       data: {
-        documents: documents.map((document) => ({
+        documents: (await visitPhotoOrderStore.apply(canonicalPatientId, documents)).map((document) => ({
           ...documentContext,
           ...scopeDocumentForRequestedPatient(document, req.params.patientId),
         })),
@@ -8021,6 +8023,15 @@ app.get('/api/documents/:patientId', requireAuth, async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.put('/api/visit-photo-order/:patientId', requireAuth, async (req, res, next) => {
+  try {
+    const access = await resolveBeneficiaryAccess(req.appUser, req.params.patientId);
+    const patientId = canonicalPatientIdForDocumentAccess(access);
+    const order = await visitPhotoOrderStore.save(patientId, req.body || {});
+    res.json({ success: true, error: null, data: { order } });
+  } catch (error) { next(error); }
 });
 
 app.post(

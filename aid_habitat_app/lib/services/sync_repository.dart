@@ -854,7 +854,7 @@ class SyncRepository {
       'sync_operations',
       columns: ['id', 'updated_at'],
       where:
-          "status = 'running' AND entity_type IN ('patient', 'housing', 'dossier', 'contexte_de_vie', 'mesures_anthropometriques', 'observations_synthese', 'diagnostic_sanitaires')",
+          "status = 'running' AND entity_type IN ('patient', 'housing', 'dossier', 'contexte_de_vie', 'mesures_anthropometriques', 'observations_synthese', 'diagnostic_sanitaires', 'visit_photo_order')",
     );
     var recovered = 0;
     for (final row in rows) {
@@ -967,7 +967,7 @@ class SyncRepository {
             AND op.entity_local_id = ?
           )
           OR (
-            op.entity_type = 'patient'
+            op.entity_type IN ('patient', 'visit_photo_order')
             AND op.entity_local_id = ?
           )
           OR (

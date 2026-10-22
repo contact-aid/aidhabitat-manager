@@ -1530,6 +1530,29 @@ class NocodbApiClient {
     return true;
   }
 
+  Future<void> saveVisitPhotoOrder(
+    String patientId,
+    Map<String, dynamic> order,
+  ) async {
+    final response = await _runWithTransientGuard(
+      'Visit photo order',
+      () => _client
+          .put(
+            Uri.parse(
+              '$_baseUrl/api/visit-photo-order/${Uri.encodeComponent(patientId)}',
+            ),
+            headers: _headers,
+            body: jsonEncode(order),
+          )
+          .timeout(_defaultTimeout),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(
+        'Enregistrement ordre des photos (${response.statusCode})',
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> updateDocumentMetadata({
     required String documentId,
     required String title,
