@@ -252,7 +252,17 @@ class NocodbSyncService {
               failure['status'] == 'conflict' &&
               failure['id'] != null) {
             await _resolveNoteConflictKeepingLocal(failure['id']!);
-          } else if (failure['status'] == 'conflict' && failure['id'] != null) {
+          } else if (failure['status'] == 'conflict' &&
+              failure['id'] != null &&
+              const {
+                'patient',
+                'housing',
+                'dossier',
+                'contexte_de_vie',
+                'mesures_anthropometriques',
+                'observations_synthese',
+                'diagnostic_sanitaires',
+              }.contains(failure['entityType'])) {
             final operation = await _syncRepository.loadOwnedConflict(
               failure['id']!,
             );
