@@ -1058,14 +1058,13 @@ class DossierRepository {
   /// Used by screens that want to re-read fresh patient/housing data after
   /// a save that happened in a child widget (e.g. the visit report tabs).
   Future<Dossier?> fetchDossierById(String dossierLocalId) async {
-    final all = await fetchAllDossiers();
-    for (final d in all) {
-      if (d.id == dossierLocalId) return d;
-    }
-    return null;
+    final rows = await _fetchDossiers(dossierLocalId: dossierLocalId);
+    return rows.isEmpty ? null : rows.single;
   }
 
-  Future<List<Dossier>> fetchAllDossiers() async {
+  Future<List<Dossier>> fetchAllDossiers() => _fetchDossiers();
+
+  Future<List<Dossier>> _fetchDossiers({String? dossierLocalId}) async {
     final db = await _database.database;
     final rows = await db.rawQuery('''
       SELECT
@@ -1171,8 +1170,9 @@ class DossierRepository {
       FROM dossiers d
       INNER JOIN patients p ON p.local_id = d.patient_local_id
       INNER JOIN housings h ON h.local_id = d.housing_local_id
+      ${dossierLocalId == null ? '' : 'WHERE d.local_id = ?'}
       ORDER BY d.created_at DESC
-    ''');
+    ''', dossierLocalId == null ? [] : [dossierLocalId]);
 
     return rows.map(_mapDossierRow).toList();
   }

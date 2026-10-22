@@ -4479,6 +4479,16 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
   });
 };
 
+// Baselines describe independently stored columns, not a new form submission.
+// A legacy scalar can differ from occupant 1; projecting it into the JSON
+// baseline makes an unchanged server value look like a permanent conflict.
+const mapBeneficiaryBaselineToFields = (baseline, references) => ({
+  ...mapBeneficiaryUpdatesToFields(baseline, references),
+  ...(Array.isArray(baseline.occupants) ? {
+    occupants_json: mapBeneficiaryUpdatesToFields({ occupants: baseline.occupants }, references).occupants_json,
+  } : {}),
+});
+
 app.post('/api/auth/login', async (req, res, next) => {
   try {
     const email = normalizeEmail(req.body?.email);
@@ -7613,7 +7623,7 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
       if (recoverLegacySync(req, res, {
         ...beneficiaryRecord, fields: comparisonFields(beneficiaryRecord),
       }, fields,
-        mapBeneficiaryUpdatesToFields(preserveLegacyOccupantGender(
+        mapBeneficiaryBaselineToFields(preserveLegacyOccupantGender(
           updates.concurrency?.baseValues || {}, storedOccupantsJson, { strict: false }), references))) return;
       if (sendConflictIfStale(req, res, beneficiaryRecord)) return;
     }
@@ -7621,15 +7631,16 @@ app.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next) =
     if (conditionalSyncEnabled) {
       if (await applyConditionalSync(req, res, {
         tableId: TABLES.beneficiaires, record: beneficiaryRecord, fields,
-        mapBaseline: (base) => mapBeneficiaryUpdatesToFields(
+        mapBaseline: (base) => mapBeneficiaryBaselineToFields(
           preserveLegacyOccupantGender(base, storedOccupantsJson, { strict: false }), references),
         normalizeObserved: comparisonFields,
       })) return;
     } else {
       await updateRecord(TABLES.beneficiaires, beneficiaryRecord.id, fields);
     }
-    const refreshedDossiers = await getDossiersForApp(req.appUser);
-    const refreshedDossier = refreshedDossiers.find((dossier) => String(dossier?.patient?.id) === String(patientId));
+    const refreshedDossier = dossierRecord
+      ? await getDossierByIdForApp(field(dossierRecord, 'uuid_source'), req.appUser)
+      : null;
     if (refreshedDossier?.patient) {
       await mobileSyncStore.syncNotePagesBeneficiaryMetadata(patientId, {
         patientFirstName: refreshedDossier.patient.firstName,

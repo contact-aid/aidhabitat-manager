@@ -387,6 +387,41 @@ void main() {
       isFalse,
     );
   });
+  test(
+    'interrupted patient writes resume automatically only after timeout and for their owner',
+    () async {
+      await SyncOperationOwnership.installMigration(db);
+      await user('ergo-a');
+      await write('stale');
+      await write('active');
+      await db.update('sync_operations', {
+        'entity_type': 'patient',
+        'status': 'running',
+        'updated_at': DateTime.now()
+            .subtract(const Duration(minutes: 6))
+            .toIso8601String(),
+      }, where: "id = 'stale'");
+      await db.update('sync_operations', {
+        'entity_type': 'patient',
+        'status': 'running',
+        'updated_at': DateTime.now().toIso8601String(),
+      }, where: "id = 'active'");
+      final payload = (await db.query(
+        'sync_operations',
+        where: "id = 'stale'",
+      )).single['payload_json'];
+      await user('ergo-b');
+      expect(await queue.recoverInterruptedVersionedWrites(), 0);
+      await user('ergo-a');
+      expect(await queue.recoverInterruptedVersionedWrites(), 1);
+      final rows = await db.query('sync_operations', orderBy: 'id');
+      expect(rows.first['status'], 'running');
+      expect(rows.last['status'], 'pending');
+      expect(rows.last['payload_json'], payload);
+      expect(await queue.recoverInterruptedVersionedWrites(), 0);
+    },
+  );
+
   test('only the author can restart a pending write without backoff', () async {
     await SyncOperationOwnership.installMigration(db);
     await user('ergo-a');
