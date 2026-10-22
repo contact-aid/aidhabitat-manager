@@ -9,6 +9,8 @@ void main() {
     () {
       final merged = mergeLatestPatientValues(
         baseline: {
+          'email': '',
+          'phone': 'old',
           'occupants': [
             {
               'firstName': 'Alice',
@@ -19,6 +21,8 @@ void main() {
           ],
         },
         local: {
+          'email': '',
+          'phone': '',
           'occupants': [
             {
               'firstName': 'Alice',
@@ -29,6 +33,8 @@ void main() {
           ],
         },
         remote: {
+          'email': 'server@example.test',
+          'phone': 'server phone',
           'occupants': [
             {
               'firstName': 'Alice',
@@ -40,6 +46,8 @@ void main() {
           ],
         },
       );
+      expect(merged['email'], 'server@example.test');
+      expect(merged['phone'], '');
       expect(merged['occupants'][0]['caisseRetraitePrincipale'], 'CNAV');
       expect(merged['occupants'][0]['homeHelp'], true);
       expect(merged['occupants'][0]['futureProperty'], 'retained');

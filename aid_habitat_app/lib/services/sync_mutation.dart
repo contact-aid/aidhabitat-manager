@@ -428,7 +428,11 @@ Map<String, dynamic> mergeLatestPatientValues({
   for (final entry in local.entries) {
     final key = entry.key;
     if (key != 'occupants') {
-      merged[key] = entry.value;
+      merged[key] =
+          baseline.containsKey(key) &&
+              equivalentSyncField(key, baseline[key], entry.value)
+          ? remote[key]
+          : entry.value;
       continue;
     }
     final before = canonicalOccupantValues(baseline[key]);
