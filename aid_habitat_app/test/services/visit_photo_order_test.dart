@@ -154,9 +154,28 @@ void main() {
             'updatedAt': timestamp,
             'categoryOrder': entry.key,
             'photoOrderShared': true,
+            'photoOrderRevision': 5,
           },
       ]);
       await repository().fetchDocuments('patient');
+      expect(await order(), ['c', 'a', 'b']);
+      await repository().mergeRemoteDocuments('patient', [
+        for (final entry in ['b', 'a', 'c'].asMap().entries)
+          {
+            'id': entry.value,
+            'clientDocumentId': entry.value,
+            'title': entry.value,
+            'fileName': '${entry.value}.jpg',
+            'mimeType': 'image/jpeg',
+            'tags': ['Visite - Accessibilité'],
+            'remotePath': '/api/mobile-documents/${entry.value}/content',
+            'createdAt': timestamp,
+            'updatedAt': timestamp,
+            'categoryOrder': entry.key,
+            'photoOrderShared': true,
+            'photoOrderRevision': 4,
+          },
+      ]);
       expect(await order(), ['c', 'a', 'b']);
       expect(
         (await db.query(

@@ -31,7 +31,7 @@ export function createVisitPhotoOrderStore(directory) {
         const previous = state.categories[categoryTag];
         if (previous && (initializeOnly || previous.mutationId === mutationId ||
             Date.parse(previous.modifiedAt) > Date.parse(modifiedAt))) return previous;
-        const snapshot = { mutationId, modifiedAt: initializeOnly ? '1970-01-01T00:00:00.000Z' : modifiedAt, orderedDocumentIds: [...new Set(orderedDocumentIds)] };
+        const snapshot = { revision: (previous?.revision || 0) + 1, mutationId, modifiedAt: initializeOnly ? '1970-01-01T00:00:00.000Z' : modifiedAt, orderedDocumentIds: [...new Set(orderedDocumentIds)] };
         state.categories[categoryTag] = snapshot;
         await write(patient, state);
         return snapshot;
@@ -56,6 +56,7 @@ export function createVisitPhotoOrderStore(directory) {
         const rank = doc => reportDocumentAliases(doc, patient).map(id => positions.get(id)).find(v => v !== undefined);
         const unmatched = docs.filter(doc => rank(doc) === undefined).sort((a,b) =>
           String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || String(a.id).localeCompare(String(b.id)));
+        if (unmatched.length) snapshot.revision = (snapshot.revision || 0) + 1;
         for (const doc of unmatched) {
           snapshot.orderedDocumentIds.push(String(doc.id));
           changed = true;
@@ -65,7 +66,7 @@ export function createVisitPhotoOrderStore(directory) {
       }
       if (changed) await write(patient, state);
       return documents.map(doc => orders.has(doc)
-        ? { ...doc, categoryOrder: orders.get(doc), photoOrderShared: true }
+        ? { ...doc, categoryOrder: orders.get(doc), photoOrderShared: true, photoOrderRevision: state.categories[visitTag(doc.tags)].revision }
         : doc);
       });
     },

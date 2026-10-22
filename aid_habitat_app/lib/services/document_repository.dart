@@ -1722,16 +1722,44 @@ class DocumentRepository {
     // les suppressions remote (chantier sync #1).
     final remoteLocalIds = <String>{};
 
-    final pendingOrder = await db.query(
-      'sync_operations',
-      columns: ['id'],
-      where:
-          "entity_type = 'visit_photo_order' AND entity_local_id = ? AND status != 'completed'",
-      whereArgs: [patientId],
-      limit: 1,
-    );
-    final hasPendingOrder = pendingOrder.isNotEmpty;
     await db.transaction((txn) async {
+      final pendingOrder = await txn.query(
+        'sync_operations',
+        columns: ['id'],
+        where:
+            "entity_type = 'visit_photo_order' AND entity_local_id = ? AND status != 'completed'",
+        whereArgs: [patientId],
+        limit: 1,
+      );
+      final hasPendingOrder = pendingOrder.isNotEmpty;
+      final acceptedOrderTags = <String>{};
+      for (final remote in remoteDocuments) {
+        if (remote['photoOrderShared'] != true) continue;
+        final tag = (remote['tags'] as List? ?? const [])
+            .cast<String>()
+            .where((t) => t.startsWith('Visite - '))
+            .firstOrNull;
+        final revision = (remote['photoOrderRevision'] as num?)?.toInt() ?? 0;
+        if (tag == null || hasPendingOrder) continue;
+        final key =
+            'visit_photo_order_revision:${jsonEncode([patientId, tag])}';
+        final versions = await txn.query(
+          'kv_store',
+          columns: ['value'],
+          where: 'key = ?',
+          whereArgs: [key],
+          limit: 1,
+        );
+        final observed =
+            int.tryParse(versions.firstOrNull?['value'] as String? ?? '') ?? 0;
+        if (revision < observed) continue;
+        acceptedOrderTags.add(tag);
+        await txn.insert('kv_store', {
+          'key': key,
+          'value': '$revision',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
       for (final remote in remoteDocuments) {
         final deletionIdentities = <String>{
           for (final key in const [
@@ -1954,7 +1982,10 @@ class DocumentRepository {
           ),
           // Shared rank wins after local reorder operations have been acknowledged.
           'category_order':
-              !hasPendingOrder && remote['photoOrderShared'] == true
+              remote['photoOrderShared'] == true &&
+                  (remote['tags'] as List? ?? const []).any(
+                    (tag) => acceptedOrderTags.contains(tag),
+                  )
               ? remote['categoryOrder']
               : existing?['category_order'] ??
                     remote['categoryOrder'] ??

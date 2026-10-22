@@ -26,7 +26,9 @@ test('a stale browser initialization and late offline retries cannot replace a n
   await store.save('patient', payload(['c','b','a'],'newer','2026-10-22T09:00:00Z'));
   await store.save('patient', {...payload(['a','c','b'],'stale-init','2026-10-22T14:00:00Z'),initializeOnly:true});
   await store.save('patient', payload(['b','a','c'],'old-retry','2026-10-22T08:00:00Z'));
-  assert.deepEqual(ids(await store.apply('patient',docs)),['c','b','a']);
+  const applied = await store.apply('patient',docs);
+  assert.deepEqual(ids(applied),['c','b','a']);
+  assert(applied.every(doc => doc.photoOrderRevision === 2));
 }));
 test('new photos append once and do not move when later photos arrive', () => fixture(async store => {
   await store.save('patient', payload(['a'],'drag'));
