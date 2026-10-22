@@ -4,6 +4,76 @@ import 'package:aid_habitat_app/services/sync_mutation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'latest occupant pension preserves independent server health and unknown properties',
+    () {
+      final merged = mergeLatestPatientValues(
+        baseline: {
+          'email': '',
+          'phone': 'old',
+          'occupants': [
+            {
+              'firstName': 'Alice',
+              'lastName': 'Test',
+              'homeHelp': false,
+              'caisseRetraitePrincipale': 'Avant',
+            },
+          ],
+        },
+        local: {
+          'email': '',
+          'phone': '',
+          'occupants': [
+            {
+              'firstName': 'Alice',
+              'lastName': 'Test',
+              'homeHelp': false,
+              'caisseRetraitePrincipale': 'CNAV',
+            },
+          ],
+        },
+        remote: {
+          'email': 'server@example.test',
+          'phone': 'server phone',
+          'occupants': [
+            {
+              'firstName': 'Alice',
+              'lastName': 'Test',
+              'homeHelp': true,
+              'caisseRetraitePrincipale': 'Serveur',
+              'futureProperty': 'retained',
+            },
+          ],
+        },
+      );
+      expect(merged['email'], 'server@example.test');
+      expect(merged['phone'], '');
+      expect(merged['occupants'][0]['caisseRetraitePrincipale'], 'CNAV');
+      expect(merged['occupants'][0]['homeHelp'], true);
+      expect(merged['occupants'][0]['futureProperty'], 'retained');
+      expect(
+        () => mergeLatestPatientValues(
+          baseline: {
+            'occupants': [
+              {'firstName': 'Alice'},
+            ],
+          },
+          local: {
+            'occupants': [
+              {'firstName': 'Alice', 'homeHelp': true},
+            ],
+          },
+          remote: {
+            'occupants': [
+              {'firstName': 'Bob'},
+            ],
+          },
+        ),
+        throwsStateError,
+      );
+    },
+  );
+
   test('occupant defaults do not block a real APA edit', () {
     final original = {'firstName': 'Anne', 'lastName': 'Fictif', 'apa': false};
     final projected = {

@@ -190,6 +190,174 @@ void main() {
     );
   }
 
+  for (final savedConflict in [false, true]) {
+    test(
+      'zero-attempt patient conflict resumes automatically (stored=$savedConflict)',
+      () async {
+        final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+        addTearDown(db.close);
+        final local = LocalDatabase.forTesting(db);
+        await local.createSchemaForTesting();
+        final repository = DossierRepository(database: local);
+        final queue = SyncRepository.forTesting(database: local);
+        await repository.mergeRemoteDossierPayloads([
+          dossier(baseline, 'Original'),
+        ]);
+        final opened = (await repository.fetchAllDossiers()).single;
+        await db.update('patients', {'first_name': 'Server'});
+        await repository.updatePatient('patient-1', {
+          'first_name': 'Fresh edit',
+        }, observedFields: opened.patientEditBaseline);
+        final row = (await db.query('sync_operations')).single;
+        expect(row['status'], 'conflict');
+        expect(row['attempt_count'], 0);
+        if (savedConflict) {
+          final payload =
+              jsonDecode(
+                    await OfflineVault.instance.openString(
+                      row['payload_json'] as String,
+                    ),
+                  )
+                  as Map<String, dynamic>;
+          payload['conflict'] = {
+            'remote': {'error': 'SYNC_FIELD_CONFLICT'},
+          };
+          await db.update('sync_operations', {
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+          });
+        }
+        var writes = 0;
+        final service = NocodbSyncService(
+          database: local,
+          syncRepository: queue,
+          apiClient: NocodbApiClient(
+            client: MockClient((request) async {
+              if (request.method == 'GET') {
+                final remote = dossier('2026-10-22T10:00:00Z', 'Server');
+                (remote['patient'] as Map)['email'] = 'retained@example.test';
+                return http.Response(jsonEncode([remote]), 200);
+              }
+              writes++;
+              final body = jsonDecode(request.body) as Map;
+              expect(body['firstName'], 'Fresh edit');
+              expect(body.containsKey('email'), isFalse);
+              expect(body['concurrency']['baseValues']['firstName'], 'Server');
+              return http.Response(
+                jsonEncode({
+                  'data': {'updatedAt': '2026-10-22T10:01:00Z'},
+                }),
+                200,
+              );
+            }),
+          ),
+        );
+        final result = await service.pushPendingChanges();
+        expect(result.conflictCount, 0);
+        expect(result.pushedOperations, 1);
+        expect(writes, 1);
+        expect((await db.query('patients')).single['first_name'], 'Fresh edit');
+        expect(
+          (await db.query('sync_operations')).single['status'],
+          'completed',
+        );
+        expect(
+          await queue.countConflictingReportPrerequisites(
+            dossierId: 'dossier-1',
+            patientId: 'patient-1',
+          ),
+          0,
+        );
+        expect(
+          await queue.countPendingReportPrerequisites(
+            dossierId: 'dossier-1',
+            patientId: 'patient-1',
+          ),
+          0,
+        );
+        expect(
+          (await db.query('sync_conflict_history')).single['decision'],
+          'auto_merge_latest',
+        );
+      },
+    );
+  }
+
+  test(
+    'stale beneficiary form merges the latest fund without undoing server health',
+    () async {
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      final local = LocalDatabase.forTesting(db);
+      await local.createSchemaForTesting();
+      final repository = DossierRepository(database: local);
+      final queue = SyncRepository.forTesting(database: local);
+      final before = {
+        'firstName': 'Original',
+        'lastName': 'Test',
+        'birthDate': '',
+        'homeHelp': false,
+        'caisseRetraitePrincipale': 'Avant',
+      };
+      final initial = dossier(baseline, 'Original');
+      initial['patient'] = <String, dynamic>{
+        ...(initial['patient'] as Map<String, dynamic>),
+        'occupants': [before],
+      };
+      await repository.mergeRemoteDossierPayloads([initial]);
+      final opened = (await repository.fetchAllDossiers()).single;
+      final serverPerson = {...before, 'homeHelp': true};
+      await db.update('patients', {
+        'occupants_json': jsonEncode([serverPerson]),
+      });
+      await repository.updatePatient('patient-1', {
+        'occupants_json': jsonEncode([
+          {...before, 'caisseRetraitePrincipale': 'CNAV'},
+        ]),
+      }, observedFields: opened.patientEditBaseline);
+      expect((await db.query('sync_operations')).single['status'], 'conflict');
+      var writes = 0;
+      final service = NocodbSyncService(
+        database: local,
+        syncRepository: queue,
+        apiClient: NocodbApiClient(
+          client: MockClient((request) async {
+            if (request.method == 'GET') {
+              final remote = dossier('2026-10-22T10:00:00Z', 'Original');
+              remote['patient'] = <String, dynamic>{
+                ...(remote['patient'] as Map<String, dynamic>),
+                'occupants': [serverPerson],
+              };
+              return http.Response(jsonEncode([remote]), 200);
+            }
+            writes++;
+            final body = jsonDecode(request.body) as Map;
+            expect(body['occupants'][0]['homeHelp'], true);
+            expect(body['occupants'][0]['caisseRetraitePrincipale'], 'CNAV');
+            expect(
+              body['concurrency']['baseValues']['occupants'][0]['homeHelp'],
+              true,
+            );
+            return http.Response(
+              jsonEncode({
+                'data': {'updatedAt': '2026-10-22T10:01:00Z'},
+              }),
+              200,
+            );
+          }),
+        ),
+      );
+      expect((await service.pushPendingChanges()).pushedOperations, 1);
+      expect(writes, 1);
+      final saved = jsonDecode(
+        (await db.query('patients')).single['occupants_json'] as String,
+      );
+      expect(saved[0]['homeHelp'], true);
+      expect(saved[0]['caisseRetraitePrincipale'], 'CNAV');
+    },
+  );
+
   test('modern local collection wins a verified field conflict', () async {
     final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     addTearDown(db.close);

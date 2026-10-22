@@ -389,3 +389,86 @@ SyncMergePlan planSyncMerge({
   }
   return SyncMergePlan(updates: patch, conflictingFields: conflicts);
 }
+
+/// Only content conflicts with an original baseline can resume automatically.
+/// Malformed values, missing records and authorization failures stay visible.
+bool canAutomaticallyResumeConflict(Map<String, dynamic> payload) {
+  final conflict = payload['conflict'];
+  final guard = payload['concurrency'];
+  if (conflict is! Map ||
+      guard is! Map ||
+      guard['version'] != 1 ||
+      guard['baseValues'] is! Map ||
+      payload['updates'] is! Map) {
+    return false;
+  }
+  final remote = conflict['remote'];
+  final code = (remote is Map ? remote['error'] : null) ?? conflict['code'];
+  if (guard['writeId'] is! String ||
+      !(payload['updates'] as Map).keys.every(
+        (guard['baseValues'] as Map).containsKey,
+      )) {
+    return false;
+  }
+  return const {
+    'SYNC_FIELD_CONFLICT',
+    'SYNC_REMOTE_VALUES_REQUIRE_REVIEW',
+    'LOCAL_EDIT_BASE_CHANGED',
+  }.contains(code);
+}
+
+/// Merge only properties edited since the captured baseline. A full occupant
+/// serialization must not erase an independent server change to health/admin.
+Map<String, dynamic> mergeLatestPatientValues({
+  required Map<String, dynamic> local,
+  required Map<String, dynamic> remote,
+  required Map<String, dynamic> baseline,
+}) {
+  final merged = <String, dynamic>{};
+  for (final entry in local.entries) {
+    final key = entry.key;
+    if (key != 'occupants') {
+      merged[key] =
+          baseline.containsKey(key) &&
+              equivalentSyncField(key, baseline[key], entry.value)
+          ? remote[key]
+          : entry.value;
+      continue;
+    }
+    final before = canonicalOccupantValues(baseline[key]);
+    final after = canonicalOccupantValues(entry.value);
+    final current = canonicalOccupantValues(remote[key]);
+    if (before is! List ||
+        after is! List ||
+        current is! List ||
+        before.length != after.length ||
+        before.length != current.length) {
+      throw StateError('La composition du foyer a changé.');
+    }
+    final people = <Map<String, dynamic>>[];
+    for (var i = 0; i < before.length; i++) {
+      final b = before[i], a = after[i], r = current[i];
+      if (b is! Map || a is! Map || r is! Map) {
+        throw StateError('Occupant invalide.');
+      }
+      for (final identity in ['firstName', 'lastName', 'birthDate']) {
+        if (!equivalentSyncField(
+          identity,
+          b[identity] ?? '',
+          r[identity] ?? '',
+        )) {
+          throw StateError('L’identité des occupants a changé.');
+        }
+      }
+      people.add({
+        ...r.cast<String, dynamic>(),
+        for (final field in a.keys)
+          if (!b.containsKey(field) ||
+              !equivalentSyncField(field.toString(), b[field], a[field]))
+            field.toString(): a[field],
+      });
+    }
+    merged[key] = people;
+  }
+  return merged;
+}
