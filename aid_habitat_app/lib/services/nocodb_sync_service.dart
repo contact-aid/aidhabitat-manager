@@ -252,6 +252,17 @@ class NocodbSyncService {
               failure['status'] == 'conflict' &&
               failure['id'] != null) {
             await _resolveNoteConflictKeepingLocal(failure['id']!);
+          } else if (failure['status'] == 'conflict' && failure['id'] != null) {
+            final operation = await _syncRepository.loadOwnedConflict(
+              failure['id']!,
+            );
+            SyncSessionScope.current?.check();
+            if (operation != null &&
+                canAutomaticallyResumeConflict(
+                  jsonDecode(operation.payloadJson) as Map<String, dynamic>,
+                )) {
+              await _resolveVisitConflictKeepingLocal(operation);
+            }
           }
         }
       } catch (_) {
@@ -741,7 +752,12 @@ class NocodbSyncService {
       );
       if (matching.length != 1) return false;
       final review = matching.single;
-      await repository.resolveReviewedConflict(review, keepLocal: true);
+      SyncSessionScope.current?.check();
+      await repository.resolveReviewedConflict(
+        review,
+        keepLocal: true,
+        mergeLatestPatient: operation.entityType == 'patient',
+      );
       return true;
     } catch (_) {
       // Preserve the conflict if identity or the reviewed snapshot changed.

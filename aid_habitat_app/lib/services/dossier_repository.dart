@@ -507,6 +507,7 @@ class DossierRepository {
     SyncConflictReview review, {
     required bool keepLocal,
     Set<String>? localFields,
+    bool mergeLatestPatient = false,
   }) async {
     if (localFields != null &&
         (review.entityType != 'patient' ||
@@ -518,6 +519,42 @@ class DossierRepository {
         ? (keepLocal ? review.localValues.keys.toSet() : <String>{})
         : Set<String>.of(localFields);
     final hasLocal = selectedLocal.isNotEmpty;
+    if (mergeLatestPatient &&
+        (review.entityType != 'patient' || !review.remoteExists)) {
+      throw StateError('Fusion automatique indisponible.');
+    }
+    final originalPayload =
+        jsonDecode(review.payloadJson) as Map<String, dynamic>;
+    final originalConflict = originalPayload['conflict'];
+    final observedForm =
+        originalConflict is Map &&
+            originalConflict['code'] == 'LOCAL_EDIT_BASE_CHANGED'
+        ? originalConflict['fields']
+        : null;
+    final originalBaseline = <String, dynamic>{
+      ...?((originalPayload['concurrency'] as Map?)?['baseValues'] as Map?)
+          ?.cast<String, dynamic>(),
+      if (observedForm is Map)
+        ..._mapPatientFieldsToApi({
+          for (final field in observedForm.entries)
+            if (field.value is Map &&
+                (field.value as Map).containsKey('observed'))
+              field.key.toString(): field.value['observed'],
+        }),
+    };
+    final latestValues = mergeLatestPatient
+        ? mergeLatestPatientValues(
+            local: review.localValues,
+            remote: review.remoteValues,
+            baseline: originalBaseline,
+          )
+        : null;
+    final latestColumns = latestValues == null
+        ? <String, dynamic>{}
+        : _buildPatientPayload(
+            raw: latestValues,
+            now: DateTime.now().toIso8601String(),
+          );
     final chosenUpdates = {
       for (final key in selectedLocal) key: review.localValues[key],
     };
@@ -583,7 +620,9 @@ class DossierRepository {
         'operation_id': review.operationId,
         'entity_type': review.entityType,
         'entity_local_id': review.entityLocalId,
-        'decision': localFields != null
+        'decision': mergeLatestPatient
+            ? 'auto_merge_latest'
+            : localFields != null
             ? 'merge_fields'
             : keepLocal
             ? 'keep_local'
@@ -668,9 +707,9 @@ class DossierRepository {
       payload.remove('conflict');
       payload.remove('localReference');
       payload.remove('retryMutation');
-      payload['updates'] = localFields == null
-          ? review.localValues
-          : chosenUpdates;
+      payload['updates'] =
+          latestValues ??
+          (localFields == null ? review.localValues : chosenUpdates);
       if (review.entityType == 'diagnostic_sanitaires') {
         for (final key in _secondaryFields['diagnostic_sanitaires']!.keys) {
           payload[key] = review.localValues[key];
@@ -705,6 +744,12 @@ class DossierRepository {
         review.table,
         {
           if (localFields != null || !keepLocal) ...restoredColumns,
+          if (latestValues != null)
+            for (final entry in latestColumns.entries)
+              if (_mapPatientFieldsToApi({
+                entry.key: entry.value,
+              }).keys.any(latestValues.containsKey))
+                entry.key: entry.value,
           if (review.contextReferenceJson == null &&
               review.remoteUpdatedAt != null)
             'remote_updated_at': review.remoteUpdatedAt,
@@ -2936,7 +2981,9 @@ class DossierRepository {
         baseValues: _mapPatientFieldsToApi({
           for (final key in changedFields.keys)
             if (existingRows.isNotEmpty && existingRows.first.containsKey(key))
-              key: existingRows.first[key],
+              key: observedFields?.containsKey(key) == true
+                  ? observedFields![key]
+                  : existingRows.first[key],
         }),
         expectedUpdatedAt: existingRows.isEmpty
             ? null

@@ -1714,6 +1714,49 @@ class SyncRepository {
   /// Liste les erreurs et conflits, sans exposer leur contenu sauvegarde.
   /// par le drawer "ops en échec" pour permettre une action par op
   /// (réessayer / abandonner) au lieu d'un batch global.
+  /// Read a single conflict only for its current author. The subsequent
+  /// resolution still compares the exact payload inside its transaction.
+  Future<SyncOperation?> loadOwnedConflict(String operationId) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      if (_enforceOwnership) {
+        final owners = await txn.rawQuery(
+          '''SELECT 1
+          FROM sync_operation_ownership AS ownership
+          JOIN app_session AS session ON session.id = 1
+            AND session.user_local_id = ownership.owner_user_local_id
+          WHERE ownership.operation_id = ? AND ownership.attribution_state IN (?, ?)''',
+          [
+            operationId,
+            SyncOperationOwnership.capturedAtEnqueue,
+            SyncOperationOwnership.reviewed,
+          ],
+        );
+        if (owners.length != 1) return null;
+      }
+      final rows = await txn.query(
+        'sync_operations',
+        where: "id = ? AND status = 'conflict'",
+        whereArgs: [operationId],
+      );
+      if (rows.length != 1) return null;
+      final row = rows.single;
+      return SyncOperation(
+        id: row['id'] as String,
+        entityType: row['entity_type'] as String,
+        entityLocalId: row['entity_local_id'] as String,
+        operationType: row['operation_type'] as String,
+        payloadJson: await OfflineVault.instance.openString(
+          row['payload_json'] as String,
+        ),
+        status: SyncOperationStatus.conflict,
+        attemptCount: (row['attempt_count'] as int?) ?? 0,
+        createdAt: DateTime.parse(row['created_at'] as String),
+        updatedAt: DateTime.parse(row['updated_at'] as String),
+      );
+    });
+  }
+
   Future<List<Map<String, String?>>> fetchAllFailingOperations() async {
     final db = await _database.database;
     final rows = await db.query(

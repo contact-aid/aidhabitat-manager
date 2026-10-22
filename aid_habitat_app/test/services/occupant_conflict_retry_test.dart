@@ -98,6 +98,22 @@ void main() {
       expect((await db.query('patients')).single['sync_state'], 'pendingSync');
     },
   );
+  test(
+    'automatic recovery reads only conflicts owned by the current account',
+    () async {
+      expect(
+        (await repository.loadOwnedConflict('operation'))?.payloadJson,
+        payload,
+      );
+      await db.update('app_session', {'user_local_id': 'bob'});
+      expect(await repository.loadOwnedConflict('operation'), isNull);
+      expect((await db.query('sync_operations')).single['status'], 'conflict');
+      expect(
+        (await db.query('sync_operations')).single['payload_json'],
+        payload,
+      );
+    },
+  );
   test('a changed queue snapshot cannot be retried', () async {
     expect(
       await repository.retryOriginalOccupantConflict(
