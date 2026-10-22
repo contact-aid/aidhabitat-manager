@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:aid_habitat_app/services/app_config.dart';
 import 'package:aid_habitat_app/services/connectivity_service.dart';
 import 'package:aid_habitat_app/services/dossier_repository.dart';
+import 'package:aid_habitat_app/services/document_repository.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/nocodb_api_client.dart';
 import 'package:aid_habitat_app/services/nocodb_sync_service.dart';
@@ -59,6 +60,74 @@ void main() {
     AppConfig.setApiBaseUrl('');
     AppConfig.clearAppSessionToken();
   });
+
+  test(
+    'shared photo order is sent using remote identities and releases the queued report',
+    () async {
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      final local = LocalDatabase.forTesting(db);
+      await local.createSchemaForTesting();
+      for (final id in ['a', 'b']) {
+        await db.insert('documents', {
+          'local_id': 'local-$id',
+          'patient_local_id': 'patient-1',
+          'dossier_local_id': 'dossier-1',
+          'title': id,
+          'file_name': '$id.jpg',
+          'file_ext': 'jpg',
+          'mime_type': 'image/jpeg',
+          'tags_json': jsonEncode(['Visite - Accessibilité']),
+          'sync_state': 'synced',
+          'remote_file_path': '/api/mobile-documents/server-$id/content',
+          'created_at': baseline,
+          'updated_at': baseline,
+        });
+      }
+      final documents = DocumentRepository(
+        database: local,
+        prefetchRemoteAssets: false,
+      );
+      await documents.reorderVisitCategory(
+        orderedDocumentIds: ['local-b', 'local-a'],
+      );
+      final queue = SyncRepository.forTesting(database: local);
+      expect(
+        await queue.countPendingReportPrerequisites(
+          dossierId: 'dossier-1',
+          patientId: 'patient-1',
+        ),
+        1,
+      );
+      var writes = 0;
+      final service = NocodbSyncService(
+        database: local,
+        syncRepository: queue,
+        apiClient: NocodbApiClient(
+          client: MockClient((request) async {
+            expect(request.method, 'PUT');
+            expect(request.url.path, '/api/visit-photo-order/patient-1');
+            final body = jsonDecode(request.body) as Map;
+            expect(body['orderedDocumentIds'], ['server-b', 'server-a']);
+            expect(body['initializeOnly'], false);
+            expect(body['mutationId'], isNotEmpty);
+            writes++;
+            return http.Response('{"success":true,"data":{}}', 200);
+          }),
+        ),
+      );
+      expect((await service.pushPendingChanges()).pushedOperations, 1);
+      expect(writes, 1);
+      expect((await db.query('sync_operations')).single['status'], 'completed');
+      expect(
+        await queue.countPendingReportPrerequisites(
+          dossierId: 'dossier-1',
+          patientId: 'patient-1',
+        ),
+        0,
+      );
+    },
+  );
 
   test(
     'collection conflict never auto-resolves or upgrades a legacy payload',

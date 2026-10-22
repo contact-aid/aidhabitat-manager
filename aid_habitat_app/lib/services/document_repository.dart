@@ -1256,7 +1256,7 @@ class DocumentRepository {
   /// - [categoryOrder] : position dans la catégorie. `null` quand le
   ///   document est retiré d'une catégorie visite (passe à « À classer »).
   ///
-  /// `category_order` est purement local en v1 (pas d'envoi au serveur).
+  /// L’ordre partagé est enregistré séparément des métadonnées du fichier.
   /// La mise à jour des tags par contre est synchronisée à NocoDB via
   /// le sync engine pour qu'on retrouve le tag à la prochaine connexion.
   Future<void> setVisitCategorization({
@@ -1312,19 +1312,117 @@ class DocumentRepository {
   }) async {
     if (orderedDocumentIds.isEmpty) return;
     final db = await _database.database;
-    final now = DateTime.now().toIso8601String();
-    final batch = db.batch();
-    for (var i = 0; i < orderedDocumentIds.length; i++) {
-      batch.update(
-        'documents',
-        {'category_order': i, 'updated_at': now},
-        where: 'local_id = ?',
-        whereArgs: [orderedDocumentIds[i]],
+    await db.transaction((txn) async {
+      for (var i = 0; i < orderedDocumentIds.length; i++) {
+        await txn.update(
+          'documents',
+          {'category_order': i},
+          where: 'local_id = ?',
+          whereArgs: [orderedDocumentIds[i]],
+        );
+      }
+    });
+    final rows = await db.query(
+      'documents',
+      where: 'local_id = ?',
+      whereArgs: [orderedDocumentIds.first],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final tags =
+        (jsonDecode(rows.first['tags_json'] as String? ?? '[]') as List)
+            .cast<String>();
+    final tag = tags.where((t) => t.startsWith('Visite - ')).firstOrNull;
+    if (tag == null) return;
+    await _enqueueVisitPhotoOrder(
+      rows.first['patient_local_id'] as String,
+      tag,
+      orderedDocumentIds,
+      initializeOnly: false,
+    );
+  }
+
+  Future<void> _enqueueVisitPhotoOrder(
+    String patientId,
+    String tag,
+    List<String> ids, {
+    required bool initializeOnly,
+  }) async {
+    final db = await _database.database;
+    final operationId =
+        'visit_photo_order_${patientId}_${base64Url.encode(utf8.encode(tag))}';
+    if (initializeOnly) {
+      final pending = await db.query(
+        'sync_operations',
+        columns: ['id'],
+        where: 'id = ? AND status != ?',
+        whereArgs: [operationId, 'completed'],
+        limit: 1,
+      );
+      if (pending.isNotEmpty) return;
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.insert('sync_operations', {
+      'id': operationId,
+      'entity_type': 'visit_photo_order',
+      'entity_local_id': patientId,
+      'operation_type': 'reorder',
+      'status': 'pending',
+      'attempt_count': 0,
+      'payload_json': await OfflineVault.instance.sealString(
+        jsonEncode({
+          'patientLocalId': patientId,
+          'categoryTag': tag,
+          'orderedDocumentIds': ids,
+          'mutationId':
+              '${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}',
+          'modifiedAt': now,
+          'initializeOnly': initializeOnly,
+        }),
+      ),
+      'created_at': now,
+      'updated_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    SyncEngine().notify();
+    _notifyChanged(patientId: patientId, reason: 'visit_photo_order');
+  }
+
+  Future<void> _initializeSharedPhotoOrder(
+    String patientId,
+    List<Map<String, dynamic>> remoteDocuments,
+  ) async {
+    await _ensureVisitPhotoOrder(patientId);
+    final sharedTags = <String>{
+      for (final doc in remoteDocuments)
+        if (doc['photoOrderShared'] == true)
+          for (final tag in (doc['tags'] as List? ?? const [])) '$tag',
+    };
+    final db = await _database.database;
+    final rows = await db.query(
+      'documents',
+      columns: ['local_id', 'tags_json'],
+      where:
+          "patient_local_id = ? AND pending_delete = 0 AND mime_type LIKE 'image/%'",
+      whereArgs: [patientId],
+      orderBy: 'category_order ASC, local_id ASC',
+    );
+    final groups = <String, List<String>>{};
+    for (final row in rows) {
+      final tags = (jsonDecode(row['tags_json'] as String? ?? '[]') as List)
+          .cast<String>();
+      final tag = tags.where((t) => t.startsWith('Visite - ')).firstOrNull;
+      if (tag != null && !sharedTags.contains(tag)) {
+        groups.putIfAbsent(tag, () => []).add(row['local_id'] as String);
+      }
+    }
+    for (final entry in groups.entries) {
+      await _enqueueVisitPhotoOrder(
+        patientId,
+        entry.key,
+        entry.value,
+        initializeOnly: true,
       );
     }
-    await batch.commit(noResult: true);
-    // Pas de notification au sync engine : `category_order` est local-only
-    // pour l'instant. Si un autre champ change, c'est un autre code-path.
   }
 
   Future<void> hideObsoleteReportDocuments({
@@ -1625,6 +1723,43 @@ class DocumentRepository {
     final remoteLocalIds = <String>{};
 
     await db.transaction((txn) async {
+      final pendingOrder = await txn.query(
+        'sync_operations',
+        columns: ['id'],
+        where:
+            "entity_type = 'visit_photo_order' AND entity_local_id = ? AND status != 'completed'",
+        whereArgs: [patientId],
+        limit: 1,
+      );
+      final hasPendingOrder = pendingOrder.isNotEmpty;
+      final acceptedOrderTags = <String>{};
+      for (final remote in remoteDocuments) {
+        if (remote['photoOrderShared'] != true) continue;
+        final tag = (remote['tags'] as List? ?? const [])
+            .cast<String>()
+            .where((t) => t.startsWith('Visite - '))
+            .firstOrNull;
+        final revision = (remote['photoOrderRevision'] as num?)?.toInt() ?? 0;
+        if (tag == null || hasPendingOrder) continue;
+        final key =
+            'visit_photo_order_revision:${jsonEncode([patientId, tag])}';
+        final versions = await txn.query(
+          'kv_store',
+          columns: ['value'],
+          where: 'key = ?',
+          whereArgs: [key],
+          limit: 1,
+        );
+        final observed =
+            int.tryParse(versions.firstOrNull?['value'] as String? ?? '') ?? 0;
+        if (revision < observed) continue;
+        acceptedOrderTags.add(tag);
+        await txn.insert('kv_store', {
+          'key': key,
+          'value': '$revision',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
       for (final remote in remoteDocuments) {
         final deletionIdentities = <String>{
           for (final key in const [
@@ -1845,16 +1980,16 @@ class DocumentRepository {
             (remote['tags'] as List?)?.map((tag) => '$tag').toList() ??
                 const <String>[],
           ),
-          // CRITICAL aussi : `category_order` (ordre de la photo dans
-          // sa catégorie de l'onglet Photos du relevé) est local-only
-          // — le serveur ne le connaît pas. Sans cette préservation,
-          // le polling silencieux de `_loadDocuments` (toutes les 10 s)
-          // remet TOUTES les photos visite à `category_order = NULL` →
-          // le tri perd son sens.
+          // Shared rank wins after local reorder operations have been acknowledged.
           'category_order':
-              existing?['category_order'] ??
-              remote['categoryOrder'] ??
-              remote['category_order'],
+              remote['photoOrderShared'] == true &&
+                  (remote['tags'] as List? ?? const []).any(
+                    (tag) => acceptedOrderTags.contains(tag),
+                  )
+              ? remote['categoryOrder']
+              : existing?['category_order'] ??
+                    remote['categoryOrder'] ??
+                    remote['category_order'],
           // Overlays belong to the old content, archived above on replacement.
           'annotations_json': contentChanged
               ? null
@@ -1942,6 +2077,8 @@ class DocumentRepository {
         );
       }
     });
+
+    await _initializeSharedPhotoOrder(patientId, remoteDocuments);
 
     // Warm the media cache so document previews (PDFs, images) work offline
     // after the first sync of this dossier.
