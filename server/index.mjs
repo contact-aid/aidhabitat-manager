@@ -71,6 +71,8 @@ import {
   generateVisitReport,
   buildReportFileName,
 } from './reports/generateVisitReport.mjs';
+import { mergeInlineDocuments } from './reports/inlineReportDocuments.mjs';
+import { resolveReportEpciAid } from './reports/reportEpciAid.mjs';
 import { readReportRecommendations } from './reports/reportRecommendationSource.mjs';
 import { readLocalWikiReportImage } from './reports/localWikiReportImage.mjs';
 import {
@@ -6153,26 +6155,7 @@ const fetchSanitairesForDossier = async (dossierId) => {
  * libre ou que la relation EPCI est absente, on affiche `/` plutôt que
  * de laisser un champ vide ou une ancienne valeur du template.
  */
-const resolveEpciLabelForPatient = async (patient) => {
-  const cityId = String(patient?.cityId || '').trim();
-  if (!cityId) return '/';
-
-  try {
-    const records = await queryAll(TABLES.communes, {
-      fields: FIELD_SETS.communes,
-      where: `(Id,eq,${cityId.replace(/[(),]/g, '')})`,
-    });
-    const record = records[0];
-    const label = refLabel(field(record, 'epci')).trim();
-    return label || '/';
-  } catch (error) {
-    console.warn(
-      `[report] échec résolution EPCI pour commune=${cityId} :`,
-      error?.message || error,
-    );
-    return '/';
-  }
-};
+const resolveEpciLabelForPatient = patient => resolveReportEpciAid(patient, { queryAll, tables: TABLES });
 
 /**
  * Mapping `categorie` (colonne NocoDB de mobile_visit_photos) → tag
@@ -6994,63 +6977,6 @@ const buildInlineFirstFetcher = (inlineAssets) => async (descriptor) => {
  * de fetchVisitPhotosForPatient (page 8 = uniquement les photos taggées
  * Visite-*).
  */
-const mergeInlineDocuments = (remoteDocs, inlineMap, orderMap = new Map()) => {
-  const visitTagsNormalized = new Set([
-    'visite - logement',
-    'visite - accessibilite',
-    'visite - sanitaires',
-  ]);
-  const normalizeTag = (s) => String(s || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const hasVisitTag = (tags) =>
-    Array.isArray(tags) && tags.some((tag) => {
-      const tn = normalizeTag(tag);
-      if (visitTagsNormalized.has(tn)) return true;
-      const match = tn.match(/^(.+) \(#\d+\)$/);
-      return Boolean(match && visitTagsNormalized.has(match[1]));
-    });
-
-  const merged = [];
-  const seenIds = new Set();
-  const seenClientIds = new Set();
-  // 1) inline d'abord (priorité), filtrés par tag visite
-  for (const inline of inlineMap.values()) {
-    if (!hasVisitTag(inline.tags)) continue;
-    merged.push({
-      id: inline.id,
-      clientDocumentId: inline.clientDocumentId || inline.id,
-      title: inline.title || '',
-      fileName: inline.fileName,
-      mimeType: inline.mimeType,
-      tags: inline.tags,
-      categoryOrder: orderMap.get(String(inline.id))
-        ?? parseOptionalFiniteNumber(inline.categoryOrder)
-        ?? null,
-      dossierId: inline.dossierId,
-    });
-    seenIds.add(String(inline.id));
-    seenClientIds.add(String(inline.clientDocumentId || inline.id));
-  }
-  // 2) puis les remotes pas en doublon
-  for (const doc of Array.isArray(remoteDocs) ? remoteDocs : []) {
-    if (!doc) continue;
-    if (seenIds.has(String(doc.id))) continue;
-    const cid = String(doc.clientDocumentId || '');
-    if (cid && seenClientIds.has(cid)) continue;
-    const localOrder = orderMap.get(String(doc.id))
-      ?? orderMap.get(`remote_doc_${String(doc.id)}`)
-      ?? (cid ? orderMap.get(cid) : null);
-    merged.push({
-      ...doc,
-      categoryOrder: localOrder ?? parseOptionalFiniteNumber(doc.categoryOrder),
-    });
-  }
-  return merged;
-};
 
 /**
  * Fusionne les plans NocoDB avec les plans inline. Critère d'identité :
@@ -7246,6 +7172,7 @@ app.post(
       remoteDocuments,
       inlineAssets.documents,
       inlineAssets.documentOrder,
+      patientId,
     );
     const notePages = mergeInlineNotePages(remoteNotePages, inlineAssets.plans);
 
