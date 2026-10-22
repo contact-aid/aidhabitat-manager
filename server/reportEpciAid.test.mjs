@@ -29,7 +29,7 @@ test('PDF clears the whole community row only when there is no aid', async () =>
   for (const label of ['/', 'EPCI avec aide']) {
     let cleared = false;
     PDFPage.prototype.drawRectangle = function(options) {
-      if (options.x === 44 && options.y === 523 && options.width === 510) cleared = true;
+      if (options.x === 40 && options.y === 519 && options.width === 516) cleared = true;
       return original.call(this, options);
     };
     try {

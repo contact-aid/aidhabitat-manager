@@ -2867,7 +2867,7 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
   if (!epciLabel || epciLabel === '/') {
     // Remove the static template label as well as the value: no territorial
     // grant must not look like an additional source of funding.
-    page.drawRectangle({ x: 44, y: 523, width: 510, height: 36, color: rgb(1, 1, 1) });
+    page.drawRectangle({ x: 40, y: 519, width: 516, height: 45, color: rgb(1, 1, 1) });
     cells.pop();
   }
   let retirementFundsAppendix = '';
