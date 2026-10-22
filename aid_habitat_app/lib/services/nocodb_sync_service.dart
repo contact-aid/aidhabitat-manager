@@ -221,6 +221,7 @@ class NocodbSyncService {
     // un correctif serveur (et empêche le bandeau rouge de persister
     // sur des ops que la prochaine tentative ferait réussir).
     try {
+      await _syncRepository.recoverInterruptedVersionedWrites();
       await _syncRepository.recoverEmptyHousingRoomConflicts();
       final rehabCount = await _syncRepository.rehabilitateTransientFailures();
       final recoveredCount = await _syncRepository

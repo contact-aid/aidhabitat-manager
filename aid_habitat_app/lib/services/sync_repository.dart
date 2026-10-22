@@ -846,6 +846,28 @@ class SyncRepository {
     });
   }
 
+  /// An interrupted browser can leave an owned conditional write running.
+  /// Five minutes exceeds every JSON batch timeout; replay keeps its write ID.
+  Future<int> recoverInterruptedVersionedWrites() async {
+    final db = await _database.database;
+    final rows = await db.query(
+      'sync_operations',
+      columns: ['id', 'updated_at'],
+      where:
+          "status = 'running' AND entity_type IN ('patient', 'housing', 'dossier', 'contexte_de_vie', 'mesures_anthropometriques', 'observations_synthese', 'diagnostic_sanitaires')",
+    );
+    var recovered = 0;
+    for (final row in rows) {
+      if (await resumeStaleRunningOperation(
+        operationId: row['id'] as String,
+        observedUpdatedAt: row['updated_at'] as String,
+      )) {
+        recovered++;
+      }
+    }
+    return recovered;
+  }
+
   /// Relance sans délai une écriture déjà en attente après un échec réseau.
   /// Le payload et son identifiant restent inchangés.
   Future<bool> retryPendingOperationNow(String operationId) async {

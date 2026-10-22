@@ -64,6 +64,25 @@ void main() {
         as Map<String, dynamic>;
   }
 
+  test(
+    'single dossier refresh does not load or decode unrelated dossiers',
+    () async {
+      final selected = (await db.query('dossiers')).single;
+      await db.insert('dossiers', {
+        ...selected,
+        'local_id': 'other',
+        'status': 'INVALID_UNRELATED_STATUS',
+      });
+      final dossier = await repository.fetchDossierById('dossier-1');
+      expect(dossier?.id, 'dossier-1');
+      expect(await repository.fetchDossierById('missing'), isNull);
+      await expectLater(
+        repository.fetchAllDossiers(),
+        throwsA(isA<ArgumentError>()),
+      );
+    },
+  );
+
   test('patient save captures the reference before updating SQLite', () async {
     await repository.updatePatient('patient-1', {
       'first_name': 'Local',
@@ -80,9 +99,8 @@ void main() {
     'occupant birth date and durable mutation share the original synthetic baseline',
     () async {
       final rows = await db.query('patients');
-      final originalOccupants = jsonDecode(
-        rows.single['occupants_json'] as String,
-      ) as List<dynamic>;
+      final originalOccupants =
+          jsonDecode(rows.single['occupants_json'] as String) as List<dynamic>;
       final editedOccupants = List<Map<String, dynamic>>.from(
         originalOccupants.map(
           (value) => Map<String, dynamic>.from(value as Map),
@@ -99,15 +117,13 @@ void main() {
       expect(op['updates']['occupant1BirthDate'], '1948-04-12');
       expect(op['updates']['occupants'][0]['birthDate'], '1948-04-12');
       expect(op['concurrency']['baseValues']['occupant1BirthDate'], '');
-      expect(
-        op['concurrency']['baseValues']['occupants'],
-        originalOccupants,
-      );
+      expect(op['concurrency']['baseValues']['occupants'], originalOccupants);
       expect((await db.query('sync_operations')).single['status'], 'pending');
       final persisted = (await db.query('patients')).single;
       expect(persisted['birth_date'], '1948-04-12');
       expect(
-        (jsonDecode(persisted['occupants_json'] as String) as List).first['birthDate'],
+        (jsonDecode(persisted['occupants_json'] as String) as List)
+            .first['birthDate'],
         '1948-04-12',
       );
     },

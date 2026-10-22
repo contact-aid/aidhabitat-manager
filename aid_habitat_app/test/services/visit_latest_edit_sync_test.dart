@@ -358,6 +358,62 @@ void main() {
     },
   );
 
+  test(
+    'an interrupted running patient save is replayed and releases report prerequisites',
+    () async {
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      final local = LocalDatabase.forTesting(db);
+      await local.createSchemaForTesting();
+      final repository = DossierRepository(database: local);
+      final queue = SyncRepository.forTesting(database: local);
+      await repository.mergeRemoteDossierPayloads([
+        dossier(baseline, 'Original'),
+      ]);
+      await repository.updatePatient('patient-1', {'first_name': 'Fresh'});
+      final operation = (await queue.fetchRunnableOperations()).single;
+      await queue.tryMarkRunning(operation);
+      await db.update('sync_operations', {
+        'updated_at': DateTime.now()
+            .subtract(const Duration(minutes: 48))
+            .toIso8601String(),
+      });
+      var writes = 0;
+      final service = NocodbSyncService(
+        database: local,
+        syncRepository: queue,
+        apiClient: NocodbApiClient(
+          client: MockClient((request) async {
+            expect(request.method, 'PATCH');
+            final body = jsonDecode(request.body) as Map;
+            expect(body['firstName'], 'Fresh');
+            expect(
+              body['concurrency']['writeId'],
+              jsonDecode(operation.payloadJson)['concurrency']['writeId'],
+            );
+            writes++;
+            return http.Response(
+              jsonEncode({
+                'data': {'updatedAt': '2026-10-22T12:00:00Z'},
+              }),
+              200,
+            );
+          }),
+        ),
+      );
+      expect((await service.pushPendingChanges()).pushedOperations, 1);
+      expect(writes, 1);
+      expect(
+        await queue.countPendingReportPrerequisites(
+          dossierId: 'dossier-1',
+          patientId: 'patient-1',
+        ),
+        0,
+      );
+      expect((await db.query('sync_operations')).single['status'], 'completed');
+    },
+  );
+
   test('modern local collection wins a verified field conflict', () async {
     final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
     addTearDown(db.close);
