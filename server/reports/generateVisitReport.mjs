@@ -2868,6 +2868,7 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
     // Remove the static template label as well as the value: no territorial
     // grant must not look like an additional source of funding.
     page.drawRectangle({ x: 40, y: 519, width: 516, height: 45, color: rgb(1, 1, 1) });
+    page.drawLine({ start: { x: 42, y: 564 }, end: { x: 552.5, y: 564 }, thickness: 0.5, color: rgb(0, 0, 0) });
     cells.pop();
   }
   let retirementFundsAppendix = '';
