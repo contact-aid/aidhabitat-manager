@@ -2272,8 +2272,8 @@ async function drawVisitPhotosWithFlow({
     if (cursorY - titleSpace - rowH - captionHeight < bottomLimit) {
       const insertAt = page8Index + 1 + bonusPagesInserted;
       currentPage = pdfDoc.insertPage(insertAt, [pageWidth, pageHeight]);
-      drawReportFrame(currentPage, row.label === 'Sanitaires' ? 'Sanitaires' : 'Photos du logement', helveticaTitle, { bottom: 42.4, top: 793 });
-      categoryInFrame = row.label === 'Sanitaires';
+      drawReportFrame(currentPage, row.type === 'logement' ? 'Photos du logement' : row.label, helveticaTitle, { bottom: 42.4, top: 793 });
+      categoryInFrame = row.type !== 'logement';
       cursorY = Math.min(pageHeight - bonusMarginTop, 768);
       bottomLimit = bonusMarginBottom;
       bonusPagesInserted += 1;
@@ -2863,6 +2863,14 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
     },
   ];
 
+  const epciLabel = String(view?.patient?.epciLabel ?? '').trim();
+  if (!epciLabel || epciLabel === '/') {
+    // Remove the static template label as well as the value: no territorial
+    // grant must not look like an additional source of funding.
+    page.drawRectangle({ x: 40, y: 519, width: 516, height: 45, color: rgb(1, 1, 1) });
+    page.drawLine({ start: { x: 42, y: 564 }, end: { x: 552.5, y: 564 }, thickness: 0.5, color: rgb(0, 0, 0) });
+    cells.pop();
+  }
   let retirementFundsAppendix = '';
   for (const cell of cells) {
     if (cell.retirementFunds) {
