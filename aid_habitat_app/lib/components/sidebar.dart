@@ -16,6 +16,7 @@ class Sidebar extends StatefulWidget {
   final int pendingSyncCount;
   final bool isSyncing;
   final VoidCallback? onSyncTap;
+  final Future<void> Function()? onReviewSync;
 
   const Sidebar({
     super.key,
@@ -26,6 +27,7 @@ class Sidebar extends StatefulWidget {
     this.pendingSyncCount = 0,
     this.isSyncing = false,
     this.onSyncTap,
+    this.onReviewSync,
   });
 
   @override
@@ -338,6 +340,7 @@ class _SidebarState extends State<Sidebar> {
       builder: (_) => AccountDialog(
         currentUser: _effectiveUser,
         onLogout: widget.onLogout,
+        onReviewSync: widget.onReviewSync,
         // `onOpenAdmin` retiré avec la page Admin — la gestion des accès
         // est désormais pilotée uniquement depuis NocoDB.
       ),

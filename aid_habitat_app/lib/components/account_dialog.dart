@@ -18,7 +18,14 @@ import 'cached_remote_image.dart';
 import 'confirmation_dialog.dart';
 
 class AccountDialog extends StatefulWidget {
-  const AccountDialog({super.key, required this.currentUser, this.onLogout});
+  const AccountDialog({
+    super.key,
+    required this.currentUser,
+    this.onLogout,
+    this.onReviewSync,
+  });
+
+  final Future<void> Function()? onReviewSync;
 
   final LocalAppUser currentUser;
 
@@ -143,7 +150,7 @@ class _AccountDialogState extends State<AccountDialog> {
       final operations = await repository.fetchPendingDiagnostics();
       final count = total ?? await repository.countPendingOperations();
       if (!mounted) return;
-      await showDialog<void>(
+      final reviewRequested = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: Text(
@@ -218,6 +225,11 @@ class _AccountDialogState extends State<AccountDialog> {
                   ),
           ),
           actions: [
+            if (widget.onReviewSync != null)
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Résoudre les blocages'),
+              ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Fermer'),
@@ -225,6 +237,11 @@ class _AccountDialogState extends State<AccountDialog> {
           ],
         ),
       );
+      if (reviewRequested == true && mounted) {
+        final review = widget.onReviewSync;
+        Navigator.of(context).pop();
+        await review?.call();
+      }
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

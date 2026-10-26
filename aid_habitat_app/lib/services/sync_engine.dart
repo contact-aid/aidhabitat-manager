@@ -643,9 +643,7 @@ class SyncEngine {
     _state = SyncEngineState(
       isSyncing: isSyncing ?? _state.isSyncing,
       pendingCount: pendingCount ?? _state.pendingCount,
-      lastError: clearError
-          ? null
-          : (lastError ?? (isSyncing == true ? null : _state.lastError)),
+      lastError: clearError ? null : (lastError ?? _state.lastError),
       lastSyncAt: lastSyncAt ?? _state.lastSyncAt,
       nextRetryAt: nextRetryAt ?? _state.nextRetryAt,
     );
