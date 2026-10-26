@@ -448,9 +448,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     try {
       final failure = await _syncEngine.inspectTopFailure();
       if (!mounted) return;
-      if (failure?['entityType'] == 'sync_ownership') {
+      if (failure?['entityType'] == 'sync_ownership' ||
+          (await _syncEngine.inspectAllFailures()).isNotEmpty) {
+        if (!mounted) return;
         await _showFailingOpDetails();
       } else {
+        if (!mounted) return;
         _handleSyncNow();
       }
     } catch (_) {
@@ -688,6 +691,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     pendingSyncCount: _pendingSyncCount,
                     isSyncing: _isSyncing,
                     onSyncTap: _handleSyncNow,
+                    onReviewSync: _showFailingOpDetails,
                   ),
                   Expanded(
                     child: Column(
@@ -839,9 +843,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (_isOffline) {
       return const SizedBox.shrink();
     }
-    if (!_isSyncing &&
-        _pendingSyncCount > 0 &&
-        (_lastSyncError?.isNotEmpty ?? false)) {
+    if (_pendingSyncCount > 0 && (_lastSyncError?.isNotEmpty ?? false)) {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),

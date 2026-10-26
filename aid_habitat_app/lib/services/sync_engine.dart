@@ -486,7 +486,7 @@ class SyncEngine {
           _emitState(
             isSyncing: false,
             pendingCount: pendingBefore,
-            clearError: true,
+            clearError: pendingBefore == 0,
           );
           _scheduleRetry();
           return;
@@ -586,7 +586,7 @@ class SyncEngine {
       _emitState(
         isSyncing: false,
         pendingCount: pendingAfter,
-        clearError: isTransient,
+        clearError: isTransient && pendingAfter == 0,
         lastError: isTransient ? null : e.toString(),
         lastSyncAt: DateTime.now(),
       );
@@ -643,9 +643,7 @@ class SyncEngine {
     _state = SyncEngineState(
       isSyncing: isSyncing ?? _state.isSyncing,
       pendingCount: pendingCount ?? _state.pendingCount,
-      lastError: clearError
-          ? null
-          : (lastError ?? (isSyncing == true ? null : _state.lastError)),
+      lastError: clearError ? null : (lastError ?? _state.lastError),
       lastSyncAt: lastSyncAt ?? _state.lastSyncAt,
       nextRetryAt: nextRetryAt ?? _state.nextRetryAt,
     );

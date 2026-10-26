@@ -8,6 +8,38 @@ import 'package:aid_habitat_app/services/sync_repository.dart';
 
 void main() {
   test(
+    'le conflit reste visible pendant une reprise et disparaît après résolution',
+    () async {
+      final repository = _FakeSyncRepository()..pendingCount = 1;
+      final service = _ReviewRetryService();
+      final engine = SyncEngine.testing(
+        syncService: service,
+        syncRepository: repository,
+      );
+      addTearDown(engine.dispose);
+      engine.start();
+      await _waitUntil(() => engine.currentState.lastError != null);
+      final error = engine.currentState.lastError;
+      engine.requestSync();
+      await _waitUntil(() => service.pushCalls == 2);
+      expect(engine.currentState.isSyncing, isTrue);
+      expect(engine.currentState.lastError, error);
+      expect(engine.currentState.pendingCount, 1);
+      repository.pendingCount = 0;
+      service.retry.complete(
+        const SyncRunResult(
+          pushedOperations: 0,
+          failedOperations: 0,
+          message: 'Terminé',
+        ),
+      );
+      await _waitUntil(() => !engine.currentState.isSyncing);
+      expect(engine.currentState.lastError, isNull);
+      expect(engine.currentState.pendingCount, 0);
+    },
+  );
+
+  test(
     'restaure la session même sans écriture locale avant réception',
     () async {
       final repository = _FakeSyncRepository()..pendingCount = 0;
@@ -389,6 +421,25 @@ class _BlockingSyncService extends NocodbSyncService {
         pushedOperations: 1,
         failedOperations: 0,
         message: 'Synchronisation terminée',
+      ),
+    );
+  }
+}
+
+class _ReviewRetryService extends NocodbSyncService {
+  int pushCalls = 0;
+  final retry = Completer<SyncRunResult>();
+
+  @override
+  Future<SyncRunResult> pushPendingChanges() {
+    pushCalls++;
+    if (pushCalls > 1) return retry.future;
+    return Future.value(
+      const SyncRunResult(
+        pushedOperations: 0,
+        failedOperations: 0,
+        conflictCount: 1,
+        message: 'Conflit',
       ),
     );
   }
