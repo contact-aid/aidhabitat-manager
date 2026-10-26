@@ -2422,7 +2422,10 @@ const mapHousing = (housingRecord) => {
     yearConstruction: stringValue(field(housingRecord, 'annee_construction')),
     yearHabitation: stringValue(field(housingRecord, 'annee_habitation')),
     surface: stringValue(field(housingRecord, 'surface_habitable')),
-    levels: toNumber(field(housingRecord, 'nombre_niveaux')),
+    // Keep the key on the JSON wire when empty: older iPads require an
+    // explicit value to review a retained housing conflict. Undefined is
+    // removed by JSON serialization and blocks the whole dossier review.
+    levels: toNumber(field(housingRecord, 'nombre_niveaux')) ?? null,
     // A UI default is not a concurrency baseline. The Flutter form may still
     // suggest Maison, but an absent relation remains absent on the wire.
     typology: refLabel(field(housingRecord, 'type_de_logement')),

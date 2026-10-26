@@ -400,6 +400,55 @@ void main() {
   );
 
   test(
+    'legacy housing with empty remote levels retains all local rooms',
+    () async {
+      await dossiers.updateHousing('dossier-1', {
+        'levels': 2,
+        'surface': 91.0,
+        'rdc_rooms_json': '["Salon", "Cuisine", "Salle de bain"]',
+      });
+      final authored = await payload();
+      (authored['concurrency'] as Map).remove('collectionContract');
+      await db.update('sync_operations', {
+        'payload_json': await OfflineVault.instance.sealString(
+          jsonEncode(authored),
+        ),
+      });
+      await conflict(
+        'housing',
+        remoteData: {'error': 'COLLECTION_CLIENT_UPGRADE_REQUIRED'},
+      );
+      final before = await payload();
+      final raw = remote(version: _new);
+      raw['housing'] = <String, dynamic>{...raw['housing'] as Map, 'levels': null};
+      (raw['housing'] as Map)['roomsBreakdown'] = {
+        'rdc': ['Salle de bain'],
+        'basement': [],
+        'floor': [],
+        'secondFloor': [],
+        'thirdFloor': [],
+      };
+      final review = (await dossiers.reviewConflicts('dossier-1', raw)).single;
+      expect(review.remoteValues['levels'], isNull);
+      expect(review.localValues['levels'], 2);
+      expect(await payload(), before);
+      await dossiers.resolveReviewedConflict(review, keepLocal: true);
+      final after = await payload();
+      expect(after['updates'], before['updates']);
+      expect(after['concurrency']['collectionContract'], 'collections-v2');
+      expect(after['concurrency']['baseValues']['levels'], isNull);
+      expect((await db.query('housings')).single['levels'], 2);
+      final history = (await db.query('sync_conflict_history')).single;
+      final snapshot = jsonDecode(
+        await OfflineVault.instance.openString(
+          history['snapshot_json'] as String,
+        ),
+      );
+      expect(snapshot['mutation'], before);
+    },
+  );
+
+  test(
     'housing room arrays are restored as one field with all levels',
     () async {
       await dossiers.updateHousing('dossier-1', {
