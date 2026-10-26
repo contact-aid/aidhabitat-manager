@@ -31,10 +31,12 @@ const buildCachedObjectUrls = (documents: AppDocument[]) => {
   }, {});
 };
 
+const EMPTY_DOCUMENTS: AppDocument[] = [];
+
 export const DocumentsView: React.FC<DocumentsViewProps> = ({
   dossier,
   onBack,
-  initialDocuments = [],
+  initialDocuments = EMPTY_DOCUMENTS,
   initialPreparedAt = null,
   initialIsReady = false,
 }) => {
@@ -63,8 +65,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const uploadLoadingState = useSmoothLoadingState(isUploading, { minVisibleMs: 520 });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [inlineEditingId, setInlineEditingId] = useState<string | null>(null);
-  const [inlineTitle, setInlineTitle] = useState('');
   const [unsavedPromptOpen, setUnsavedPromptOpen] = useState(false);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
   const longPressTimerRef = useRef<number | null>(null);
@@ -120,15 +120,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     return pendingPromise;
   }, [revokeObjectUrl, setDocumentObjectUrl]);
 
-  const preloadDocumentPreviews = useCallback(async (documents: AppDocument[]) => {
-    const previewableDocs = documents.filter((doc) => doc.type === 'image' || doc.type === 'pdf');
-    if (previewableDocs.length === 0) {
-      return;
-    }
-
-    await Promise.allSettled(previewableDocs.map((doc) => ensureDocumentObjectUrl(doc)));
-  }, [ensureDocumentObjectUrl]);
-
   useEffect(() => {
     const activeIds = new Set(docs.map((doc) => doc.id));
     setDocumentObjectUrls((current) => {
@@ -154,11 +145,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
     try {
       const fetchedDocs = await fetchDocuments(dossier.patient.id, dossier.id);
-      if (options?.silent) {
-        void preloadDocumentPreviews(fetchedDocs);
-      } else {
-        await preloadDocumentPreviews(fetchedDocs);
-      }
       setDocs(fetchedDocs);
       setLastSyncedAt(new Date().toISOString());
       setSelectedDoc((current) => {
@@ -171,7 +157,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         setIsRefreshing(false);
       }
     }
-  }, [dossier.id, dossier.patient.id, preloadDocumentPreviews]);
+  }, [dossier.id, dossier.patient.id]);
 
   useEffect(() => {
     const initialRefresh = initialIsReady
@@ -180,6 +166,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     initialRefresh.catch((error) => console.error('DocumentsView: failed to load documents', error));
 
     const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
       refreshDocuments({ silent: true }).catch((error) => console.error('DocumentsView: background refresh failed', error));
     }, 10000);
 
@@ -216,7 +203,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   useEffect(() => {
     if (!selectedDoc) return;
     setEditingTitle(selectedDoc.title);
-  }, [selectedDoc]);
+  }, [selectedDoc?.id, selectedDoc?.title]);
 
   useEffect(() => {
     if (!selectedDoc) return;
@@ -492,9 +479,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   useEffect(() => () => cancelLongPress(), [cancelLongPress]);
 
-  const handleInlineRename = useCallback(async (docId: string) => {
-    const title = inlineTitle.trim();
-    setInlineEditingId(null);
+  const handleInlineRename = useCallback(async (docId: string, value: string) => {
+    const title = value.trim();
     if (!title) return;
     const current = docs.find((d) => d.id === docId);
     if (!current || current.title === title) return;
@@ -502,7 +488,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (success && updated) {
       setDocs((prev) => prev.map((d) => d.id === updated.id ? updated : d));
     }
-  }, [docs, inlineTitle]);
+  }, [docs]);
 
   const hasUnsavedChanges = Boolean(selectedDoc && editingTitle.trim() !== selectedDoc.title);
 
@@ -611,7 +597,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
           {filteredDocs.map((doc) => {
             const isSelected = selectedIds.has(doc.id);
-            const isEditingThis = inlineEditingId === doc.id;
             return (
             <div
               key={doc.id}
@@ -672,43 +657,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   <X size={18} />
                 </button>
 
-                {doc.type === 'image' && documentObjectUrls[doc.id] ? (
-                  <img
-                    src={documentObjectUrls[doc.id]}
-                    alt={doc.title}
-                    draggable={!isSelectionMode}
-                    onDragStart={(e) => { void handleDragStart(doc, e); }}
-                    className="w-full h-full object-cover cursor-grab active:cursor-grabbing"
-                  />
-                ) : doc.type === 'pdf' && documentObjectUrls[doc.id] ? (
-                  <iframe
-                    src={`${documentObjectUrls[doc.id]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
-                    title={doc.title}
-                    className="w-full h-full pointer-events-none bg-white"
-                  />
-                ) : (
-                  <div className="text-slate-400">
-                    {doc.type === 'pdf' ? <FileText size={32} /> : <File size={32} />}
-                  </div>
-                )}
+                <DocumentPreview document={doc} isSelectionMode={isSelectionMode} onDragStart={handleDragStart} />
               </div>
-              <input
-                value={isEditingThis ? inlineTitle : doc.title}
-                readOnly={!isEditingThis}
-                onFocus={(e) => {
-                  e.stopPropagation();
-                  setInlineEditingId(doc.id);
-                  setInlineTitle(doc.title);
-                }}
-                onChange={(e) => setInlineTitle(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                onBlur={() => { if (isEditingThis) void handleInlineRename(doc.id); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.currentTarget.blur(); }
-                  if (e.key === 'Escape') { setInlineEditingId(null); e.currentTarget.blur(); }
-                }}
-                className={`font-medium text-black text-sm text-center w-full px-2 py-0.5 rounded-md outline-none cursor-text transition-colors ${isEditingThis ? 'border border-[#907CA1] bg-white' : 'border border-transparent hover:border-slate-200 bg-transparent truncate'}`}
-              />
+              <DocumentTitle documentId={doc.id} title={doc.title} onSave={handleInlineRename} />
               <span className="text-[10px] text-slate-400">
                 {new Date(doc.updatedAt || doc.createdAt).toLocaleDateString('fr-FR')} {new Date(doc.updatedAt || doc.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
               </span>
@@ -933,3 +884,66 @@ const MenuItem: React.FC<{ icon: React.ComponentType<any>; label: string; onClic
     <span className="text-sm font-medium text-slate-800">{label}</span>
   </button>
 );
+
+
+const DocumentTitle = React.memo(({ documentId, title, onSave }: {
+  documentId: string;
+  title: string;
+  onSave: (id: string, title: string) => Promise<void>;
+}) => {
+  const [draft, setDraft] = useState(title);
+  const [editing, setEditing] = useState(false);
+  const cancelled = useRef(false);
+  useEffect(() => { if (!editing) setDraft(title); }, [title, editing]);
+  return <input
+    aria-label="Titre du document"
+    value={editing ? draft : title}
+    onFocus={() => { cancelled.current = false; setDraft(title); setEditing(true); }}
+    onChange={(event) => setDraft(event.target.value)}
+    onClick={(event) => event.stopPropagation()}
+    onBlur={() => {
+      setEditing(false);
+      if (!cancelled.current) void onSave(documentId, draft);
+    }}
+    onKeyDown={(event) => {
+      if (event.key === 'Escape') { cancelled.current = true; event.currentTarget.blur(); }
+      if (event.key === 'Enter') event.currentTarget.blur();
+    }}
+    className={`font-medium text-black text-sm text-center w-full px-2 py-0.5 rounded-md outline-none cursor-text transition-colors ${editing ? 'border border-[#907CA1] bg-white' : 'border border-transparent hover:border-slate-200 bg-transparent truncate'}`}
+  />;
+});
+
+const DocumentPreview = React.memo(({ document: doc, isSelectionMode, onDragStart }: {
+  document: AppDocument;
+  isSelectionMode: boolean;
+  onDragStart: (doc: AppDocument, event: React.DragEvent) => void | Promise<void>;
+}) => {
+  const element = useRef<HTMLDivElement>(null);
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    if (doc.type !== 'image' || !element.current) return;
+    let disposed = false;
+    let objectUrl = '';
+    let started = false;
+    const load = () => {
+      if (started) return;
+      started = true;
+      void fetchDocumentBlob(doc).then((blob) => {
+        if (disposed) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      }).catch((error) => console.error('Document preview failed', error));
+    };
+    const observer = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) { observer?.disconnect(); load(); }
+    }, { rootMargin: '200px' });
+    if (observer) observer.observe(element.current); else load();
+    return () => { disposed = true; observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [doc.id, doc.type]);
+  return <div ref={element} className="w-full h-full flex items-center justify-center text-slate-400">
+    {doc.type === 'image' && url ? <img src={url} alt={doc.title} decoding="async" loading="lazy"
+      draggable={!isSelectionMode} onDragStart={(event) => { void onDragStart(doc, event); }}
+      className="w-full h-full object-cover cursor-grab active:cursor-grabbing" />
+      : doc.type === 'pdf' ? <FileText size={32} /> : <File size={32} />}
+  </div>;
+});
