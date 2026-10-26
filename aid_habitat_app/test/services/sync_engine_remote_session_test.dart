@@ -7,6 +7,126 @@ import 'package:aid_habitat_app/services/sync_engine.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
 
 void main() {
+  test(
+    'restaure la session même sans écriture locale avant réception',
+    () async {
+      final repository = _FakeSyncRepository()..pendingCount = 0;
+      final service = _FakeSyncService();
+      final ready = Completer<bool>();
+      var pulls = 0;
+      var preparations = 0;
+      final engine = SyncEngine.testing(
+        syncService: service,
+        syncRepository: repository,
+        workspacePuller: () async {
+          pulls++;
+          return true;
+        },
+      );
+      addTearDown(engine.dispose);
+      engine.bindRemoteSessionPreparer(() {
+        preparations++;
+        return ready.future;
+      });
+      engine.start();
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(preparations, 1);
+      expect(pulls, 0);
+      ready.complete(true);
+      await _waitUntil(() => pulls == 1);
+    },
+  );
+
+  test('un pull échoué reste demandé au prochain cycle', () async {
+    final repository = _FakeSyncRepository()..pendingCount = 0;
+    var pulls = 0;
+    final engine = SyncEngine.testing(
+      syncService: _FakeSyncService(),
+      syncRepository: repository,
+      workspacePuller: () async {
+        pulls++;
+        return pulls > 1;
+      },
+    );
+    addTearDown(engine.dispose);
+    engine.start();
+    await _waitUntil(() => pulls == 1);
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(engine.currentState.nextRetryAt, isNotNull);
+    engine.requestSync();
+    await _waitUntil(() => pulls == 2);
+    expect(repository.pendingCount, 0);
+  });
+
+  test('une demande reçue pendant un pull est exécutée ensuite', () async {
+    final repository = _FakeSyncRepository()..pendingCount = 0;
+    final firstPull = Completer<bool>();
+    var pulls = 0;
+    final engine = SyncEngine.testing(
+      syncService: _FakeSyncService(),
+      syncRepository: repository,
+      workspacePuller: () {
+        pulls++;
+        return pulls == 1 ? firstPull.future : Future.value(true);
+      },
+    );
+    addTearDown(engine.dispose);
+    engine.start();
+    await _waitUntil(() => pulls == 1);
+    engine.requestFullSync();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(pulls, 1);
+    firstPull.complete(true);
+    await _waitUntil(() => pulls == 2);
+  });
+
+  test(
+    'un échec de lecture après déconnexion ne relance pas la session',
+    () async {
+      final repository = _FakeSyncRepository()..pendingCount = 0;
+      final result = Completer<bool>();
+      var pulls = 0;
+      final engine = SyncEngine.testing(
+        syncService: _FakeSyncService(),
+        syncRepository: repository,
+        workspacePuller: () {
+          pulls++;
+          return result.future;
+        },
+      );
+      addTearDown(engine.dispose);
+      engine.start();
+      await _waitUntil(() => pulls == 1);
+      engine.stop();
+      result.complete(false);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(engine.currentState.nextRetryAt, isNull);
+      expect(pulls, 1);
+    },
+  );
+
+  test('le démarrage hors ligne garde la réception demandée', () async {
+    final repository = _FakeSyncRepository()..pendingCount = 0;
+    var offline = true;
+    var pulls = 0;
+    final engine = SyncEngine.testing(
+      syncService: _FakeSyncService(),
+      syncRepository: repository,
+      isOffline: () => offline,
+      workspacePuller: () async {
+        pulls++;
+        return true;
+      },
+    );
+    addTearDown(engine.dispose);
+    engine.start();
+    await _waitUntil(() => engine.currentState.nextRetryAt != null);
+    expect(pulls, 0);
+    offline = false;
+    engine.requestSync();
+    await _waitUntil(() => pulls == 1);
+  });
+
   test('le drain attend que la session distante soit restaurée', () async {
     final repository = _FakeSyncRepository();
     final service = _FakeSyncService();

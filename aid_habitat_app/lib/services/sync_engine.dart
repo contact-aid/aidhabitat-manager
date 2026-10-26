@@ -472,7 +472,8 @@ class SyncEngine {
       // attend ce résultat, ce qui supprime la course où report_generation
       // restait "en attente" jusqu'au logout/login suivant.
       final prepareRemoteSession = _remoteSessionPreparer;
-      if (pendingBefore > 0 && prepareRemoteSession != null) {
+      if ((pendingBefore > 0 || _pullAfterSyncRequested) &&
+          prepareRemoteSession != null) {
         final sessionReady = await prepareRemoteSession();
         if (lifecycle != _lifecycle) return;
         if (_disposed || !_started) {
@@ -597,11 +598,26 @@ class SyncEngine {
   /// Les repositories protègent déjà les entités réellement non synchronisées
   /// avec leur `sync_state`; le pull peut donc réparer les autres dossiers sans
   /// écraser la saisie locale concernée par l'échec.
-  void _pullRequestedWorkspaceEvenWithFailures() {
-    if (!_pullAfterSyncRequested) return;
+  Future<void> _pullRequestedWorkspaceEvenWithFailures() async {
+    if (!_pullAfterSyncRequested || _pullRunning || !_started || _disposed) {
+      return;
+    }
+    final lifecycle = _lifecycle;
     _pullAfterSyncRequested = false;
-    // ignore: discarded_futures
-    _runPullSafe();
+    final refreshed = await _runPullSafe();
+    if (lifecycle != _lifecycle || !_started || _disposed) return;
+    if (!refreshed) {
+      // A reconnect notification may be the last one we receive (Wi-Fi can
+      // stay connected while the API is unavailable). Keep the receive work
+      // requested until it succeeds, even when there are no local writes.
+      _pullAfterSyncRequested = true;
+      _consecutiveFailures += 1;
+      _scheduleRetry();
+    } else if (_pullAfterSyncRequested) {
+      // A foreground/reconnect request arriving during this read must not be
+      // consumed by the older snapshot. Drain new local edits before reading.
+      _scheduleImmediate();
+    }
   }
 
   Future<int> _refreshPendingCount() async {
