@@ -2898,13 +2898,9 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
             });
     };
 
-    const handleSaveNote = useCallback(async ({ text, drawingJson, previewDataUrl }: { text: string; drawingJson: string; previewDataUrl: string }) => {
+    const handleSaveNote = useCallback(async ({ text, drawingJson, previewDataUrl }: { text: string; drawingJson: string; previewDataUrl?: string }) => {
         const normalizedDrawingJson = drawingJson || EMPTY_DRAWING_JSON;
-        const resolvedPreviewDataUrl = previewDataUrl || buildNotePreviewDataUrlFromContent({
-            text,
-            drawingJson: normalizedDrawingJson,
-            mode: noteLayoutKind === 'grid' ? 'grid' : 'freeform',
-        });
+        const resolvedPreviewDataUrl = previewDataUrl || currentDrawingNotePage.previewDataUrl || '';
         const isBlankText = text.trim().length === 0;
         const isBlankDrawing = normalizedDrawingJson === EMPTY_DRAWING_JSON;
         if (!currentDrawingNotePage.id && !currentTextNotePage.id && isBlankText && isBlankDrawing) {
@@ -2945,6 +2941,14 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
 
         const doSave = async () => {
             try {
+                // Keep the draft in memory before navigation; render its thumbnail
+                // in a later task so tab changes can paint first.
+                await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+                const resolvedPreviewDataUrl = previewDataUrl || buildNotePreviewDataUrlFromContent({
+                    text,
+                    drawingJson: normalizedDrawingJson,
+                    mode: noteLayoutKind === 'grid' ? 'grid' : 'freeform',
+                });
                 const [savedPage, savedSharedTextPage] = await Promise.all([
                     saveNotePage({
                         notePageId: optimisticDrawingPage.id || undefined,
@@ -3012,11 +3016,6 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
         handleSaveNote({
             text: debouncedNoteDraft.text,
             drawingJson: debouncedNoteDraft.drawingJson,
-            previewDataUrl: buildNotePreviewDataUrlFromContent({
-                text: debouncedNoteDraft.text,
-                drawingJson: debouncedNoteDraft.drawingJson,
-                mode: noteLayoutKind === 'grid' ? 'grid' : 'freeform',
-            }),
         }).catch(() => {
             // saveStatus already handles UI feedback
         });

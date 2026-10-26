@@ -2443,20 +2443,27 @@ const mergeRemoteDocumentsIntoLocalCache = async (remoteDocuments: AppDocument[]
   const queue = readLocalDocumentQueue();
   const pendingIds = new Set(queue.map((entry) => entry.documentId));
 
-  remoteDocuments.forEach((document) => {
-    const localDocument = readLocalDocumentRecords().find((entry) => entry.remoteId === document.id || entry.id === document.id);
-    if (localDocument && pendingIds.has(localDocument.id)) {
-      return;
-    }
-    upsertLocalDocumentRecord({
+  const records = readLocalDocumentRecords();
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const byRemoteId = new Map(records.filter((record) => record.remoteId).map((record) => [record.remoteId, record]));
+  let changed = false;
+  for (const document of remoteDocuments) {
+    const localDocument = byRemoteId.get(document.id) || byId.get(document.id);
+    if (localDocument && pendingIds.has(localDocument.id)) continue;
+    const next: LocalDocumentRecord = {
       ...(localDocument || document),
       ...document,
       id: localDocument?.id || document.id,
       remoteId: document.id,
       syncStatus: 'synced',
       lastSyncedAt: document.updatedAt,
-    });
-  });
+    };
+    if (JSON.stringify(localDocument) === JSON.stringify(next)) continue;
+    byId.set(next.id, next);
+    byRemoteId.set(document.id, next);
+    changed = true;
+  }
+  if (changed) writeLocalDocumentRecords([...byId.values()]);
 };
 
 const fetchRemoteDocuments = async (patientId: string, dossierId?: string): Promise<AppDocument[]> => {
@@ -3172,10 +3179,7 @@ export const fetchDocumentSyncStatus = async (): Promise<{
 export const getCachedDocumentBlob = (documentId: string): Blob | null => documentBlobCache.get(documentId) || null;
 
 export const preloadDocumentsView = async (patientId: string, dossierId?: string): Promise<AppDocument[]> => {
-  const documents = await fetchDocuments(patientId, dossierId);
-  const previewableDocs = documents.filter((document) => document.type === 'image' || document.type === 'pdf');
-  await Promise.allSettled(previewableDocs.map((document) => fetchDocumentBlob(document)));
-  return documents;
+  return fetchDocuments(patientId, dossierId);
 };
 
 const BENEFICIARY_PATCH_ALLOWED_KEYS = new Set([
