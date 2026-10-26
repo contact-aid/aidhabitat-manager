@@ -628,7 +628,7 @@ class _PhotosTabState extends State<PhotosTab>
   }
 
   /// Supprime une photo SANS confirmation supplémentaire — la
-  /// confirmation est posée par `_PhotoFullscreenDialog._confirmAndDelete`
+  /// confirmation est posée par `PhotoFullscreenDialog._confirmAndDelete`
   /// avant d'appeler ce callback. Si tu rajoutes un autre point
   /// d'entrée pour la suppression (ex. swipe-to-delete dans le grid),
   /// ajoute la confirmation côté caller.
@@ -1194,7 +1194,7 @@ class _PhotosTabState extends State<PhotosTab>
       context: context,
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.28),
-      builder: (ctx) => _PhotoFullscreenDialog(
+      builder: (ctx) => PhotoFullscreenDialog(
         doc: doc,
         onDelete: () async {
           Navigator.of(ctx).pop();
@@ -1222,7 +1222,24 @@ class _PhotosTabState extends State<PhotosTab>
                 title: newTitle,
                 tags: nextTags,
               );
-              await _refresh();
+              // Metadata edits must not decrypt every photo or start a
+              // remote gallery refresh before releasing the title field.
+              if (!mounted) return;
+              ++_refreshGeneration;
+              setState(() {
+                _photos = _photos
+                    .map(
+                      (photo) => photo.id == doc.id
+                          ? photo.copyWith(
+                              title: newTitle,
+                              tags: nextTags,
+                              syncState: SyncState.pendingSync,
+                              updatedAt: DateTime.now().toIso8601String(),
+                            )
+                          : photo,
+                    )
+                    .toList(growable: false);
+              });
             },
       ),
     );
@@ -1624,7 +1641,7 @@ class _PhotoTile extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 /// Cache global partagé par toutes les instances de `_PhotoThumbnail`
-/// et `_PhotoFullscreenDialog` — clé = `doc.id`. Une fois que les
+/// et `PhotoFullscreenDialog` — clé = `doc.id`. Une fois que les
 /// bytes ont été décodés (base64) ou téléchargés (URL), toutes les
 /// vignettes du même doc s'affichent en O(1) depuis cette map. Le
 /// cache vit pour la durée du process — survit aux changements
@@ -1887,7 +1904,7 @@ class _PhotoThumbnailState extends State<_PhotoThumbnail> {
 // la vignette → ouverture instantanée (l'image est déjà décodée).
 // ---------------------------------------------------------------------------
 
-class _PhotoFullscreenDialog extends StatefulWidget {
+class PhotoFullscreenDialog extends StatefulWidget {
   final DocItem doc;
 
   /// Si fourni, un bouton poubelle apparaît en haut à droite (à côté
@@ -1909,17 +1926,18 @@ class _PhotoFullscreenDialog extends StatefulWidget {
   })?
   onMetadataChanged;
 
-  const _PhotoFullscreenDialog({
+  const PhotoFullscreenDialog({
+    super.key,
     required this.doc,
     this.onDelete,
     this.onMetadataChanged,
   });
 
   @override
-  State<_PhotoFullscreenDialog> createState() => _PhotoFullscreenDialogState();
+  State<PhotoFullscreenDialog> createState() => _PhotoFullscreenDialogState();
 }
 
-class _PhotoFullscreenDialogState extends State<_PhotoFullscreenDialog> {
+class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
   Uint8List? _bytes;
   bool _failed = false;
 
@@ -2015,6 +2033,7 @@ class _PhotoFullscreenDialogState extends State<_PhotoFullscreenDialog> {
   }
 
   Future<bool> _saveTitleIfNeeded() async {
+    if (_isSaving) return false;
     final cb = widget.onMetadataChanged;
     if (cb == null) return true;
     final nextTitle = _draftTitle.trim();
@@ -2191,6 +2210,7 @@ class _PhotoFullscreenDialogState extends State<_PhotoFullscreenDialog> {
                           Expanded(
                             child: TextFormField(
                               initialValue: _draftTitle,
+                              enabled: !_isSaving,
                               style: const TextStyle(color: Colors.black),
                               decoration: const InputDecoration(
                                 labelText: 'Titre de la photo',
@@ -2199,7 +2219,7 @@ class _PhotoFullscreenDialogState extends State<_PhotoFullscreenDialog> {
                               ),
                               onChanged: (value) {
                                 if (value == _draftTitle) return;
-                                setState(() => _draftTitle = value);
+                                _draftTitle = value;
                               },
                               onFieldSubmitted: (_) => _saveTitleIfNeeded(),
                               onTapOutside: (_) {
