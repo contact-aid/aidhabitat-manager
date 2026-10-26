@@ -1961,6 +1961,11 @@ class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
   late bool _showLabelOnPdf;
 
   bool _isSaving = false;
+  bool _showSavingIndicator = false;
+  bool _isClosing = false;
+  late bool _persistedShowLabel;
+  Future<bool>? _metadataSave;
+  Timer? _savingIndicatorTimer;
 
   @override
   void initState() {
@@ -1970,7 +1975,14 @@ class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
     _showLabelOnPdf =
         widget.doc.tags.contains(kPhotoTagPdfShowLabel) &&
         !widget.doc.tags.contains(kPhotoTagPdfNoLabel);
+    _persistedShowLabel = _showLabelOnPdf;
     _load();
+  }
+
+  @override
+  void dispose() {
+    _savingIndicatorTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -2001,39 +2013,60 @@ class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
   Future<bool> _persistMetadata({
     required String newTitle,
     required bool showLabelOnPdf,
-    bool optimisticShowLabel = false,
-  }) async {
+  }) {
     final cb = widget.onMetadataChanged;
-    if (cb == null) return true;
-    final previousShowLabel = _showLabelOnPdf;
+    if (cb == null) return Future.value(true);
+    // Desired state changes immediately. One writer drains the latest choice,
+    // so rapid toggles cannot race or be overwritten by an older completion.
     setState(() {
-      _isSaving = true;
-      if (optimisticShowLabel) {
-        _showLabelOnPdf = showLabelOnPdf;
-      }
+      _draftTitle = newTitle;
+      _showLabelOnPdf = showLabelOnPdf;
     });
-    try {
-      await cb(newTitle: newTitle, showLabelOnPdf: showLabelOnPdf);
-      if (!mounted) return true;
-      setState(() {
-        _currentTitle = newTitle;
-        _draftTitle = newTitle;
-        _showLabelOnPdf = showLabelOnPdf;
-      });
-      return true;
-    } catch (error) {
-      if (mounted && optimisticShowLabel) {
-        setState(() => _showLabelOnPdf = previousShowLabel);
+    if (_metadataSave != null) return _metadataSave!;
+    final completion = Completer<bool>();
+    _metadataSave = completion.future;
+    setState(() => _isSaving = true);
+    _savingIndicatorTimer = Timer(const Duration(milliseconds: 300), () {
+      if (mounted && _isSaving) setState(() => _showSavingIndicator = true);
+    });
+    () async {
+      var success = true;
+      try {
+        // Paint the user's choice before local persistence starts.
+        await WidgetsBinding.instance.endOfFrame;
+        while (true) {
+          final title = _normalizedDraftTitle();
+          final visible = _showLabelOnPdf;
+          await cb(newTitle: title, showLabelOnPdf: visible);
+          _currentTitle = title;
+          _persistedShowLabel = visible;
+          if (!mounted ||
+              (_normalizedDraftTitle() == title &&
+                  _showLabelOnPdf == visible)) {
+            break;
+          }
+        }
+      } catch (error) {
+        success = false;
+        if (mounted) setState(() => _showLabelOnPdf = _persistedShowLabel);
+        _showSaveError(error);
+      } finally {
+        _savingIndicatorTimer?.cancel();
+        _metadataSave = null;
+        if (mounted) {
+          setState(() {
+            _isSaving = false;
+            _showSavingIndicator = false;
+          });
+        }
+        completion.complete(success);
       }
-      _showSaveError(error);
-      return false;
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
-    }
+    }();
+    return completion.future;
   }
 
   Future<bool> _saveTitleIfNeeded() async {
-    if (_isSaving) return false;
+    if (_metadataSave != null) return _metadataSave!;
     final cb = widget.onMetadataChanged;
     if (cb == null) return true;
     final nextTitle = _draftTitle.trim();
@@ -2056,15 +2089,19 @@ class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
     await _persistMetadata(
       newTitle: _normalizedDraftTitle(),
       showLabelOnPdf: next,
-      optimisticShowLabel: true,
     );
   }
 
   Future<void> _closeDialog() async {
-    if (_isSaving) return;
-    final saved = await _saveTitleIfNeeded();
-    if (!mounted || !saved) return;
-    Navigator.of(context).pop();
+    if (_isClosing) return;
+    _isClosing = true;
+    try {
+      final saved = await _saveTitleIfNeeded();
+      if (!mounted || !saved) return;
+      Navigator.of(context).pop();
+    } finally {
+      _isClosing = false;
+    }
   }
 
   /// Affiche la confirmation puis délègue à `widget.onDelete` qui se
@@ -2141,7 +2178,7 @@ class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
                       Row(
                         children: [
                           const Spacer(),
-                          if (_isSaving)
+                          if (_showSavingIndicator)
                             const Padding(
                               padding: EdgeInsets.only(right: 10),
                               child: SizedBox(
@@ -2167,7 +2204,7 @@ class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
                           _buildActionButton(
                             icon: LucideIcons.x,
                             tooltip: 'Fermer',
-                            onPressed: _isSaving ? null : _closeDialog,
+                            onPressed: _closeDialog,
                           ),
                         ],
                       ),
@@ -2230,33 +2267,33 @@ class _PhotoFullscreenDialogState extends State<PhotoFullscreenDialog> {
                           ),
                           if (widget.onMetadataChanged != null) ...[
                             const SizedBox(width: 14),
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 3),
-                              child: Tooltip(
-                                message: _showLabelOnPdf
-                                    ? 'Visible sur le PDF'
-                                    : 'Masquée sur le PDF',
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      _showLabelOnPdf
-                                          ? LucideIcons.eye
-                                          : LucideIcons.eyeOff,
-                                      size: 18,
-                                      color: _showLabelOnPdf
-                                          ? kBrandPurple
-                                          : const Color(0xFFB9C0C7),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Switch.adaptive(
-                                      value: _showLabelOnPdf,
-                                      onChanged: _isSaving
-                                          ? null
-                                          : _toggleShowLabel,
-                                      activeThumbColor: kBrandPurple,
-                                    ),
-                                  ],
+                            TextFieldTapRegion(
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 3),
+                                child: Tooltip(
+                                  message: _showLabelOnPdf
+                                      ? 'Visible sur le PDF'
+                                      : 'Masquée sur le PDF',
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _showLabelOnPdf
+                                            ? LucideIcons.eye
+                                            : LucideIcons.eyeOff,
+                                        size: 18,
+                                        color: _showLabelOnPdf
+                                            ? kBrandPurple
+                                            : const Color(0xFFB9C0C7),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Switch.adaptive(
+                                        value: _showLabelOnPdf,
+                                        onChanged: _toggleShowLabel,
+                                        activeThumbColor: kBrandPurple,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
