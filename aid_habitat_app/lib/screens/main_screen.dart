@@ -616,12 +616,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       return;
     }
     final reviewedEntities = <String>{};
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (ctx) => ConflictResolutionScreen(
-          localDossier: dossier,
-          onResolved: () => Navigator.of(ctx).pop(),
-          onReviewApplied: reviewedEntities.add,
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          width: 900,
+          height: MediaQuery.sizeOf(ctx).height * 0.85,
+          child: ConflictResolutionScreen(
+            localDossier: dossier,
+            onResolved: () => Navigator.of(ctx).pop(),
+            onReviewApplied: reviewedEntities.add,
+          ),
         ),
       ),
     );
@@ -789,6 +796,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   ///  - online but sync has errors → red "sync en échec" bar with message
   ///  - online, synced → nothing
   Widget _buildConnectivityBanner() {
+    final needsReview = (_lastSyncError ?? '').toLowerCase().contains(
+      'conflit',
+    );
     if (widget.remoteSessionExpired) {
       return Container(
         width: double.infinity,
@@ -833,7 +843,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        color: const Color(0xFFDC2626), // red-600
+        color: needsReview ? const Color(0xFF946200) : const Color(0xFFDC2626),
         child: Row(
           children: [
             const Icon(Icons.error_outline, size: 18, color: Colors.white),
@@ -843,9 +853,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'Synchronisation en échec',
-                    style: TextStyle(
+                  Text(
+                    needsReview
+                        ? 'Des informations sont à vérifier'
+                        : 'Synchronisation en attente',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
@@ -853,7 +865,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 2),
                   SelectableText(
-                    _lastSyncError ?? '',
+                    needsReview
+                        ? 'Choisissez les versions à garder. Vos saisies sont conservées.'
+                        : (_lastSyncError ?? ''),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 14,
@@ -1212,17 +1226,43 @@ class _FailingOpsSheet extends StatefulWidget {
 class _FailingOpsSheetState extends State<_FailingOpsSheet> {
   late List<Map<String, String?>> _failures;
   final Set<String> _busyIds = {};
+  final Map<String, String> _dossierNames = {};
+
+  Future<void> _loadDossierNames() async {
+    for (final operation in List.of(_failures)) {
+      final id = operation['id'];
+      if (id == null || _dossierNames.containsKey(id)) continue;
+      try {
+        final dossierId = await widget.syncEngine.conflictDossierId(id);
+        final dossier = dossierId == null
+            ? null
+            : await DataService().fetchDossierById(dossierId);
+        if (!mounted) return;
+        if (dossier != null) {
+          setState(
+            () => _dossierNames[id] =
+                '${dossier.patient.firstName} ${dossier.patient.lastName}'
+                    .trim(),
+          );
+        }
+      } catch (_) {
+        // A missing local label must not prevent access to the comparison.
+      }
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _failures = List.of(widget.initialFailures);
+    _loadDossierNames();
   }
 
   Future<void> _refreshList() async {
     final fresh = await widget.syncEngine.inspectAllFailures();
     if (!mounted) return;
     setState(() => _failures = fresh);
+    _loadDossierNames();
   }
 
   Future<void> _backup(String opId) async {
@@ -1340,7 +1380,7 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                     child: Text(
                       _failures.isEmpty
                           ? 'Aucun blocage dans la file locale'
-                          : '${_failures.length} opération(s) à vérifier',
+                          : '${_failures.length} modification(s) à vérifier',
                       style: const TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w700,
@@ -1401,9 +1441,11 @@ class _FailingOpsSheetState extends State<_FailingOpsSheet> {
                       return withBackup(
                         ListTile(
                           leading: const Icon(Icons.compare_arrows),
-                          title: const Text('Conflit de synchronisation'),
+                          title: Text(
+                            _dossierNames[id] ?? 'Choisir la version à garder',
+                          ),
                           subtitle: Text(
-                            '${op['entityType']} · ${op['entityLocalId']}\n${op['lastError'] ?? 'Comparaison des versions nécessaire.'}',
+                            'Deux versions existent. Touchez la flèche pour les comparer. Vos saisies sont conservées.',
                           ),
                           trailing: IconButton(
                             tooltip: 'Comparer les versions',

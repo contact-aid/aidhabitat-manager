@@ -50,6 +50,19 @@ void main() {
   });
   tearDown(() async => db.close());
 
+  test('room values are readable and internal identities are hidden', () {
+    final text = formatConflictValue({
+      'rdc': ['Cuisine', 'Chambre', 'Chambre'],
+      '_roomIds': {
+        'rdc': ['internal-id-1', 'internal-id-2', 'internal-id-3'],
+      },
+    });
+    expect(text, 'Rez-de-chaussée : Cuisine • Chambre • Chambre');
+    expect(text, isNot(contains('internal-id')));
+    expect(formatConflictValue(null), 'Non renseigné');
+    expect(formatConflictValue(false), 'Non');
+  });
+
   for (final width in [390.0, 1024.0]) {
     testWidgets(
       'review fits width $width and submits only one explicit choice',
@@ -87,7 +100,7 @@ void main() {
           find.byKey(const ValueKey('review')),
           matchesGoldenFile('goldens/conflict_review_${width.toInt()}.png'),
         );
-        await tester.tap(find.text('Conserver mes changements'));
+        await tester.tap(find.text('Garder ma version'));
         await tester.pump();
         expect(choices, [true]);
         expect(resolved, isFalse);
@@ -96,7 +109,7 @@ void main() {
               .widget<OutlinedButton>(
                 find.widgetWithText(
                   OutlinedButton,
-                  'Prendre ces valeurs du serveur',
+                  'Garder la version serveur',
                 ),
               )
               .onPressed,
@@ -146,6 +159,14 @@ void main() {
     await tester.pumpAndSettle();
     final apply = find.byKey(ValueKey('apply-fields-${mixed.operationId}'));
     expect(tester.widget<ButtonStyleButton>(apply).onPressed, isNull);
+    await tester.tap(
+      find.byKey(ValueKey('choice-${mixed.operationId}-firstName')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Décider plus tard'));
+    await tester.pumpAndSettle();
+    expect(selected, isNull);
+    expect(tester.widget<ButtonStyleButton>(apply).onPressed, isNull);
     for (final entry in {'firstName': true, 'email': false}.entries) {
       await tester.tap(
         find.byKey(ValueKey('choice-${mixed.operationId}-${entry.key}')),
@@ -154,9 +175,7 @@ void main() {
       await tester.tap(
         find
             .text(
-              entry.value
-                  ? 'Conserver la valeur de cet appareil'
-                  : 'Conserver la valeur du serveur',
+              entry.value ? 'Garder ma version' : 'Garder la version serveur',
             )
             .last,
       );
@@ -211,13 +230,13 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Prendre ces valeurs du serveur'));
+      await tester.tap(find.text('Garder la version serveur'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Choix non applique'), findsOneWidget);
+      expect(find.textContaining('Choix non appliqué'), findsOneWidget);
       expect(
         tester
             .widget<OutlinedButton>(
-              find.widgetWithText(OutlinedButton, 'Conserver mes changements'),
+              find.widgetWithText(OutlinedButton, 'Garder ma version'),
             )
             .onPressed,
         isNull,

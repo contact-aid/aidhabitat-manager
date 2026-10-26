@@ -510,7 +510,7 @@ class DossierRepository {
     bool mergeLatestPatient = false,
   }) async {
     if (localFields != null &&
-        (review.entityType != 'patient' ||
+        (!const {'patient', 'housing', 'dossier'}.contains(review.entityType) ||
             !review.remoteExists ||
             !localFields.every(review.localValues.containsKey))) {
       throw StateError('Sélection de champs invalide.');
@@ -561,9 +561,13 @@ class DossierRepository {
     final restoredColumns = {
       for (final entry in review.remoteColumns.entries)
         if (localFields == null ||
-            !_mapPatientFieldsToApi({
-              entry.key: entry.value,
-            }).keys.any(selectedLocal.contains))
+            !(review.entityType == 'housing'
+                    ? _mapHousingFieldsToApi({entry.key: entry.value})
+                    : review.entityType == 'dossier'
+                    ? _mapDossierFieldsToApi({entry.key: entry.value})
+                    : _mapPatientFieldsToApi({entry.key: entry.value}))
+                .keys
+                .any(selectedLocal.contains))
           entry.key: entry.value,
     };
     final db = await _database.database;

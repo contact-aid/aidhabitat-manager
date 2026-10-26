@@ -147,10 +147,10 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final choice = find.text('Prendre ces valeurs du serveur');
+      final choice = find.text('Garder la version serveur');
       await tester.tap(choice);
       await tester.tap(choice);
-      await tester.tap(find.text('Conserver mes changements'));
+      await tester.tap(find.text('Garder ma version'));
       await tester.tap(find.byTooltip('Actualiser'));
       expect(calls, 1);
       expect(loads, 1, reason: 'No reload may race a pending decision');
@@ -160,7 +160,7 @@ void main() {
       expect(
         tester
             .widget<OutlinedButton>(
-              find.widgetWithText(OutlinedButton, 'Conserver mes changements'),
+              find.widgetWithText(OutlinedButton, 'Garder ma version'),
             )
             .onPressed,
         isNull,
@@ -223,7 +223,7 @@ void main() {
         expect(find.text('Cet appareil'), findsWidgets);
         expect(find.text('Serveur'), findsWidgets);
         await tester.scrollUntilVisible(
-          find.text('Prendre ces valeurs du serveur'),
+          find.text('Garder la version serveur'),
           200,
           scrollable: find.byType(Scrollable).first,
         );
