@@ -7,6 +7,7 @@ import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/dossier_repository.dart';
 import '../services/sync_mutation.dart';
+import '../services/collection_mutation_contract.dart';
 
 class ConflictResolutionScreen extends StatefulWidget {
   const ConflictResolutionScreen({
@@ -201,7 +202,34 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
         const {'patient', 'housing', 'dossier'}.contains(review.entityType) &&
         review.remoteExists &&
         review.localValues.length > 1;
-    final choices = _fieldChoices.putIfAbsent(review.operationId, () => {});
+    final automatic = <String, bool>{};
+    final payload = jsonDecode(review.payloadJson) as Map<String, dynamic>;
+    final guard = payload['concurrency'];
+    final conflict = payload['conflict'];
+    if (selective &&
+        guard is Map &&
+        guard['baseValues'] is Map &&
+        !(conflict is Map && conflict['code'] == 'LOCAL_EDIT_BASE_CHANGED')) {
+      final plan = planSyncMerge(
+        baseValues: Map<String, dynamic>.from(guard['baseValues'] as Map),
+        updates: review.localValues,
+        remoteValues: review.remoteValues,
+      );
+      for (final key in review.localValues.keys) {
+        final legacyCollection =
+            hasCollectionUpdates(review.entityType, {
+              key: review.localValues[key],
+            }) &&
+            guard['collectionContract'] != collectionMutationContract;
+        if (!legacyCollection && !plan.conflictingFields.contains(key)) {
+          automatic[key] = plan.updates.containsKey(key);
+        }
+      }
+    }
+    final choices = _fieldChoices.putIfAbsent(
+      review.operationId,
+      () => {...automatic},
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 20),
       child: Column(
@@ -213,7 +241,13 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
             'Choisissez la version à garder pour chaque information. Vous pouvez revenir plus tard : vos saisies restent enregistrées.',
           ),
           const SizedBox(height: 12),
-          for (final key in review.localValues.keys)
+          if (automatic.isNotEmpty)
+            Text(
+              '${automatic.length} information(s) sans conflit seront conservées automatiquement.',
+            ),
+          for (final key in review.localValues.keys.where(
+            (key) => !automatic.containsKey(key),
+          ))
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: Column(
