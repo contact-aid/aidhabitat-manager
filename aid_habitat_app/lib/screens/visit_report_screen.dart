@@ -348,6 +348,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       length: _tabs.length,
       vsync: this,
       initialIndex: initialTabIndex,
+      animationDuration: kIsWeb ? Duration.zero : kTabScrollDuration,
     );
     _lastHandledTabIndex = initialTabIndex;
     _tabController.addListener(_handleTabChange);
@@ -771,6 +772,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     if (!mounted) return;
     final previousIndex = _lastHandledTabIndex;
     final currentIndex = _tabController.index;
+    // Animation completion also notifies listeners for the same tab.
+    if (previousIndex == currentIndex) return;
     if (previousIndex != currentIndex) {
       _lastHandledTabIndex = currentIndex;
       if (previousIndex == _tabs.indexOf('Accessibilité') &&
