@@ -1,9 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../components/plan_canvas.dart';
+import '../../components/web_plan_image_viewport.dart';
 import '../../components/soft_transitions.dart';
 import '../../models/types.dart';
 import '../../models/visit_report_categories.dart';
@@ -272,7 +274,12 @@ class _PlansTabState extends State<PlansTab> {
             label: const Text('Dupliquer cette page'),
           ),
           Expanded(
-            child: InteractiveViewer(child: Center(child: preview)),
+            child: kIsWeb
+                ? WebPlanImageViewport(
+                    key: ValueKey(_currentPageNumber),
+                    child: preview,
+                  )
+                : InteractiveViewer(child: Center(child: preview)),
           ),
         ],
       ),

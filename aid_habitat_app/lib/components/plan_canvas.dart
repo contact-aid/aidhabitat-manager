@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:path/path.dart' as p;
@@ -16,6 +17,7 @@ import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/pencil_interaction_service.dart';
 import 'confirmation_dialog.dart';
+import 'plan_viewport.dart';
 
 // ---------------------------------------------------------------------------
 // Grid constants — 1 cell = 20cm in real world, major line every 5 cells
@@ -418,6 +420,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
   final TransformationController _viewportController =
       TransformationController();
   bool _viewportCentered = false;
+  Size _viewportSize = Size.zero;
+  Size _canvasSize = Size.zero;
   final Set<int> _touchPointers = <int>{};
   bool _pinching = false;
   StreamSubscription<PencilDoubleTapEvent>? _pencilDoubleTapSubscription;
@@ -556,6 +560,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
       }
       setState(() {
         _loaded = false;
+        if (kIsWeb) _viewportCentered = false;
         _strokes.clear();
         _current = null;
         _undoStack.clear();
@@ -1343,6 +1348,12 @@ class _PlanCanvasState extends State<PlanCanvas> {
   Widget _buildPlanToolbar() {
     final buttons = <Widget>[
       _toolBtn(PlanTool.hand, LucideIcons.hand, 'Déplacer le plan'),
+      if (kIsWeb)
+        _iconBtn(
+          icon: LucideIcons.maximize,
+          tooltip: 'Recentrer le plan',
+          onTap: _loaded ? _fitPlanToViewport : null,
+        ),
       _toolBtn(PlanTool.pen, LucideIcons.pencil, 'Crayon'),
       _eraserToolBtn(),
       _highlighterToolBtn(),
@@ -2091,6 +2102,41 @@ class _PlanCanvasState extends State<PlanCanvas> {
     );
   }
 
+  Rect? _planContentBounds() {
+    Rect? content;
+    for (final stroke in _strokes) {
+      if (stroke.points.isEmpty || stroke.tool == PlanTool.eraser) continue;
+      Rect bounds;
+      final symbol = stroke.symbolLocalBounds;
+      if (symbol != null) {
+        final cos = math.cos(stroke.rotation).abs();
+        final sin = math.sin(stroke.rotation).abs();
+        bounds = Rect.fromCenter(
+          center: symbol.center,
+          width: symbol.width * cos + symbol.height * sin,
+          height: symbol.width * sin + symbol.height * cos,
+        );
+      } else {
+        bounds = Rect.fromPoints(stroke.points.first, stroke.points.first);
+        for (final point in stroke.points.skip(1)) {
+          bounds = bounds.expandToInclude(Rect.fromPoints(point, point));
+        }
+      }
+      bounds = bounds.inflate(stroke.size / 2 + 8);
+      content = content == null ? bounds : content.expandToInclude(bounds);
+    }
+    return content;
+  }
+
+  void _fitPlanToViewport() {
+    if (!kIsWeb || !_loaded || _viewportSize.isEmpty) return;
+    _viewportController.value = fitPlanViewport(
+      viewport: _viewportSize,
+      canvas: _canvasSize,
+      contentBounds: _planContentBounds(),
+    );
+  }
+
   Widget _buildCanvas() {
     if (_loaded && !_editableDrawing) {
       return const Center(child: Text('Plan ancien conservé en lecture seule'));
@@ -2142,7 +2188,21 @@ class _PlanCanvasState extends State<PlanCanvas> {
             constraints.maxWidth / width,
             constraints.maxHeight / height,
           );
-          if (!_viewportCentered) {
+          final viewportSize = Size(
+            constraints.maxWidth,
+            constraints.maxHeight,
+          );
+          _canvasSize = Size(width, height);
+          if (kIsWeb && (!_viewportCentered || _viewportSize != viewportSize)) {
+            _viewportCentered = true;
+            _viewportSize = viewportSize;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _viewportSize == viewportSize) {
+                _fitPlanToViewport();
+              }
+            });
+          }
+          if (!kIsWeb && !_viewportCentered) {
             _viewportCentered = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
@@ -2161,9 +2221,20 @@ class _PlanCanvasState extends State<PlanCanvas> {
             scaleEnabled:
                 _activeCanvasPointerKind == null ||
                 !_isStylusPointer(_activeCanvasPointerKind!),
-            minScale: minScale,
+            minScale: kIsWeb
+                ? math.min(
+                    0.01,
+                    fitPlanViewport(
+                      viewport: viewportSize,
+                      canvas: _canvasSize,
+                      contentBounds: _planContentBounds(),
+                    ).getMaxScaleOnAxis(),
+                  )
+                : minScale,
             maxScale: 4,
-            boundaryMargin: EdgeInsets.zero,
+            boundaryMargin: kIsWeb
+                ? const EdgeInsets.all(double.infinity)
+                : EdgeInsets.zero,
             child: SizedBox(
               width: width,
               height: height,
