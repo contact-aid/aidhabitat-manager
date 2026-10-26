@@ -795,7 +795,7 @@ const DossierDetail: React.FC<{ dossier: Dossier; onUpdateDossier?: (dossier: Do
       });
   }, [currentNotePage.id, currentNotePage.updatedAt, currentNotePage.textContent, currentNotePage.drawingJson, emptyDrawingJson]);
 
-  const handleSaveNote = useCallback(async ({ text, drawingJson, previewDataUrl }: { text: string; drawingJson: string; previewDataUrl: string }) => {
+  const handleSaveNote = useCallback(async ({ text, drawingJson, previewDataUrl }: { text: string; drawingJson: string; previewDataUrl?: string }) => {
     try {
       const resolvedPreviewDataUrl = previewDataUrl || buildNotePreviewDataUrlFromContent({
         text,

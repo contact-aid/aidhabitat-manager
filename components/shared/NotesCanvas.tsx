@@ -447,7 +447,7 @@ export const NotesCanvas: React.FC<NotesCanvasProps> = ({
     isDirtyRef.current = false;
     setSaveLabel('saved');
     emitDraft({ isDirty: false });
-    void onSave({
+    void Promise.resolve().then(() => onSave({
       text,
       drawingJson,
       previewDataUrl: buildNotePreviewDataUrlFromContent({
@@ -455,7 +455,7 @@ export const NotesCanvas: React.FC<NotesCanvasProps> = ({
         drawingJson,
         mode: mode as 'freeform' | 'grid',
       }),
-    }).catch((error) => {
+    })).catch((error) => {
       console.error('Failed to save note page', error);
       setSaveLabel('error');
     });

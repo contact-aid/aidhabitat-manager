@@ -58,7 +58,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ visits, dossiersCount, dos
   const stats = {
     total: safeDossiers.length,
     validated: 12, // Hardcoded for now per design
-    processing: safeDossiers.filter(d => d.status === 'En cours' || d.status === 'Nouveau').length
+    processing: safeDossiers.filter(d => d.status === 'En cours' || String(d.status) === 'Nouveau').length
   };
 
   const today = new Date();

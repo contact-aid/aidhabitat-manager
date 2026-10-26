@@ -2317,7 +2317,7 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
 
     const currentNoteScope = buildNoteScopeConfig(activeTab);
     const noteScopeType = currentNoteScope.scopeType;
-    const noteLayoutKind = currentNoteScope.layoutKind;
+    const noteLayoutKind = currentNoteScope.layoutKind === 'grid' ? 'grid' : 'freeform';
     const noteTabKey = currentNoteScope.drawingTabKey;
     const noteSubTabKey = currentNoteScope.drawingSubTabKey;
     const noteTextTabKey = currentNoteScope.textTabKey;
@@ -5416,7 +5416,7 @@ const Checkbox: React.FC<{ label: string, checked: boolean, onChange: (v: boolea
     </button>
 );
 
-const ToggleGroup: React.FC<{ label: string, options: string[], selected: string | undefined, onSelect: (v: string) => void, small?: boolean }> = ({ label, options, selected, onSelect, small }) => {
+const ToggleGroup: React.FC<{ label?: string, options: string[], selected: string | undefined, onSelect: (v: string) => void, small?: boolean }> = ({ label, options, selected, onSelect, small }) => {
     const gridClass = options.length <= 2
         ? 'grid-cols-2'
         : options.length === 3
@@ -5448,7 +5448,7 @@ const ToggleGroup: React.FC<{ label: string, options: string[], selected: string
     );
 };
 
-const MOTORISATION_ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
+const MOTORISATION_ICONS: Record<string, React.ComponentType<{ size?: string | number }>> = {
     'Manuel': Hand,
     'Électrique': Zap,
     'Pas de porte': Ban,
