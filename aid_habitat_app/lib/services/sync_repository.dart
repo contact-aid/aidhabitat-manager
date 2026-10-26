@@ -9,6 +9,7 @@ import 'local_database.dart';
 import 'offline_vault.dart';
 import 'sync_operation_ownership.dart';
 import 'sync_mutation.dart';
+import 'housing_visit_handoff.dart';
 import 'note_legacy_identity.dart';
 
 const Set<String> _kReportPrerequisiteEntityTypes = {
@@ -475,6 +476,20 @@ class SyncRepository {
                     version: acknowledgedVersion,
                   );
             if (rebased != null) {
+              if (entityType == 'housing') {
+                final sent = retry is Map ? retry : expected;
+                await HousingVisitHandoff.settle(
+                  txn,
+                  entityLocalId,
+                  sent['housingVisit'],
+                );
+                if (rebased['housingVisit'] is Map) {
+                  rebased['housingVisit'] = {
+                    ...rebased['housingVisit'] as Map,
+                    'phase': 'normal',
+                  };
+                }
+              }
               await txn.update(
                 'sync_operations',
                 {
@@ -530,6 +545,16 @@ class SyncRepository {
         ],
       );
       if (updated == 0) return false;
+      if (entityType == 'housing' &&
+          expectedPayloadJson != null &&
+          acknowledgedVersion != null) {
+        final sent = jsonDecode(expectedPayloadJson) as Map;
+        await HousingVisitHandoff.settle(
+          txn,
+          entityLocalId,
+          sent['housingVisit'],
+        );
+      }
 
       // Completing one mutation does not acknowledge the entity's whole queue.
       // Keep this read and the entity update in the same transaction.

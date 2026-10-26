@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:aid_habitat_app/services/app_config.dart';
+import 'package:aid_habitat_app/services/housing_visit_handoff.dart';
 import 'package:aid_habitat_app/services/connectivity_service.dart';
 import 'package:aid_habitat_app/services/dossier_repository.dart';
 import 'package:aid_habitat_app/services/document_repository.dart';
@@ -60,6 +61,103 @@ void main() {
     AppConfig.setApiBaseUrl('');
     AppConfig.clearAppSessionToken();
   });
+
+  for (final errorCode in [
+    'SYNC_FIELD_CONFLICT',
+    'SYNC_HOUSING_WRITE_SUPERSEDED',
+  ]) {
+    test(
+      'new housing visit handles $errorCode without reviving a stale write',
+      () async {
+        final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+        addTearDown(db.close);
+        final local = LocalDatabase.forTesting(db);
+        await local.createSchemaForTesting();
+        final repository = DossierRepository(database: local);
+        final queue = SyncRepository.forTesting(database: local);
+        Map<String, dynamic> snapshot(double surface, String time) => {
+          ...dossier(time, 'Synthetic'),
+          'housing': {'id': 'housing-1', 'updatedAt': time, 'surface': surface},
+        };
+        await repository.mergeRemoteDossierPayloads([snapshot(80, baseline)]);
+        await repository.beginHousingVisit(
+          'dossier-1',
+          DateTime.now().toIso8601String().substring(0, 10),
+        );
+        await repository.updateHousing('dossier-1', {'surface': 90});
+        var patches = 0;
+        final service = NocodbSyncService(
+          database: local,
+          syncRepository: queue,
+          apiClient: NocodbApiClient(
+            client: MockClient((request) async {
+              if (request.method == 'GET') {
+                expect(request.url.path, '/api/dossiers');
+                return http.Response(
+                  jsonEncode([snapshot(100, '2026-09-02T10:00:00.000Z')]),
+                  200,
+                );
+              }
+              expect(
+                request.url.path,
+                '/api/logements/by-beneficiary/patient-1',
+              );
+              final body = jsonDecode(request.body) as Map;
+              expect(
+                body['concurrency']['housingPolicy'],
+                HousingVisitHandoff.protocol,
+              );
+              patches++;
+              if (patches == 1)
+                return http.Response(
+                  jsonEncode({
+                    'error': errorCode,
+                    'remoteUpdatedAt': '2026-09-02T10:00:00.000Z',
+                    'remoteData': {'surface': 100},
+                  }),
+                  409,
+                );
+              expect(body['concurrency']['baseValues']['surface'], 100);
+              expect(body['surface'], 90);
+              return http.Response(
+                jsonEncode({
+                  'success': true,
+                  'data': {
+                    'id': 'housing-1',
+                    'updatedAt': '2026-09-03T10:00:00.000Z',
+                  },
+                }),
+                200,
+              );
+            }),
+          ),
+        );
+        final first = await service.pushPendingChanges();
+        if (errorCode == 'SYNC_FIELD_CONFLICT') {
+          expect(first.conflictCount, 0);
+          expect(
+            (await db.query('sync_operations')).single['status'],
+            'pending',
+          );
+          expect((await service.pushPendingChanges()).pushedOperations, 1);
+          expect(
+            (await HousingVisitHandoff.read(db, 'dossier-1'))!['phase'],
+            'normal',
+          );
+          expect(await db.query('sync_conflict_history'), hasLength(2));
+        } else {
+          expect(first.conflictCount, 1);
+          expect(
+            (await db.query('sync_operations')).single['status'],
+            'conflict',
+          );
+          expect((await service.pushPendingChanges()).pushedOperations, 0);
+          expect(patches, 1);
+        }
+        expect((await db.query('housings')).single['surface'], 90);
+      },
+    );
+  }
 
   test(
     'shared photo order is sent using remote identities and releases the queued report',

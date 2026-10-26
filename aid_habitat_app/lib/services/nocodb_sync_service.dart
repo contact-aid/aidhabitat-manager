@@ -21,6 +21,7 @@ import 'nocodb_api_client.dart';
 import 'report_generation_service.dart';
 import 'sync_repository.dart';
 import 'sync_mutation.dart';
+import 'housing_visit_handoff.dart';
 import 'collection_mutation_contract.dart';
 
 /// Vrai si l'erreur attrapée par le catch générique du sync engine est
@@ -763,6 +764,17 @@ class NocodbSyncService {
       );
       if (matching.length != 1) return false;
       final review = matching.single;
+      final reviewedPayload = jsonDecode(review.payloadJson) as Map;
+      final conflict = reviewedPayload['conflict'];
+      final remoteError = conflict is Map ? conflict['remote'] : null;
+      if (operation.entityType == 'housing' &&
+          remoteError is Map &&
+          const {
+            'SYNC_HOUSING_WRITE_SUPERSEDED',
+            'SYNC_WRITE_ID_MISMATCH',
+          }.contains(remoteError['error'])) {
+        return false;
+      }
       SyncSessionScope.current?.check();
       if (operation.entityType == 'patient') {
         // Uses the original form baseline too, and rejects competing edits.
@@ -786,6 +798,13 @@ class NocodbSyncService {
         updates: review.localValues,
         remoteValues: review.remoteValues,
       );
+      if (operation.entityType == 'housing' &&
+          await HousingVisitHandoff.mayPreferVisit(db, dossierId, queued)) {
+        // A definitive rejection proves that the first request did not write.
+        // Archive both snapshots and consume the one-time priority atomically.
+        await repository.resolveReviewedConflict(review, keepLocal: true);
+        return true;
+      }
       if (!plan.canApplyAutomatically) return false;
       final selective = const {
         'patient',
@@ -1420,11 +1439,30 @@ class NocodbSyncService {
       'updates=${updates.keys.toList()} '
       'expectedUpdatedAt=${expected ?? "null"}',
     );
-    final result = await _apiClient.updateLogement(
-      beneficiaryId: remoteId,
-      updates: updatesWithGuard,
-    );
-    return result;
+    final writeId = (payload['concurrency'] as Map?)?['writeId']?.toString();
+    final firstAttempt =
+        writeId != null &&
+        await HousingVisitHandoff.claim(
+          db,
+          dossierLocalId,
+          payload['housingVisit'],
+          writeId,
+        );
+    try {
+      return await _apiClient.updateLogement(
+        beneficiaryId: remoteId,
+        updates: updatesWithGuard,
+      );
+    } on ConflictException catch (error) {
+      if (firstAttempt &&
+          const {
+            'SYNC_FIELD_CONFLICT',
+            'SYNC_REMOTE_VALUES_REQUIRE_REVIEW',
+          }.contains(error.remoteData?['error'])) {
+        await HousingVisitHandoff.rejected(db, dossierLocalId, writeId);
+      }
+      rethrow;
+    }
   }
 
   Future<String?> _resolveRemotePatientId(String localId) async {

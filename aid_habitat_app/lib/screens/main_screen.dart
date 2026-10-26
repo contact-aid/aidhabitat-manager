@@ -2,7 +2,8 @@ import '../services/note_backup_service.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import '../components/feedback_tab.dart';
 import '../components/dossier_loading_status.dart';
 import '../models/dossier_refresh_phase.dart';
@@ -22,6 +23,7 @@ import '../models/types.dart';
 import '../services/auth_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
+import '../services/dossier_repository.dart';
 import '../services/feedback_activity_service.dart';
 import '../services/references_service.dart';
 import '../services/sync_engine.dart';
@@ -1119,7 +1121,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           // ouvre directement la VAD (visit_report) du bénéficiaire
           // sans étape intermédiaire par l'écran dossier détail.
           // Demande utilisateur 2026-05-12.
-          onStartReport: (dossier) {
+          onStartReport: (dossier) async {
+            if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+              await DossierRepository().beginHousingVisit(
+                dossier.id,
+                dossier.visitDate,
+              );
+            }
+            if (!mounted) return;
             _pushHistory();
             setState(() {
               _selectedDossier = dossier;

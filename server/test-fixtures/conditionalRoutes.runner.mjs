@@ -563,6 +563,27 @@ try {
   }
 
   if (entity === 'logement') {
+    await check('new visit upload then web correction cannot be undone by an old retry', async () => {
+      const initial = await read(clientA);
+      const ipad = mutation({ comments: 'Visite iPad' }, { comments: initial.comments });
+      ipad.concurrency.housingPolicy = 'housing-visit-v1';
+      expectStatus(await patch(clientA, ipad), 200);
+      const web = mutation({ comments: 'Correction web' }, { comments: 'Visite iPad' });
+      web.concurrency.housingPolicy = 'housing-visit-v1';
+      expectStatus(await patch(clientB, web), 200);
+      expectStatus(await patch(clientA, ipad), 409);
+      assert.equal((await read(clientA)).comments, 'Correction web');
+      // ABA: the web deliberately returns the field to its original value.
+      const back = mutation({ comments: initial.comments }, { comments: 'Correction web' });
+      back.concurrency.housingPolicy = 'housing-visit-v1';
+      expectStatus(await patch(clientB, back), 200);
+      const count = mock.patches().length;
+      const replay = await patch(clientA, ipad);
+      expectStatus(replay, 409);
+      assert.equal(replay.body.error, 'SYNC_HOUSING_WRITE_SUPERSEDED');
+      assert.equal(mock.patches().length, count);
+      assert.equal((await read(clientA)).comments, initial.comments);
+    });
     await check('a present portal without motorisation resolves the Aucun reference', async () => {
       const baseline = await read(clientA);
       assert.equal(baseline.motorisationPortail, '');
