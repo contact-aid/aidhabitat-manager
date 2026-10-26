@@ -34,13 +34,13 @@ void main() {
         },
         remote: {
           'email': 'server@example.test',
-          'phone': 'server phone',
+          'phone': 'old',
           'occupants': [
             {
               'firstName': 'Alice',
               'lastName': 'Test',
               'homeHelp': true,
-              'caisseRetraitePrincipale': 'Serveur',
+              'caisseRetraitePrincipale': 'Avant',
               'futureProperty': 'retained',
             },
           ],
@@ -66,6 +66,56 @@ void main() {
           remote: {
             'occupants': [
               {'firstName': 'Bob'},
+            ],
+          },
+        ),
+        throwsStateError,
+      );
+    },
+  );
+
+  test(
+    'blank baseline fills automatically but deliberate clearing needs review',
+    () {
+      for (final before in [null, '', 'old']) {
+        final plan = planSyncMerge(
+          baseValues: {'phone': before},
+          updates: {'phone': '123'},
+          remoteValues: {'phone': null},
+        );
+        expect(plan.canApplyAutomatically, before != 'old');
+      }
+      expect(
+        planSyncMerge(
+          baseValues: {},
+          updates: {'phone': '123'},
+          remoteValues: {'phone': null},
+        ).canApplyAutomatically,
+        isFalse,
+      );
+      expect(
+        () => mergeLatestPatientValues(
+          baseline: {'phone': 'old'},
+          local: {'phone': 'local'},
+          remote: {'phone': 'server'},
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => mergeLatestPatientValues(
+          baseline: {
+            'occupants': [
+              {'firstName': 'A', 'homeHelp': false},
+            ],
+          },
+          local: {
+            'occupants': [
+              {'firstName': 'A', 'homeHelp': true},
+            ],
+          },
+          remote: {
+            'occupants': [
+              {'firstName': 'A', 'homeHelp': null},
             ],
           },
         ),

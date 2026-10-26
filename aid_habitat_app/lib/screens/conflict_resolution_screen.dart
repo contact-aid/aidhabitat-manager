@@ -7,6 +7,7 @@ import '../models/types.dart';
 import '../services/data_service.dart';
 import '../services/dossier_repository.dart';
 import '../services/sync_mutation.dart';
+import '../services/collection_mutation_contract.dart';
 
 class ConflictResolutionScreen extends StatefulWidget {
   const ConflictResolutionScreen({
@@ -64,9 +65,8 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = error is StateError
-            ? 'Comparaison indisponible : ${error.message} Vos modifications restent sur cet appareil.'
-            : 'Comparaison indisponible. Vos modifications restent sur cet appareil.';
+        _error =
+            'Comparaison momentanément indisponible. Vos modifications restent sur cet appareil. Vérifiez Internet puis actualisez.';
       });
     }
   }
@@ -105,7 +105,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
       setState(() {
         _resolving = false;
         _error =
-            'Choix non applique. Rechargez la comparaison avant de reessayer.';
+            'Choix non appliqué. Actualisez la comparaison pour réessayer. Vos saisies sont conservées.';
       });
     }
   }
@@ -140,7 +140,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
     canPop: !_resolving,
     child: Scaffold(
       appBar: AppBar(
-        title: const Text('Conflits de synchronisation'),
+        title: const Text('Informations à vérifier'),
         automaticallyImplyLeading: false,
         leading: IconButton(
           tooltip: 'Retour',
@@ -177,7 +177,9 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                 if (_reviews.isEmpty && _error == null)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Text('Aucun conflit resoluble sur cette fiche.'),
+                    child: Text(
+                      'Aucune information à vérifier sur cette fiche.',
+                    ),
                   ),
                 for (final review in _reviews) _buildReview(review),
               ],
@@ -197,10 +199,37 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
       _ => 'Dossier',
     };
     final selective =
-        review.entityType == 'patient' &&
+        const {'patient', 'housing', 'dossier'}.contains(review.entityType) &&
         review.remoteExists &&
         review.localValues.length > 1;
-    final choices = _fieldChoices.putIfAbsent(review.operationId, () => {});
+    final automatic = <String, bool>{};
+    final payload = jsonDecode(review.payloadJson) as Map<String, dynamic>;
+    final guard = payload['concurrency'];
+    final conflict = payload['conflict'];
+    if (selective &&
+        guard is Map &&
+        guard['baseValues'] is Map &&
+        !(conflict is Map && conflict['code'] == 'LOCAL_EDIT_BASE_CHANGED')) {
+      final plan = planSyncMerge(
+        baseValues: Map<String, dynamic>.from(guard['baseValues'] as Map),
+        updates: review.localValues,
+        remoteValues: review.remoteValues,
+      );
+      for (final key in review.localValues.keys) {
+        final legacyCollection =
+            hasCollectionUpdates(review.entityType, {
+              key: review.localValues[key],
+            }) &&
+            guard['collectionContract'] != collectionMutationContract;
+        if (!legacyCollection && !plan.conflictingFields.contains(key)) {
+          automatic[key] = plan.updates.containsKey(key);
+        }
+      }
+    }
+    final choices = _fieldChoices.putIfAbsent(
+      review.operationId,
+      () => {...automatic},
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 20),
       child: Column(
@@ -208,50 +237,88 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
         children: [
           Text(title, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          Text(
-            review.entityType == 'visit_recommendations'
-                ? 'Comparez les listes avant de choisir. Les brouillons locaux sont conservés.'
-                : review.remoteExists
-                ? describeSyncConflict(
-                    jsonDecode(review.payloadJson) as Map<String, dynamic>,
-                  )
-                : 'Aucune fiche n’existe encore sur le serveur. '
-                      'Vos saisies sont conservées sur cet appareil.',
+          const Text(
+            'Choisissez la version à garder pour chaque information. Vous pouvez revenir plus tard : vos saisies restent enregistrées.',
           ),
           const SizedBox(height: 12),
-          for (final key in review.localValues.keys)
+          if (automatic.isNotEmpty)
+            Text(
+              '${automatic.length} information(s) sans conflit seront conservées automatiquement.',
+            ),
+          for (final key in review.localValues.keys.where(
+            (key) => !automatic.containsKey(key),
+          ))
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    _fieldLabels[key] ?? key,
+                    conflictFieldLabel(key),
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   if (selective)
-                    DropdownButton<bool>(
+                    OutlinedButton(
                       key: ValueKey('choice-${review.operationId}-$key'),
-                      value: choices[key],
-                      hint: const Text('Choisir la valeur à conserver'),
-                      isExpanded: true,
-                      items: const [
-                        DropdownMenuItem(
-                          value: true,
-                          child: Text('Conserver la valeur de cet appareil'),
-                        ),
-                        DropdownMenuItem(
-                          value: false,
-                          child: Text('Conserver la valeur du serveur'),
-                        ),
-                      ],
-                      onChanged: _resolving || _error != null
+                      onPressed: _resolving || _error != null
                           ? null
-                          : (value) {
-                              if (value != null) {
-                                setState(() => choices[key] = value);
+                          : () async {
+                              final choice = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: Text(
+                                    _fieldLabels[key] ??
+                                        'Information du dossier',
+                                  ),
+                                  content: SingleChildScrollView(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        _value(
+                                          'Sur cet appareil',
+                                          review.localValues[key],
+                                        ),
+                                        const SizedBox(height: 16),
+                                        _value(
+                                          'Sur le serveur',
+                                          review.remoteValues[key],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text('Décider plus tard'),
+                                    ),
+                                    OutlinedButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
+                                      child: const Text(
+                                        'Garder la version serveur',
+                                      ),
+                                    ),
+                                    FilledButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      child: const Text('Garder ma version'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (mounted && choice != null) {
+                                setState(() => choices[key] = choice);
                               }
                             },
+                      child: Text(
+                        choices[key] == null
+                            ? 'Choisir la version à garder'
+                            : choices[key]!
+                            ? 'Votre version choisie'
+                            : 'Version serveur choisie',
+                      ),
                     ),
                   const SizedBox(height: 6),
                   LayoutBuilder(
@@ -364,7 +431,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                           },
                         ),
                   icon: const Icon(LucideIcons.check),
-                  label: const Text('Appliquer mes choix par champ'),
+                  label: const Text('Valider mes choix'),
                 ),
               if (review.entityType == 'patient' &&
                   canRetryOriginalOccupantConflict(
@@ -377,24 +444,25 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
                   icon: const Icon(LucideIcons.refreshCw),
                   label: const Text('Réessayer sans remplacer'),
                 ),
-              OutlinedButton.icon(
-                onPressed: _resolving || _error != null
-                    ? null
-                    : () => _resolve(review, true),
-                icon: const Icon(LucideIcons.uploadCloud),
-                label: Text(
-                  review.remoteExists
-                      ? 'Conserver mes changements'
-                      : 'Conserver mes changements et créer la fiche',
+              if (!selective)
+                OutlinedButton.icon(
+                  onPressed: _resolving || _error != null
+                      ? null
+                      : () => _resolve(review, true),
+                  icon: const Icon(LucideIcons.uploadCloud),
+                  label: Text(
+                    review.remoteExists
+                        ? 'Garder ma version'
+                        : 'Conserver mes changements et créer la fiche',
+                  ),
                 ),
-              ),
-              if (review.remoteExists)
+              if (review.remoteExists && !selective)
                 OutlinedButton.icon(
                   onPressed: _resolving || _error != null
                       ? null
                       : () => _resolve(review, false),
                   icon: const Icon(LucideIcons.downloadCloud),
-                  label: const Text('Prendre ces valeurs du serveur'),
+                  label: const Text('Garder la version serveur'),
                 ),
             ],
           ),
@@ -431,13 +499,7 @@ class _ConflictResolutionScreenState extends State<ConflictResolutionScreen> {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(title, style: const TextStyle(fontSize: 14, color: Colors.grey)),
-      SelectableText(
-        value == null || value == ''
-            ? 'Non renseigne'
-            : value is Map || value is List
-            ? const JsonEncoder.withIndent('  ').convert(value)
-            : value.toString(),
-      ),
+      SelectableText(formatConflictValue(value)),
     ],
   );
 }
@@ -446,9 +508,9 @@ const _fieldLabels = {
   'caisseRetraitePrincipale': 'Caisse de retraite principale',
   'caissesRetraiteComplementaires': 'Caisses de retraite complémentaires',
   'items': 'Liste des préconisations',
-  'firstName': 'Prenom',
+  'firstName': 'Prénom',
   'lastName': 'Nom',
-  'phone': 'Telephone',
+  'phone': 'Téléphone',
   'email': 'E-mail',
   'address': 'Adresse',
   'city': 'Commune',
@@ -464,8 +526,24 @@ const _fieldLabels = {
   'fiscalRevenue': 'Revenu fiscal',
   'numberPeople': 'Nombre de personnes',
   'surface': 'Surface',
+  'homeHelp': 'Aide à domicile',
+  'birthDate': 'Date de naissance',
+  'apa': 'Bénéficiaire APA',
+  'apaGir': 'GIR',
+  'dependenceTxt': 'Aides techniques',
+  'note': 'Note',
+  'title': 'Titre',
+  'name': 'Nom',
+  'gender': 'Genre',
+  'rdcDesc': 'Pièces au rez-de-chaussée',
+  'levels': 'Nombre de niveaux',
+  'basement': 'Sous-sol',
+  'rdc': 'Rez-de-chaussée',
+  'floor': 'Premier étage',
+  'secondFloor': 'Deuxième étage',
+  'thirdFloor': 'Troisième étage',
   'typology': 'Type de logement',
-  'roomsBreakdown': 'Pieces par niveau',
+  'roomsBreakdown': 'Pièces par niveau',
   'heatingDetails': 'Chauffage',
   'status': 'Statut',
   'visitDate': 'Date de visite',
@@ -486,3 +564,31 @@ const _fieldLabels = {
   'sdbInstances': 'Salles de bain',
   'wcInstances': 'WC',
 };
+
+String formatConflictValue(dynamic value) {
+  if (value == null || value == '') return 'Non renseigné';
+  if (value is bool) return value ? 'Oui' : 'Non';
+  if (value is List) {
+    if (value.isEmpty) return 'Aucun élément';
+    return value.map(formatConflictValue).join(' • ');
+  }
+  if (value is Map) {
+    final entries = value.entries.where(
+      (e) => !e.key.toString().startsWith('_'),
+    );
+    if (entries.isEmpty) return 'Non renseigné';
+    return entries
+        .map(
+          (e) =>
+              '${conflictFieldLabel(e.key.toString())} : ${formatConflictValue(e.value)}',
+        )
+        .join('\n');
+  }
+  return value.toString();
+}
+
+String conflictFieldLabel(String key) =>
+    _fieldLabels[key] ??
+    key
+        .replaceAllMapped(RegExp(r'([a-z])([A-Z])'), (m) => '${m[1]} ${m[2]}')
+        .replaceAll('_', ' ');

@@ -197,7 +197,7 @@ void main() {
 
   for (final localWins in [true, false]) {
     test(
-      'local patient edit wins regardless of server clock (older=$localWins)',
+      'competing patient edit stays reviewable regardless of server clock (older=$localWins)',
       () async {
         final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
         addTearDown(db.close);
@@ -248,20 +248,22 @@ void main() {
         );
 
         final first = await service.pushPendingChanges();
-        expect(first.conflictCount, 0);
-        final operation = (await db.query('sync_operations')).single;
-        expect(operation['status'], 'pending');
+        expect(first.conflictCount, 1);
+        expect(
+          (await db.query('sync_operations')).single['status'],
+          'conflict',
+        );
         expect((await db.query('patients')).single['first_name'], 'Local');
-        final second = await service.pushPendingChanges();
-        expect(second.pushedOperations, 1);
-        expect(patches, 2);
+        expect((await service.pushPendingChanges()).pushedOperations, 0);
+        expect(patches, 1);
+        expect(await db.query('sync_conflict_history'), isEmpty);
       },
     );
   }
 
   for (final savedConflict in [false, true]) {
     test(
-      'zero-attempt patient conflict resumes automatically (stored=$savedConflict)',
+      'stale form competing edit requires review (stored=$savedConflict)',
       () async {
         final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
         addTearDown(db.close);
@@ -323,32 +325,14 @@ void main() {
           ),
         );
         final result = await service.pushPendingChanges();
-        expect(result.conflictCount, 0);
-        expect(result.pushedOperations, 1);
-        expect(writes, 1);
-        expect((await db.query('patients')).single['first_name'], 'Fresh edit');
+        expect(result.conflictCount, 1);
+        expect(result.pushedOperations, 0);
+        expect(writes, 0);
         expect(
           (await db.query('sync_operations')).single['status'],
-          'completed',
+          'conflict',
         );
-        expect(
-          await queue.countConflictingReportPrerequisites(
-            dossierId: 'dossier-1',
-            patientId: 'patient-1',
-          ),
-          0,
-        );
-        expect(
-          await queue.countPendingReportPrerequisites(
-            dossierId: 'dossier-1',
-            patientId: 'patient-1',
-          ),
-          0,
-        );
-        expect(
-          (await db.query('sync_conflict_history')).single['decision'],
-          'auto_merge_latest',
-        );
+        expect(await db.query('sync_conflict_history'), isEmpty);
       },
     );
   }
@@ -483,52 +467,56 @@ void main() {
     },
   );
 
-  test('modern local collection wins a verified field conflict', () async {
-    final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
-    addTearDown(db.close);
-    final local = LocalDatabase.forTesting(db);
-    await local.createSchemaForTesting();
-    final repository = DossierRepository(database: local);
-    final initial = dossier(baseline, 'Original');
-    (initial['patient'] as Map)['dependenceTxt'] = 'Avant';
-    await repository.mergeRemoteDossierPayloads([initial]);
-    await repository.updatePatient('patient-1', {'dependence_txt': 'Canne'});
-    var patches = 0;
-    final service = NocodbSyncService(
-      database: local,
-      syncRepository: SyncRepository.forTesting(database: local),
-      apiClient: NocodbApiClient(
-        client: MockClient((request) async {
-          if (request.method == 'GET') {
-            final remote = dossier('2099-01-01T00:00:00Z', 'Original');
-            (remote['patient'] as Map)['dependenceTxt'] = 'Serveur';
-            return http.Response(jsonEncode([remote]), 200);
-          }
-          patches++;
-          final body = jsonDecode(request.body) as Map;
-          expect(body['dependenceTxt'], 'Canne');
-          expect(body['concurrency']['collectionContract'], 'collections-v2');
-          if (patches == 1) {
+  test(
+    'competing modern collection stays available for explicit review',
+    () async {
+      final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+      addTearDown(db.close);
+      final local = LocalDatabase.forTesting(db);
+      await local.createSchemaForTesting();
+      final repository = DossierRepository(database: local);
+      final initial = dossier(baseline, 'Original');
+      (initial['patient'] as Map)['dependenceTxt'] = 'Avant';
+      await repository.mergeRemoteDossierPayloads([initial]);
+      await repository.updatePatient('patient-1', {'dependence_txt': 'Canne'});
+      var patches = 0;
+      final service = NocodbSyncService(
+        database: local,
+        syncRepository: SyncRepository.forTesting(database: local),
+        apiClient: NocodbApiClient(
+          client: MockClient((request) async {
+            if (request.method == 'GET') {
+              final remote = dossier('2099-01-01T00:00:00Z', 'Original');
+              (remote['patient'] as Map)['dependenceTxt'] = 'Serveur';
+              return http.Response(jsonEncode([remote]), 200);
+            }
+            patches++;
+            final body = jsonDecode(request.body) as Map;
+            expect(body['dependenceTxt'], 'Canne');
+            expect(body['concurrency']['collectionContract'], 'collections-v2');
+            if (patches == 1) {
+              return http.Response(
+                jsonEncode({'error': 'SYNC_FIELD_CONFLICT'}),
+                409,
+              );
+            }
+            expect(body['expectedUpdatedAt'], '2099-01-01T00:00:00Z');
             return http.Response(
-              jsonEncode({'error': 'SYNC_FIELD_CONFLICT'}),
-              409,
+              jsonEncode({
+                'data': {'updatedAt': '2100-01-01T00:00:00Z'},
+              }),
+              200,
             );
-          }
-          expect(body['expectedUpdatedAt'], '2099-01-01T00:00:00Z');
-          return http.Response(
-            jsonEncode({
-              'data': {'updatedAt': '2100-01-01T00:00:00Z'},
-            }),
-            200,
-          );
-        }),
-      ),
-    );
-    expect((await service.pushPendingChanges()).conflictCount, 0);
-    expect((await db.query('patients')).single['dependence_txt'], 'Canne');
-    expect((await service.pushPendingChanges()).pushedOperations, 1);
-    expect(patches, 2);
-  });
+          }),
+        ),
+      );
+      expect((await service.pushPendingChanges()).conflictCount, 1);
+      expect((await db.query('patients')).single['dependence_txt'], 'Canne');
+      expect((await service.pushPendingChanges()).pushedOperations, 0);
+      expect(patches, 1);
+      expect((await db.query('sync_operations')).single['status'], 'conflict');
+    },
+  );
 
   test(
     'local recommendations win with newer server time and keep drafts',

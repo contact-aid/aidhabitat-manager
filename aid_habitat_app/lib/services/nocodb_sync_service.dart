@@ -764,10 +764,52 @@ class NocodbSyncService {
       if (matching.length != 1) return false;
       final review = matching.single;
       SyncSessionScope.current?.check();
+      if (operation.entityType == 'patient') {
+        // Uses the original form baseline too, and rejects competing edits.
+        await repository.resolveReviewedConflict(
+          review,
+          keepLocal: true,
+          mergeLatestPatient: true,
+        );
+        return true;
+      }
+      // Rebase only when the captured baseline proves there is no competing
+      // edit. A newer upload time is not evidence that its content is newer.
+      final guard = queued['concurrency'];
+      if (!review.remoteExists ||
+          guard is! Map ||
+          guard['baseValues'] is! Map) {
+        return false;
+      }
+      final plan = planSyncMerge(
+        baseValues: Map<String, dynamic>.from(guard['baseValues'] as Map),
+        updates: review.localValues,
+        remoteValues: review.remoteValues,
+      );
+      if (!plan.canApplyAutomatically) return false;
+      final selective = const {
+        'patient',
+        'housing',
+        'dossier',
+      }.contains(review.entityType);
+      // Secondary structured sections have their own atomic protocol. Do not
+      // rewrite a server-only edit while replaying a full section payload.
+      if (!selective &&
+          review.localValues.keys.any(
+            (key) =>
+                !plan.updates.containsKey(key) &&
+                !equivalentSyncField(
+                  key,
+                  review.localValues[key],
+                  review.remoteValues[key],
+                ),
+          )) {
+        return false;
+      }
       await repository.resolveReviewedConflict(
         review,
         keepLocal: true,
-        mergeLatestPatient: operation.entityType == 'patient',
+        localFields: selective ? plan.updates.keys.toSet() : null,
       );
       return true;
     } catch (_) {

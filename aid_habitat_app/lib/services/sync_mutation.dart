@@ -270,14 +270,16 @@ Object? canonicalOccupantValues(Object? value) {
   }).toList();
 }
 
-bool equivalentSyncField(String key, Object? left, Object? right) => _equalJson(
-  key == 'occupants' || key == 'occupants_json'
-      ? canonicalOccupantValues(left)
-      : left,
-  key == 'occupants' || key == 'occupants_json'
-      ? canonicalOccupantValues(right)
-      : right,
-);
+bool equivalentSyncField(String key, Object? left, Object? right) =>
+    ((left == null && right == '') || (right == null && left == '')) ||
+    _equalJson(
+      key == 'occupants' || key == 'occupants_json'
+          ? canonicalOccupantValues(left)
+          : left,
+      key == 'occupants' || key == 'occupants_json'
+          ? canonicalOccupantValues(right)
+          : right,
+    );
 
 bool canRetryOriginalOccupantConflict(Map<String, dynamic> payload) {
   final guard = payload['concurrency'];
@@ -428,11 +430,19 @@ Map<String, dynamic> mergeLatestPatientValues({
   for (final entry in local.entries) {
     final key = entry.key;
     if (key != 'occupants') {
-      merged[key] =
-          baseline.containsKey(key) &&
-              equivalentSyncField(key, baseline[key], entry.value)
-          ? remote[key]
-          : entry.value;
+      final plan = planSyncMerge(
+        baseValues: baseline,
+        updates: {key: entry.value},
+        remoteValues: remote,
+      );
+      if (!plan.canApplyAutomatically) {
+        throw StateError(
+          'Deux versions différentes de cette information existent.',
+        );
+      }
+      merged[key] = plan.updates.containsKey(key)
+          ? plan.updates[key]
+          : remote[key];
       continue;
     }
     final before = canonicalOccupantValues(baseline[key]);
@@ -460,13 +470,17 @@ Map<String, dynamic> mergeLatestPatientValues({
           throw StateError('L’identité des occupants a changé.');
         }
       }
-      people.add({
-        ...r.cast<String, dynamic>(),
-        for (final field in a.keys)
-          if (!b.containsKey(field) ||
-              !equivalentSyncField(field.toString(), b[field], a[field]))
-            field.toString(): a[field],
-      });
+      final plan = planSyncMerge(
+        baseValues: b.cast<String, dynamic>(),
+        updates: a.cast<String, dynamic>(),
+        remoteValues: r.cast<String, dynamic>(),
+      );
+      if (!plan.canApplyAutomatically) {
+        throw StateError(
+          'Deux versions différentes des informations du foyer existent.',
+        );
+      }
+      people.add({...r.cast<String, dynamic>(), ...plan.updates});
     }
     merged[key] = people;
   }

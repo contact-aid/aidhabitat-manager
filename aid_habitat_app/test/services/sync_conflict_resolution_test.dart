@@ -264,6 +264,39 @@ void main() {
     );
   }
 
+  test(
+    'housing field choices retain server fields and archive both versions',
+    () async {
+      await dossiers.updateHousing('dossier-1', {
+        'surface': 90,
+        'rdc_desc': 'Cuisine locale',
+      });
+      await conflict('housing');
+      final raw = remote(version: _new);
+      (raw['housing'] as Map)['surface'] = 100;
+      (raw['housing'] as Map)['rdcDesc'] = 'Salon serveur';
+      final review = (await dossiers.reviewConflicts('dossier-1', raw)).single;
+      await dossiers.resolveReviewedConflict(
+        review,
+        keepLocal: true,
+        localFields: {'surface'},
+      );
+      final saved = (await db.query('housings')).single;
+      expect(saved['surface'], 90);
+      expect(saved['rdc_desc'], 'Salon serveur');
+      expect((await payload())['updates'], {'surface': 90});
+      expect((await db.query('sync_operations')).single['status'], 'pending');
+      final history = (await db.query('sync_conflict_history')).single;
+      final snapshot = jsonDecode(
+        await OfflineVault.instance.openString(
+          history['snapshot_json'] as String,
+        ),
+      );
+      expect(snapshot['mutation']['updates']['rdcDesc'], 'Cuisine locale');
+      expect(snapshot['remoteValues']['surface'], 100);
+    },
+  );
+
   test('409 preserves both versions, blocks boot and protects pull', () async {
     await dossiers.updatePatient('patient-1', {'first_name': 'Local'});
     await conflict('patient');
@@ -420,7 +453,10 @@ void main() {
       );
       final before = await payload();
       final raw = remote(version: _new);
-      raw['housing'] = <String, dynamic>{...raw['housing'] as Map, 'levels': null};
+      raw['housing'] = <String, dynamic>{
+        ...raw['housing'] as Map,
+        'levels': null,
+      };
       (raw['housing'] as Map)['roomsBreakdown'] = {
         'rdc': ['Salle de bain'],
         'basement': [],
