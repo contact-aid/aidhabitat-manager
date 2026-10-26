@@ -640,9 +640,7 @@ class _AuthRootState extends State<AuthRoot> {
     final engine = SyncEngine();
     engine.start(pullRemote: false);
     await engine.retryFailedOperations();
-    engine.requestSync();
-    // ignore: discarded_futures
-    _pullRemoteAfterLocalQueue(engine);
+    engine.requestFullSync();
   }
 
   Future<void> _submitRemoteReauthentication({
@@ -675,21 +673,6 @@ class _AuthRootState extends State<AuthRoot> {
       setSubmitting(false);
       setError('Mot de passe invalide ou serveur indisponible.');
     });
-  }
-
-  Future<void> _pullRemoteAfterLocalQueue(SyncEngine engine) async {
-    try {
-      if (engine.currentState.pendingCount > 0 ||
-          engine.currentState.isSyncing) {
-        await engine.stateStream
-            .firstWhere((state) => !state.isSyncing && state.pendingCount == 0)
-            .timeout(const Duration(minutes: 2));
-      }
-      await engine.requestPull();
-    } catch (_) {
-      // Si la file ne peut pas être vidée, on ne pull pas : les données
-      // locales restent la source prioritaire jusqu'au prochain retry.
-    }
   }
 
   @override
