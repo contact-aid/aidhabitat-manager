@@ -78,6 +78,10 @@ String describeSyncConflict(Map<String, dynamic> payload) {
   }
   final remote = conflict is Map ? conflict['remote'] : null;
   final code = remote is Map ? remote['error'] : null;
+  if (code == 'SYNC_HOUSING_WRITE_SUPERSEDED') {
+    return 'Le logement a changé depuis cet envoi. Comparez les versions '
+        'avant de remplacer une correction plus récente. Vos saisies sont conservées.';
+  }
   if (code == 'COLLECTION_CLIENT_UPGRADE_REQUIRED') {
     return 'Cette saisie vient d’une ancienne version. Vos valeurs sont conservées. '
         'Comparez-les dans la nouvelle application puis choisissez explicitement '

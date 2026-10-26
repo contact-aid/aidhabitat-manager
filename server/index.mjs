@@ -1,3 +1,4 @@
+import { createJournaledHousingWriter } from './housingWriteJournal.mjs';
 import { joinReportNotePagesText } from './reports/noteText.mjs';
 import { retirementFundLabelsForReport } from './reports/retirementFundNames.mjs';
 import { resolveReportPigPloermel } from './reports/pigPloermel.mjs';
@@ -531,6 +532,15 @@ const guardedMutationOptions = {
 };
 const guardedMutation = conditionalWriter ? createGuardedMutation({ ...guardedMutationOptions, preferLocal: true }) : null;
 const strictCollectionMutation = conditionalWriter ? createGuardedMutation({ ...guardedMutationOptions, preferLocal: false }) : null;
+const housingVisitMutation = conditionalWriter ? createGuardedMutation({
+  ...guardedMutationOptions,
+  writer: createJournaledHousingWriter({
+    directory: path.join(DATA_DIR_PATH, 'housing-write-journal'),
+    writer: conditionalWriter,
+    readRecord: guardedMutationOptions.readRecord,
+  }),
+  preferLocal: false,
+}) : null;
 const changesCollection = (tableId, body) => {
   const keys = tableId === TABLES.beneficiaires ? ['occupants', 'dependenceTxt']
     : tableId === TABLES.logements ? ['roomsBreakdown', 'basement', 'rdc', 'floor', 'secondFloor', 'thirdFloor']
@@ -547,7 +557,10 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
         Array.isArray(guard.baseValues)) {
       throw new SyncMutationError(428, 'SYNC_BASELINE_REQUIRED');
     }
-    const mutate = changesCollection(tableId, req.body) ? strictCollectionMutation : guardedMutation;
+    const newHousingPolicy = tableId === TABLES.logements &&
+      guard.housingPolicy === 'housing-visit-v1';
+    const mutate = newHousingPolicy ? housingVisitMutation
+      : changesCollection(tableId, req.body) ? strictCollectionMutation : guardedMutation;
     await mutate({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
       normalizeObserved,
@@ -7730,6 +7743,9 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
   try {
     const beneficiaryId = req.params.beneficiaryId;
     const updates = req.body || {};
+    if (updates.concurrency?.housingPolicy === 'housing-visit-v1' && !conditionalSyncEnabled) {
+      return res.status(503).json({ success: false, error: 'SYNC_CONDITIONAL_REQUIRED' });
+    }
     const syntheticId = parseSyntheticBeneficiaryId(beneficiaryId);
     const [beneficiaires, logements, typeLogements, porteGarageRefs, portailRefs, dossiers] = await Promise.all([
       queryAll(TABLES.beneficiaires, { fields: FIELD_SETS.beneficiaires }),

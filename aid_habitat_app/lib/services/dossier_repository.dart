@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:sqflite/sqflite.dart';
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 
 import '../models/types.dart';
 import '../models/housing_rooms.dart';
@@ -10,6 +12,7 @@ import 'nocodb_api_client.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
+import 'housing_visit_handoff.dart';
 import 'collection_mutation_contract.dart';
 import 'context_sync_protocol.dart';
 import 'visit_recommendations_publication.dart';
@@ -58,6 +61,14 @@ class DossierRepository {
     : _database = database ?? LocalDatabase.instance;
 
   final LocalDatabase _database;
+
+  Future<void> beginHousingVisit(String dossierId, String? visitDate) async {
+    final db = await _database.database;
+    await db.transaction(
+      (txn) =>
+          HousingVisitHandoff.begin(txn, dossierId, visitDate, DateTime.now()),
+    );
+  }
 
   String _uuid() => DateTime.now().microsecondsSinceEpoch.toRadixString(36);
 
@@ -728,6 +739,17 @@ class DossierRepository {
         if (review.contextReferenceJson != null)
           'reference': jsonDecode(review.contextReferenceJson!),
       };
+      if (review.entityType == 'housing' &&
+          (originalPayload['concurrency'] as Map?)?['housingPolicy'] ==
+              HousingVisitHandoff.protocol) {
+        (payload['concurrency'] as Map)['housingPolicy'] =
+            HousingVisitHandoff.protocol;
+        final marker = originalPayload['housingVisit'];
+        if (marker is Map) {
+          payload['housingVisit'] = {...marker, 'phase': 'normal'};
+          await HousingVisitHandoff.settle(txn, review.entityLocalId, marker);
+        }
+      }
       // Only this explicit reviewed decision upgrades a legacy queued edit.
       stampNewCollectionMutation(review.entityType, payload, null);
       await txn.update(
@@ -2382,6 +2404,38 @@ class DossierRepository {
       previous: previous,
     );
     stampNewCollectionMutation(entityType, payloadMap, previous);
+    if (entityType == 'housing') {
+      // Do not upgrade any operation authored before this release.
+      final previousGuard = previous?['concurrency'];
+      if (previous == null ||
+          (previousGuard is Map &&
+              previousGuard['housingPolicy'] == HousingVisitHandoff.protocol)) {
+        (payloadMap['concurrency'] as Map)['housingPolicy'] =
+            HousingVisitHandoff.protocol;
+        final marker =
+            previous?['housingVisit'] ??
+            await HousingVisitHandoff.read(db, entityLocalId);
+        if (marker is Map) {
+          payloadMap['housingVisit'] = Map.of(marker);
+          if (previous == null && marker['phase'] == 'first') {
+            await db.insert('sync_conflict_history', {
+              'operation_id': opId,
+              'entity_type': 'housing',
+              'entity_local_id': entityLocalId,
+              'decision': 'visit_start_snapshot',
+              'snapshot_json': await OfflineVault.instance.sealString(
+                jsonEncode({
+                  'mutation': payloadMap,
+                  'referenceValues': baseValues,
+                  'remoteUpdatedAt': expectedUpdatedAt,
+                }),
+              ),
+              'created_at': now,
+            });
+          }
+        }
+      }
+    }
     if (localConflict != null) {
       payloadMap['conflict'] = {
         ...localConflict,
@@ -3302,7 +3356,7 @@ class DossierRepository {
     await db.transaction((txn) async {
       final rows = await txn.query(
         'dossiers',
-        columns: ['housing_local_id'],
+        columns: ['housing_local_id', 'visit_date'],
         where: 'local_id = ?',
         whereArgs: [dossierId],
         limit: 1,
@@ -3378,6 +3432,14 @@ class DossierRepository {
         whereArgs: [housingId],
       );
       if (apiUpdates.isEmpty) return;
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+        await HousingVisitHandoff.begin(
+          txn,
+          dossierId,
+          rows.first['visit_date'] as String?,
+          DateTime.now(),
+        );
+      }
       await _enqueueEntityUpdate(
         txn,
         entityType: 'housing',
