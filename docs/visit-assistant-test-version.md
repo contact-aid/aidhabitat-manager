@@ -1,7 +1,8 @@
 # Assistant de visite : version de test
 
 Branche : `codex/ergo-visit-ai-v1`, à partir du build 104 publié.
-Cette fonctionnalité n’est pas déployée en production.
+Livraison 105 autorisée pour un pilote Coralie/Christelle le 28 octobre 2026.
+La preuve de déploiement et les limites de recette figurent dans `release-105-visit-assistant.md`.
 
 ## Parcours implémenté
 

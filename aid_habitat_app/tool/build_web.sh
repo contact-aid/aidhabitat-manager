@@ -62,6 +62,7 @@ npm --prefix tool/local_voice run build
 
 "$FLUTTER" build web --release --no-web-resources-cdn \
   --pwa-strategy=none \
+  --dart-define=AIDHABITAT_VISIT_ASSISTANT=true \
   --dart-define=AIDHABITAT_API_BASE_URL="$API_BASE_URL"
 
 # Flutter can leave the previous generated worker behind after an incremental
