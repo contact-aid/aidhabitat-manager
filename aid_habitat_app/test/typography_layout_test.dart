@@ -3,6 +3,7 @@ import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/components/feedback_tab.dart';
 import 'package:aid_habitat_app/components/cta_text_style.dart';
 import 'package:aid_habitat_app/components/beneficiary_header.dart';
+import 'package:aid_habitat_app/components/beneficiary_badges.dart';
 import 'package:aid_habitat_app/components/dossier_space_shortcut.dart';
 import 'package:aid_habitat_app/services/feedback_activity_service.dart';
 import 'package:aid_habitat_app/services/auth_service.dart';
@@ -68,7 +69,7 @@ void main() {
     await initializeDateFormatting('fr_FR');
   });
 
-  Dossier sampleDossier() => Dossier(
+  Dossier sampleDossier({String compteAnah = ''}) => Dossier(
     id: 'layout-test',
     patient: Patient(
       id: 'patient-layout-test',
@@ -84,6 +85,7 @@ void main() {
       incomeCategory: '',
       trustedPerson: TrustedPerson(name: '', phone: '', email: ''),
     ),
+    compteAnah: compteAnah,
     status: DossierStatus.TO_VISIT,
     ergoId: 'ergo-layout-test',
     visitDate: DateTime.now().add(const Duration(days: 1)).toIso8601String(),
@@ -96,6 +98,83 @@ void main() {
     plans: {},
     createdAt: DateTime.now().toIso8601String(),
   );
+
+  for (final width in [320.0, 744.0, 980.0, 1100.0, 1280.0]) {
+    testWidgets('header keeps visit actions visible at $width px', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = Size(width, 800);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final original = sampleDossier(compteAnah: '{"status":"À vérifier"}');
+      final dossier = original.copyWith(
+        patient: original.patient.copyWith(
+          lastName: 'Martin de la Roche Saint-Clair',
+          address: '123 rue du Test',
+          incomeCategory: 'Modeste',
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: BeneficiaryHeader(
+              dossier: dossier,
+              onBack: () {},
+              trailing: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  SizedBox(
+                    key: const Key('recording'),
+                    width: 132,
+                    height: 40,
+                    child: TextButton(
+                      onPressed: () {},
+                      child: const Text('Arrêter'),
+                    ),
+                  ),
+                  SizedBox(
+                    key: const Key('documents'),
+                    width: 40,
+                    height: 40,
+                    child: DossierSpaceShortcut(
+                      toDocuments: true,
+                      onPressed: () {},
+                    ),
+                  ),
+                  SizedBox(
+                    width: 160,
+                    height: 40,
+                    child: TextButton(
+                      onPressed: () {},
+                      child: const Text('Générer le rapport'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      for (final finder in [
+        find.byType(AnahStatusBadge),
+        find.byKey(const Key('recording')),
+        find.byKey(const Key('documents')),
+      ]) {
+        final rect = tester.getRect(finder);
+        expect(rect.left, greaterThanOrEqualTo(0));
+        expect(rect.right, lessThanOrEqualTo(width));
+        expect(rect.bottom, lessThan(800));
+        expect(finder.hitTestable(), findsOneWidget);
+      }
+      final record = tester.getRect(find.byKey(const Key('recording')));
+      final documents = tester.getRect(find.byKey(const Key('documents')));
+      expect(record.left, lessThan(documents.left));
+      expect(find.text('123 rue du Test'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   for (final width in [320.0, 1280.0]) {
     testWidgets('login fits at $width px', (tester) async {

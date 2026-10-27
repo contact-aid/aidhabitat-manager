@@ -146,3 +146,23 @@ ne promet pas une synchronisation avec l’app complètement fermée. Les extrai
 sont horodatés par segment, sans identification garantie des locuteurs. Le passage
 entre segments doit être contrôlé sur une vraie conversation. L’audio est conservé
 sans purge automatique dans cette version de test.
+
+## Bandeau et pilote intégré (28 octobre 2026)
+
+- Le bandeau partagé affiche le nom, le type d’accompagnement et les revenus,
+  sans adresse. Les champs d’adresse du dossier restent disponibles.
+- Le statut Anah reste visible, immédiatement avant les commandes.
+- Page dossier : enregistrement puis date de visite.
+- VAD : statut Anah, enregistrement, raccourci Documents, génération du rapport.
+- Sous 1 000 points disponibles, les commandes passent sur une seconde ligne.
+  Le bandeau ne nécessite plus de défilement horizontal.
+- Une variante métier séparée `com.aidhabitat.manager.visitpilot`, intitulée
+  « App’Ergo Pilote », permet de vérifier les vrais écrans et la capture avec
+  l’API HTTPS habituelle. Son stockage est distinct de l’app habituelle et de
+  « Ergo IA Test » ; elle demande une connexion au compte de l’ergothérapeute.
+- Cette installation ne signifie pas que le traitement IA est activé sur le
+  serveur. Tant qu’il ne l’est pas, les captures restent conservées et les
+  requêtes sont refusées sans supprimer la file locale. Ne pas considérer
+  cette variante comme prête pour une recette complète sur une visite réelle.
+- L’iPad de Coralie est disponible pour l’installation directe. Celui de
+  Christelle est indisponible ; son installation physique reste à effectuer.

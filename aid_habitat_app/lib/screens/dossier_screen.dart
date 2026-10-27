@@ -541,8 +541,8 @@ class _DossierScreenState extends State<DossierScreen> {
         spacing: 10,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          _buildVisitDateButton(context),
           VisitRecordingButton(dossier: widget.dossier),
+          _buildVisitDateButton(context),
         ],
       ),
     );

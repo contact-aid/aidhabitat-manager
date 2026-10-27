@@ -2993,13 +2993,13 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 runSpacing: 8,
                 alignment: WrapAlignment.end,
                 children: [
+                  VisitRecordingButton(dossier: _dossier),
                   if (widget.onOpenDocuments != null) ...[
                     DossierSpaceShortcut(
                       toDocuments: true,
                       onPressed: _openingDocuments ? null : _openDocuments,
                     ),
                   ],
-                  VisitRecordingButton(dossier: _dossier),
                   _buildGenerateReportButton(),
                 ],
               ),
