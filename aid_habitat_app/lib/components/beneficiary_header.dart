@@ -78,104 +78,117 @@ class BeneficiaryHeader extends StatelessWidget {
       }
     }
 
-    final identity = LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SizedBox(
-          width: constraints.maxWidth < 1000 ? 1000 : constraints.maxWidth,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _buildBackButton(),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    // NOM Prénom — Nunito 22px w600, max 380pt avec ellipsis
-                    // si très long.
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 380),
-                      child: Text(
-                        dossierBeneficiaryTitle(patient, occupants: occupants),
-                        style: GoogleFonts.nunito(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: -0.4,
-                          color: const Color(0xFF0E1116),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: false,
-                      ),
+    final identity = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildBackButton(),
+        const SizedBox(width: 16),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) => Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth.clamp(0.0, 380.0),
+                  ),
+                  child: Text(
+                    dossierBeneficiaryTitle(patient, occupants: occupants),
+                    style: GoogleFonts.nunito(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.4,
+                      color: const Color(0xFF0E1116),
                     ),
-                    // Fallback "complet" : même si le champ
-                    // `nature_accompagnement` est vide, on affiche le badge
-                    // avec le défaut.
-                    const SizedBox(width: 10),
-                    AccompanimentBadge(
-                      value: accompanimentLabel.isNotEmpty
-                          ? accompanimentLabel
-                          : 'complet',
-                      rawType: dossier.natureAccompagnement.trim().isNotEmpty
-                          ? dossier.natureAccompagnement
-                          : 'complet',
-                      large: true,
-                    ),
-                    if (incomeLabel.isNotEmpty) ...[
-                      const SizedBox(width: 6),
-                      IncomeCategoryBadge(value: incomeLabel, large: true),
-                    ],
-                    if (addressLine.isNotEmpty) ...[
-                      const SizedBox(width: 12),
-                      const Icon(
-                        LucideIcons.mapPin,
-                        size: 18,
-                        color: Color(0xFF8A939D), // ink-400
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          addressLine,
-                          style: GoogleFonts.nunito(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: const Color(0xFF5C6670), // ink-500
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                          softWrap: false,
-                        ),
-                      ),
-                    ],
-                  ],
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                  ),
                 ),
-              ),
-              if (anahStatus.isNotEmpty) ...[
-                const SizedBox(width: 12),
-                AnahStatusBadge(status: anahStatus, large: true),
+                AccompanimentBadge(
+                  value: accompanimentLabel.isNotEmpty
+                      ? accompanimentLabel
+                      : 'complet',
+                  rawType: dossier.natureAccompagnement.trim().isNotEmpty
+                      ? dossier.natureAccompagnement
+                      : 'complet',
+                  large: true,
+                ),
+                if (incomeLabel.isNotEmpty)
+                  IncomeCategoryBadge(value: incomeLabel, large: true),
+                if (addressLine.isNotEmpty)
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: constraints.maxWidth.clamp(0.0, 360.0),
+                    ),
+                    child: Tooltip(
+                      message: addressLine,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            LucideIcons.mapPin,
+                            size: 18,
+                            color: Color(0xFF8A939D),
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              addressLine,
+                              style: GoogleFonts.nunito(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF5C6670),
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: false,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
-            ],
+            ),
           ),
         ),
-      ),
+      ],
+    );
+    // Keep the status with the navigation actions, outside the identity area.
+    // Long names and addresses wrap within their available width instead of
+    // pushing the status behind Documents or creating a horizontal scroller.
+    final actions = Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (anahStatus.isNotEmpty)
+          AnahStatusBadge(status: anahStatus, large: true),
+        if (trailing != null) trailing!,
+      ],
     );
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (trailing == null) return identity;
+        if (trailing == null && anahStatus.isEmpty) return identity;
         if (constraints.maxWidth < 700) {
           return Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               identity,
               const SizedBox(height: 8),
-              Align(alignment: Alignment.centerRight, child: trailing!),
+              Align(alignment: Alignment.centerRight, child: actions),
             ],
           );
         }
         return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: identity),
             const SizedBox(width: 12),
-            trailing!,
+            actions,
           ],
         );
       },

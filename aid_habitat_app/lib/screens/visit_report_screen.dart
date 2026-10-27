@@ -2801,8 +2801,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
               Expanded(child: formCard),
               const SizedBox(height: 16),
               SizedBox(
+                // Keep the notes title and controls usable when the header wraps.
                 height: constraints.maxHeight < 600
-                    ? constraints.maxHeight * 0.3
+                    ? (constraints.maxHeight * 0.3).clamp(180.0, 280.0)
                     : 280,
                 child: notesPanel,
               ),
@@ -2985,6 +2986,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
               trailing: Wrap(
                 spacing: 8,
                 runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 alignment: WrapAlignment.end,
                 children: [
                   if (widget.onOpenDocuments != null) ...[

@@ -68,24 +68,26 @@ void main() {
     await initializeDateFormatting('fr_FR');
   });
 
-  Dossier sampleDossier() => Dossier(
+  Dossier sampleDossier({bool completeHeader = false}) => Dossier(
     id: 'layout-test',
     patient: Patient(
       id: 'patient-layout-test',
       firstName: 'Camille',
-      lastName: 'Martin',
+      lastName: completeHeader ? 'Martin de la Roche aux Longs Noms' : 'Martin',
       birthDate: '1950-01-01',
       phone: '0102030405',
       email: '',
-      address: '',
-      city: '',
-      zipCode: '',
+      address: completeHeader ? '123 avenue des Très Longues Adresses' : '',
+      city: completeHeader ? 'Saint-Pierre-des-Champs' : '',
+      zipCode: completeHeader ? '35000' : '',
       familySituation: '',
-      incomeCategory: '',
+      incomeCategory: completeHeader ? 'Modeste' : '',
       trustedPerson: TrustedPerson(name: '', phone: '', email: ''),
     ),
     status: DossierStatus.TO_VISIT,
     ergoId: 'ergo-layout-test',
+    natureAccompagnement: completeHeader ? 'ergo' : '',
+    compteAnah: completeHeader ? '{"status":"a vérifier"}' : '',
     visitDate: DateTime.now().add(const Duration(days: 1)).toIso8601String(),
     housing: Housing(
       type: HousingType.APARTMENT,
@@ -96,6 +98,60 @@ void main() {
     plans: {},
     createdAt: DateTime.now().toIso8601String(),
   );
+
+  for (final width in [320.0, 768.0, 1024.0, 1280.0]) {
+    testWidgets(
+      'Anah stays visible beside Documents without horizontal movement at $width px',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = Size(width, 800);
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: BeneficiaryHeader(
+                dossier: sampleDossier(completeHeader: true),
+                onBack: () {},
+                trailing: Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    DossierSpaceShortcut(toDocuments: true, onPressed: () {}),
+                    FilledButton(
+                      onPressed: () {},
+                      child: const Text('Générer'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final status = find.text('Anah · à vérifier');
+        final documents = find.byType(DossierSpaceShortcut);
+        final before = tester.getRect(status);
+        expect(before.left, greaterThanOrEqualTo(0));
+        expect(before.right, lessThanOrEqualTo(width));
+        expect(tester.getRect(documents).right, lessThanOrEqualTo(width));
+        if (width >= 700) {
+          expect(before.right, lessThan(tester.getRect(documents).left));
+          expect(
+            before.center.dy,
+            closeTo(tester.getRect(documents).center.dy, 0.1),
+          );
+        }
+        final address = find.textContaining('123 avenue');
+        final addressBefore = tester.getRect(address);
+        await tester.drag(address, const Offset(-180, 0));
+        await tester.pumpAndSettle();
+        expect(tester.getRect(status), before);
+        expect(tester.getRect(address), addressBefore);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   for (final width in [320.0, 1280.0]) {
     testWidgets('login fits at $width px', (tester) async {
@@ -365,7 +421,10 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(
         MaterialApp(
-          home: VisitReportScreen(dossier: sampleDossier(), onBack: () {}),
+          home: VisitReportScreen(
+            dossier: sampleDossier(completeHeader: true),
+            onBack: () {},
+          ),
         ),
       );
       expect(tester.takeException(), isNull);
