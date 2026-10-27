@@ -34,6 +34,11 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
   final _store = VisitAssistantStore();
   final _notes = NoteRepository();
   final _client = http.Client();
+
+  /// The isolated preview supplies its note-only source. The business app
+  /// keeps its normal dossier repository unless explicitly configured here.
+  Future<Map<String, dynamic>> Function(String dossierId, String patientId)?
+  contextLoader;
   Timer? _syncTimer;
   Timer? _meterTimer;
   StreamSubscription<bool>? _connectivity;
@@ -278,13 +283,21 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
       )) {
         _checkSession(epoch);
         if (job['context'] == null) {
-          final dossier = await DataService().fetchDossierById(
-            job['dossierId'] as String,
-          );
-          if (dossier == null) {
-            throw StateError('Le dossier local n’est pas disponible.');
+          final loader = contextLoader;
+          if (loader != null) {
+            job['context'] = await loader(
+              job['dossierId'] as String,
+              job['patientId'] as String,
+            );
+          } else {
+            final dossier = await DataService().fetchDossierById(
+              job['dossierId'] as String,
+            );
+            if (dossier == null) {
+              throw StateError('Le dossier local n’est pas disponible.');
+            }
+            job['context'] = await _context(dossier);
           }
-          job['context'] = await _context(dossier);
           await _store.save(job);
         }
         final base =
@@ -355,7 +368,10 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<Map<String, dynamic>> _context(Dossier dossier) async {
+  Future<Map<String, dynamic>> collectNoteContext({
+    required String patientId,
+    required String dossierId,
+  }) async {
     const keys = [
       'Bénéficiaire-Notes',
       'Contexte de vie-Médical',
@@ -372,8 +388,8 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
     final handwriting = <Map<String, dynamic>>[];
     for (final key in keys) {
       final pages = await _notes.fetchLocalNotePages(
-        patientId: dossier.patient.id,
-        dossierId: dossier.id,
+        patientId: patientId,
+        dossierId: dossierId,
         tabKey: key,
       );
       for (final page in pages) {
@@ -417,6 +433,14 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
     }
+    return {'existingText': text, 'handwritten': handwriting};
+  }
+
+  Future<Map<String, dynamic>> _context(Dossier dossier) async {
+    final noteContext = await collectNoteContext(
+      patientId: dossier.patient.id,
+      dossierId: dossier.id,
+    );
     final repository = DossierRepository();
     final medical = await repository.fetchContexteDeVie(dossier.id);
     final sanitary = await repository.fetchDiagnosticSanitaire(dossier.id);
@@ -460,8 +484,7 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     return {
-      'existingText': text,
-      'handwritten': handwriting,
+      ...noteContext,
       'medicalAndAutonomy': relevant(medical),
       'sanitary': relevant(sanitary?.toJson()),
       'retainedRecommendations': recommendations

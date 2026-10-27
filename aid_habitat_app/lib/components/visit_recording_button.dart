@@ -1,8 +1,8 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../models/types.dart';
 import '../services/visit_assistant_service.dart';
+import '../services/visit_audio_meter.dart';
 
 class VisitRecordingButton extends StatelessWidget {
   const VisitRecordingButton({super.key, required this.dossier});
@@ -82,15 +82,11 @@ class VisitRecordingButton extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: service.voiceLevels.map((level) {
-                        final amplitude = level <= 0.001
-                            ? 0.0
-                            : ((20 * math.log(level) / math.ln10 + 60) / 50)
-                                  .clamp(0.0, 1.0);
                         return AnimatedContainer(
                           duration: const Duration(milliseconds: 100),
                           curve: Curves.easeOut,
                           width: 3.5,
-                          height: 6 + 14 * amplitude,
+                          height: VisitAudioMeter.barHeight(level),
                           decoration: BoxDecoration(
                             color: const Color(0xff7e8388),
                             borderRadius: BorderRadius.circular(2),

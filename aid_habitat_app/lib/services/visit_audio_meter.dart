@@ -1,6 +1,18 @@
+import 'dart:math' as math;
+
 /// Decodes native meter snapshots while retaining exactly four voice samples.
 /// The history has a fixed length: shift its values, never remove/add entries.
+
 class VisitAudioMeter {
+  /// Display gain only: the recorded audio is never amplified or altered.
+  /// At/below -60 dB the bar is a dot; normal speech grows visibly to 20 px.
+  static double barHeight(double level) {
+    if (!level.isFinite || level <= 0.001) return 3.5;
+    final decibels = 20 * math.log(level) / math.ln10;
+    final amplitude = ((decibels + 60) / 24).clamp(0.0, 1.0);
+    return 3.5 + 16.5 * math.sqrt(amplitude);
+  }
+
   final List<double> _levels = List<double>.filled(4, 0);
   List<double> get levels => List<double>.unmodifiable(_levels);
   double level = 0;

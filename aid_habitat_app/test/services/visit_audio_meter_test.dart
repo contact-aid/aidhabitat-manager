@@ -2,6 +2,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aid_habitat_app/services/visit_audio_meter.dart';
 
 void main() {
+  test('silence displays dots and quiet speech visibly raises the bars', () {
+    expect(VisitAudioMeter.barHeight(0), 3.5);
+    expect(VisitAudioMeter.barHeight(0.0001), 3.5);
+    expect(VisitAudioMeter.barHeight(0.001), 3.5);
+    expect(VisitAudioMeter.barHeight(0.01), greaterThan(18));
+    expect(VisitAudioMeter.barHeight(0.02), 20);
+    expect(VisitAudioMeter.barHeight(double.nan), 3.5);
+  });
   test('native meter refresh can run continuously with exactly four bars', () {
     final meter = VisitAudioMeter();
     for (var tick = 0; tick < 1200; tick++) {

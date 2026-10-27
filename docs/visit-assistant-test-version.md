@@ -100,8 +100,32 @@ reconnaissance de l’écriture manuscrite réelle des intervenantes.
 
 `tool/visit_ai_device_preview.dart` exige le bundle
 `com.aidhabitat.manager.visitaitest`. Elle conserve des données fictives dans
-son propre conteneur, neutralise l’API et permet de tester capture, mode avion,
-verrouillage et insertion fictive sans toucher à App’Ergo.
+son propre conteneur et permet de tester capture, mode avion et verrouillage
+sans toucher à App’Ergo. Les quatre barres sont des points au silence ; leur
+sensibilité visuelle fait monter une voix faible sans modifier l’audio enregistré.
+
+La recette connectée utilise `tools/visit-ai-preview-server.mjs`, lancé sur
+l’adresse privée du Mac et le port 3308. Il ne fournit que les routes de
+l’assistant pour le dossier fictif, avec une session de test limitée à douze
+heures. Il ne se connecte pas à NocoDB et n’expose aucune route métier de
+production. La clé OpenRouter reste sur le Mac. L’iPad contient uniquement
+une session limitée à cette API fictive.
+
+Au démarrage de cette app, tout envoi est désactivé. L’appui explicite sur
+« Traiter les enregistrements fictifs » prépare les textes et images des notes,
+active la connexion de test et lance la file existante. L’onglet Transcription
+et IA montre alors les transcripts et permet les questions. Les nouvelles
+rédactions apparaissent dans les rubriques de notes, à la suite des saisies.
+Il faut garder l’iPad et le Mac sur le même réseau Wi-Fi et le Mac allumé.
+Après fermeture complète de l’app, l’appui sur le bouton réactive la recette.
+
+La configuration de compilation privée utilise `VISIT_PREVIEW_URL`,
+`VISIT_PREVIEW_TOKEN`, `AIDHABITAT_VISIT_ASSISTANT=true` et
+`AIDHABITAT_PREVIEW_LOCAL_HTTP=true`. Ce dernier flag autorise uniquement les
+adresses IPv4 privées/loopback dans le client séparé de recette. Il est désactivé
+par défaut et les builds métier conservent HTTPS obligatoire. L’exception ATS
+et l’autorisation réseau local sont ajoutées seulement à la copie iOS portant
+le bundle de test, jamais au fichier Info.plist de l’app métier.
 
 Tester avant toute diffusion :
 
