@@ -97,12 +97,11 @@
 	</dict>
 
 	<!-- ====================================================== -->
-	<!-- iPad multi-tasking : Split View + Slide Over            -->
-	<!-- Apple privilégie les apps qui supportent le             -->
-	<!-- multi-fenêtre iPadOS. Activé par défaut chez Flutter.  -->
-	<!-- ====================================================== -->
+	<!-- Full-screen capture needs scene rotation on older iPadOS versions.
+         On windowed iPadOS, portrait remains a preference: the scanner stays
+         usable if the system denies the request. -->
 	<key>UIRequiresFullScreen</key>
-	<false/>
+	<true/>
 
 	<!-- url_launcher : autorise les schémes utilisés (mailto, tel, https) -->
 	<key>LSApplicationQueriesSchemes</key>

@@ -38,6 +38,14 @@ import UIKit
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
+  override func application(
+    _ application: UIApplication,
+    supportedInterfaceOrientationsFor window: UIWindow?
+  ) -> UIInterfaceOrientationMask {
+    DocumentScannerPlugin.scannerOrientationMask
+      ?? super.application(application, supportedInterfaceOrientationsFor: window)
+  }
+
   private func handlePdfRotationCall(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     if ["readPdfInk", "writePdfInk", "renderPdfInkPreview"].contains(call.method) {
       guard let args = call.arguments as? [String: Any],
