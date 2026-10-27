@@ -77,7 +77,7 @@
 
 	<!-- Dictée locale des notes écrites (Speech + microphone) -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Aid&apos;Habitat utilise le microphone uniquement lorsque vous activez la dictée d&apos;une note écrite.</string>
+	<string>Aid&apos;Habitat utilise le microphone lorsque vous lancez un enregistrement de visite. L’audio est conservé sur l’iPad puis transmis au serveur pour transcription et aide à la rédaction.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Aid&apos;Habitat utilise la reconnaissance vocale sur l&apos;appareil pour transcrire votre dictée dans une note écrite.</string>
 
