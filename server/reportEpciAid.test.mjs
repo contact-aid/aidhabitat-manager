@@ -22,19 +22,39 @@ for (const aid of [null, 'Non', '500 €']) {
   });
 }
 
-test('PDF clears the whole community row only when there is no aid', async () => {
+test('PDF keeps the community row and its borders, with a dash when there is no aid', async () => {
   const { PDFPage } = await import('pdf-lib');
   const { generateVisitReport } = await import('./reports/generateVisitReport.mjs');
-  const original = PDFPage.prototype.drawRectangle;
-  for (const label of ['/', 'EPCI avec aide']) {
-    let cleared = false;
-    PDFPage.prototype.drawRectangle = function(options) {
-      if (options.x === 40 && options.y === 519 && options.width === 516) cleared = true;
-      return original.call(this, options);
-    };
-    try {
-      await generateVisitReport({ dossier: { patient: { firstName: 'Test', lastName: 'AIDES' } }, epciResolved: label, fetchImageBytes: async () => null });
-    } finally { PDFPage.prototype.drawRectangle = original; }
-    assert.equal(cleared, label === '/');
+  const originalRectangle = PDFPage.prototype.drawRectangle;
+  const originalText = PDFPage.prototype.drawText;
+  for (const role of ['ERGO', 'TECHNICIAN']) {
+    for (const label of ['/', '', 'EPCI avec aide']) {
+      const rectangles = [];
+      const text = [];
+      PDFPage.prototype.drawRectangle = function(options) {
+        rectangles.push(options);
+        return originalRectangle.call(this, options);
+      };
+      PDFPage.prototype.drawText = function(value, options) {
+        if (options.x === 383.2) text.push(value);
+        return originalText.call(this, value, options);
+      };
+      try {
+        await generateVisitReport({
+          dossier: { patient: { firstName: 'Test', lastName: 'AIDES' } },
+          ergoProfile: { role }, epciResolved: label,
+          caisseComplementaireResolved: 'Pro BTP, IRCANTEC sous conditions*',
+          fetchImageBytes: async () => null,
+        });
+      } finally {
+        PDFPage.prototype.drawRectangle = originalRectangle;
+        PDFPage.prototype.drawText = originalText;
+      }
+      assert.ok(text.includes(label && label !== '/' ? label : '-'), `${role}: community value`);
+      assert.ok(!rectangles.some(r => r.x === 40 && r.y === 519 && r.width === 516),
+        'the template community row must remain visible');
+      assert.ok(!rectangles.some(r => r.x > 370 && r.x < 390 && r.y <= 564 && r.y + r.height >= 564),
+        'value masks must not cover the retirement row border');
+    }
   }
 });
