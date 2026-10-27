@@ -548,7 +548,7 @@ class _CreateBeneficiaryScreenState extends State<CreateBeneficiaryScreen> {
     );
   }
 
-  /// 3 chips Diag ergo / MPA ergo / MPA complet — mutuellement
+  /// 3 chips Diag ergo / ergo / complet, mutuellement
   /// exclusives. Les CLÉS stockées (`diagnostic` / `ergo` / `complet`)
   /// correspondent aux valeurs attendues côté serveur
   /// (`mapBeneficiaryUpdatesToFields` + bloc dossier) — seuls les
@@ -556,8 +556,8 @@ class _CreateBeneficiaryScreenState extends State<CreateBeneficiaryScreen> {
   Widget _buildAccompagnementChips() {
     const options = [
       ('diagnostic', 'Diag ergo'),
-      ('ergo', 'MPA ergo'),
-      ('complet', 'MPA complet'),
+      ('ergo', 'ergo'),
+      ('complet', 'complet'),
     ];
     return Wrap(
       spacing: 10,

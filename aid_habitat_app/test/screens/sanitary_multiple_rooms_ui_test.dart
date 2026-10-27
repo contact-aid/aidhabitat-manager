@@ -107,6 +107,56 @@ DiagnosticSanitaire _fixture(List<String> levels) => DiagnosticSanitaire(
 void main() {
   for (final bathroom in [true, false]) {
     testWidgets(
+      '${bathroom ? "Bathroom" : "WC"} does not double saved rooms with obsolete housing identities',
+      (tester) async {
+        final fixture = _fixture(['rdc', 'rdc']);
+        final repo = _MemoryRepository()
+          ..stored = DiagnosticSanitaire(
+            dossierId: _dossier.id,
+            sdbInstances: [
+              BathroomInstance.fromJson({
+                ...fixture.sdbInstances.first.toJson(),
+                'housingRoomId': 'old-bath',
+              }),
+            ],
+            wcInstances: [
+              for (var i = 0; i < 2; i++)
+                WcInstance.fromJson({
+                  ...fixture.wcInstances[i].toJson(),
+                  'housingRoomId': 'old-wc-$i',
+                }),
+            ],
+          );
+        repo.housing['rdc_rooms_json'] = jsonEncode([
+          {'id': 'new-bath', 'label': 'Salle de bain'},
+          {'id': 'new-wc-0', 'label': 'WC'},
+          {'id': 'new-wc-1', 'label': 'WC'},
+        ]);
+        final before = jsonEncode(repo.stored.toJson());
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: bathroom
+                  ? BathroomTab(dossier: _dossier, repository: repo)
+                  : WcTab(dossier: _dossier, repository: repo),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining(bathroom ? 'Salle de bain 2' : 'WC 3'),
+          findsNothing,
+        );
+        expect(
+          find.textContaining('pièces anciennes sont à vérifier'),
+          findsOneWidget,
+        );
+        if (!bathroom) expect(find.text('Original 1 · WC 2'), findsOneWidget);
+        expect(jsonEncode(repo.stored.toJson()), before);
+        expect(repo.writes, 0);
+      },
+    );
+    testWidgets(
       '${bathroom ? "Bathroom" : "WC"} preserves saved rooms when legacy housing is malformed',
       (tester) async {
         final repo = _MemoryRepository()..stored = _fixture(['rdc', 'rdc']);

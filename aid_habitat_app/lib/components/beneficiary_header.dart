@@ -14,7 +14,7 @@ import 'beneficiary_badges.dart';
 ///   - `VisitReportScreen` (relevé de visite VAD)
 ///
 /// Affiche dans l'ordre :
-///   1. Bouton retour (chevron gauche 30×30 rounded-8 transparent)
+///   1. Bouton retour (chevron gauche 32×32, coins arrondis de 8)
 ///   2. NOM Prénom (Nunito 22px w600 ink-900, max 380pt + ellipsis)
 ///   3. Badge type d'accompagnement (AccompanimentBadge large)
 ///   4. Badge catégorie de revenu (IncomeCategoryBadge large, si non-vide)
@@ -108,14 +108,14 @@ class BeneficiaryHeader extends StatelessWidget {
                         softWrap: false,
                       ),
                     ),
-                    // Fallback "MPA complet" : même si le champ
+                    // Fallback "complet" : même si le champ
                     // `nature_accompagnement` est vide, on affiche le badge
                     // avec le défaut.
                     const SizedBox(width: 10),
                     AccompanimentBadge(
                       value: accompanimentLabel.isNotEmpty
                           ? accompanimentLabel
-                          : 'MPA complet',
+                          : 'complet',
                       rawType: dossier.natureAccompagnement.trim().isNotEmpty
                           ? dossier.natureAccompagnement
                           : 'complet',
@@ -182,7 +182,8 @@ class BeneficiaryHeader extends StatelessWidget {
     );
   }
 
-  /// Bouton retour 30×30 rounded-8 avec fond permanent. Le fond reprend la
+  /// Bouton retour 32×32, aligné sur la hauteur des badges, avec fond permanent.
+  /// Le fond reprend la
   /// couleur qui n'apparaissait auparavant qu'au survol.
   Widget _buildBackButton() {
     return Material(
@@ -192,8 +193,8 @@ class BeneficiaryHeader extends StatelessWidget {
         onTap: onBack,
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          width: 30,
-          height: 30,
+          width: 32,
+          height: 32,
           decoration: BoxDecoration(
             color: const Color(0xFFF2ECF5),
             borderRadius: BorderRadius.circular(8),
@@ -201,7 +202,7 @@ class BeneficiaryHeader extends StatelessWidget {
           alignment: Alignment.center,
           child: const Icon(
             LucideIcons.chevronLeft,
-            size: 16,
+            size: 18,
             color: Color(0xFF2B323A), // ink-700
           ),
         ),

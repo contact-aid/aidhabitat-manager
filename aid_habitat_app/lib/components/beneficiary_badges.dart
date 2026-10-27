@@ -8,8 +8,8 @@ import 'package:google_fonts/google_fonts.dart';
 /// terminologie métier MPA / Diag (demande utilisateur 2026-05-04).
 ///
 ///   • `diagnostic` → "Diag ergo"
-///   • `ergo`       → "MPA ergo"
-///   • `complet`    → "MPA complet"
+///   • `ergo`       → "ergo"
+///   • `complet`    → "complet"
 ///   • autre        → valeur trimmée telle quelle.
 String formatAccompanimentType(String raw) {
   final v = raw.trim().toLowerCase();
@@ -17,9 +17,9 @@ String formatAccompanimentType(String raw) {
     case 'diagnostic':
       return 'Diag ergo';
     case 'ergo':
-      return 'MPA ergo';
+      return 'ergo';
     case 'complet':
-      return 'MPA complet';
+      return 'complet';
     default:
       return raw.trim();
   }

@@ -30,6 +30,7 @@ int recommendationGridColumns(double width, {required bool isWeb}) {
 class RecommendationsTab extends StatefulWidget {
   final Dossier dossier;
   final DossierRepository repository;
+  final WikiRepository? wikiRepository;
   final RecommendationsTabController? controller;
   final int externalRefreshToken;
   final bool immediateReorder;
@@ -38,6 +39,7 @@ class RecommendationsTab extends StatefulWidget {
     super.key,
     required this.dossier,
     required this.repository,
+    this.wikiRepository,
     this.controller,
     this.externalRefreshToken = 0,
     this.immediateReorder = kIsWeb,
@@ -88,7 +90,8 @@ class _RecommendationsTabState extends State<RecommendationsTab>
   int _saveGeneration = 0;
   int _loadGeneration = 0;
   Future<void>? _saveInFlight;
-  final WikiRepository _wikiRepo = WikiRepository();
+  late final WikiRepository _wikiRepo =
+      widget.wikiRepository ?? WikiRepository();
   String? _activeRecommendationDragId;
   String? _lastRecommendationReorderTargetId;
 
@@ -145,6 +148,10 @@ class _RecommendationsTabState extends State<RecommendationsTab>
 
   Future<void> _load() async {
     final generation = ++_loadGeneration;
+    // A refresh must read the latest local edit, including text still in
+    // the debounce window or an in-flight save.
+    await _flushPendingSave();
+    if (!mounted || generation != _loadGeneration) return;
     // Lecture locale immédiate. Le parent effectue en parallèle un pull
     // distant protégé ; `externalRefreshToken` relance ensuite cette lecture
     // sans jamais bloquer l'ouverture de l'onglet.
@@ -219,6 +226,9 @@ class _RecommendationsTabState extends State<RecommendationsTab>
   void _markPendingSave() {
     _hasPendingSave = true;
     _saveGeneration += 1;
+    // A read started before this edit may finish after it has been saved.
+    // Checking only _hasPendingSave would still accept that stale list.
+    _loadGeneration += 1;
   }
 
   Future<void> _save() {

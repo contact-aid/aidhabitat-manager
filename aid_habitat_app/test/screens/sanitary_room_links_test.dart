@@ -3,6 +3,21 @@ import 'package:aid_habitat_app/screens/visit_report/sanitary_room_links.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'obsolete explicit identities cannot authorize new room slots or ordinal relinking',
+    () {
+      final links = sanitaryRoomLinks(
+        roomsByLevel: {
+          'rdc': const [HousingRoom(id: 'new-room', label: 'WC')],
+        },
+        target: 'WC',
+        diagnostics: [
+          {'id': 'saved', 'levelField': 'rdc', 'housingRoomId': 'old-room'},
+        ],
+      );
+      expect(links, isEmpty);
+    },
+  );
   test('upper floors use the same stable IDs across API and SQLite keys', () {
     for (final level in ['second', 'third']) {
       final snake = '${level}_floor';
