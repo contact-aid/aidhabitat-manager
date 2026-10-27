@@ -1177,7 +1177,7 @@ function buildViewModel({
       })(),
       epciLabel: (() => {
         const label = String(epciResolved ?? patient.epciLabel ?? '').trim();
-        return label || '/';
+        return !label || label === '/' ? '-' : label;
       })(),
     },
     dossier: {
@@ -2852,7 +2852,7 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
     },
     {
       value: view?.patient?.epciLabel,
-      fallback: '/',
+      fallback: '-',
       x: 383.2,
       y: 526.8,
       width: 156.6,
@@ -2863,14 +2863,6 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
     },
   ];
 
-  const epciLabel = String(view?.patient?.epciLabel ?? '').trim();
-  if (!epciLabel || epciLabel === '/') {
-    // Remove the static template label as well as the value: no territorial
-    // grant must not look like an additional source of funding.
-    page.drawRectangle({ x: 40, y: 519, width: 516, height: 45, color: rgb(1, 1, 1) });
-    page.drawLine({ start: { x: 42, y: 564 }, end: { x: 552.5, y: 564 }, thickness: 0.5, color: rgb(0, 0, 0) });
-    cells.pop();
-  }
   let retirementFundsAppendix = '';
   for (const cell of cells) {
     if (cell.retirementFunds) {
@@ -2880,10 +2872,12 @@ async function drawFlat2026AidSummary({ pdfDoc, page, view }) {
       cell.height = 33.8;
     }
     page.drawRectangle({
-      x: cell.x - 2,
-      y: cell.y - 2,
-      width: cell.width + 4,
-      height: cell.height + 4,
+      // Keep the mask strictly inside the cell. Expanding it by 2 pt
+      // erased the retirement row's lower border at y=564.
+      x: cell.x,
+      y: cell.y,
+      width: cell.width,
+      height: cell.height,
       color: rgb(1, 1, 1),
     });
     let value = String(cell.value ?? '').trim() || cell.fallback || '/';

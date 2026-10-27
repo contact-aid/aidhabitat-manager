@@ -21,8 +21,10 @@ Map<String, List<HousingRoom>> sanitaryHousingRooms(
     entry.key: parseHousingRooms(row?[entry.value] as String?, entry.key),
 };
 
-/// Explicit links win. Legacy ordinal association is allowed only when the
-/// remaining lists have equal counts; ambiguity never authorizes removal.
+/// Only unique links to a current room of the same type and level win.
+/// Stale explicit links stay unresolved so callers preserve saved diagnostics
+/// without adding apparent duplicates. Legacy ordinal association is allowed
+/// only when the remaining lists have equal counts.
 Map<String, String> sanitaryRoomLinks({
   required Map<String, List<HousingRoom>> roomsByLevel,
   required String target,
@@ -33,7 +35,17 @@ Map<String, String> sanitaryRoomLinks({
   final used = <String>{};
   for (final row in rows) {
     final linked = row['housingRoomId'] as String? ?? '';
-    if (linked.isNotEmpty) {
+    final level = canonicalSanitaryLevel(row['levelField'] as String);
+    final exists = roomsByLevel.entries.any(
+      (entry) =>
+          canonicalSanitaryLevel(entry.key) == level &&
+          entry.value.any(
+            (room) =>
+                room.id == linked &&
+                room.label.toLowerCase() == target.toLowerCase(),
+          ),
+    );
+    if (linked.isNotEmpty && exists && !used.contains(linked)) {
       links[row['id'] as String] = linked;
       used.add(linked);
     }
@@ -44,6 +56,7 @@ Map<String, String> sanitaryRoomLinks({
         .where(
           (row) =>
               !links.containsKey(row['id']) &&
+              (row['housingRoomId'] as String? ?? '').isEmpty &&
               canonicalSanitaryLevel(row['levelField'] as String) == level,
         )
         .toList();

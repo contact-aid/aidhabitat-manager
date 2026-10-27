@@ -751,8 +751,8 @@ void main() {
       const tab = 'Sanitaires-Notes';
       final deleted = scenario.endsWith('-deleted');
       final localDrawing = deleted
-          ? '{"version":1,"deleted":true,"text":"","strokes":[]}'
-          : '{"local":true}';
+          ? '{"version":1,"deleted":true,"text":"","strokes":[],"noteTextInitialized":true}'
+          : '{"local":true,"noteTextInitialized":true}';
       await notes.saveDrawingJson(
         patientId: patientId,
         tabKey: tab,
@@ -876,7 +876,9 @@ void main() {
       final note = (await db.query('note_pages')).single;
       expect(
         await OfflineVault.instance.openString(note['drawing_json'] as String),
-        scenario == 'edit-during-read' ? '{"latest":true}' : localDrawing,
+        scenario == 'edit-during-read'
+            ? '{"latest":true,"noteTextInitialized":true}'
+            : localDrawing,
       );
       expect(writes, 1);
       if (scenario.startsWith('retry-existing')) {

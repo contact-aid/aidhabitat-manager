@@ -4,26 +4,26 @@ import UIKit
 import VisionKit
 
 // Contain VisionKit rather than subclassing its camera controller. Only this
-// full-screen capture flow restricts orientation; Flutter stays freely rotatable.
+// full-screen capture flow restricts orientation; Flutter keeps its own policy.
 private final class PortraitDocumentScannerController: UIViewController {
   private let scanner: VNDocumentCameraViewController
-  private let orientationFailed: (Error) -> Void
+  private var requestedPortrait = false
+  private var portraitLocked = false
 
-  init(scanner: VNDocumentCameraViewController, orientationFailed: @escaping (Error) -> Void) {
+  init(scanner: VNDocumentCameraViewController) {
     self.scanner = scanner
-    self.orientationFailed = orientationFailed
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .fullScreen
   }
 
-  required init?(coder: NSCoder) { fatalError("Use init(scanner:orientationFailed:)") }
+  required init?(coder: NSCoder) { fatalError("Use init(scanner:)") }
 
   override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
   override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .portrait }
   override var shouldAutorotate: Bool { true }
 
   @available(iOS 26.0, *)
-  override var prefersInterfaceOrientationLocked: Bool { true }
+  override var prefersInterfaceOrientationLocked: Bool { portraitLocked }
 
   override var childForStatusBarHidden: UIViewController? { scanner }
 
@@ -38,10 +38,24 @@ private final class PortraitDocumentScannerController: UIViewController {
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
+    guard !requestedPortrait, let scene = view.window?.windowScene else { return }
+    requestedPortrait = true
     setNeedsUpdateOfSupportedInterfaceOrientations()
-    if #available(iOS 26.0, *) { setNeedsUpdateOfPrefersInterfaceOrientationLocked() }
-    view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) {
-      [weak self] error in self?.orientationFailed(error)
+    scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { error in
+      // Windowing restrictions must never discard a working camera.
+      NSLog("Document scanner portrait request denied: %@", error as NSError)
+    }
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    if #available(iOS 26.0, *) {
+      // Lock only after rotation: locking the initial landscape scene can make
+      // our own portrait geometry request fail on iPadOS 26.
+      let isPortrait = view.window?.windowScene?.effectiveGeometry.interfaceOrientation == .portrait
+      guard portraitLocked != isPortrait else { return }
+      portraitLocked = isPortrait
+      setNeedsUpdateOfPrefersInterfaceOrientationLocked()
     }
   }
 }
@@ -55,7 +69,8 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
   private var pendingResult: FlutterResult?
   private weak var scannerScene: UIWindowScene?
   private var previousScannerOrientation: UIInterfaceOrientation?
-  private var scannerPresentationID: UUID?
+  // AppDelegate must agree with the modal even when Flutter requests landscape.
+  private(set) static var scannerOrientationMask: UIInterfaceOrientationMask?
 
   private init(channel: FlutterMethodChannel) {
     self.channel = channel
@@ -126,21 +141,8 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
     } else {
       previousScannerOrientation = scannerScene?.interfaceOrientation
     }
-    let presentationID = UUID()
-    scannerPresentationID = presentationID
-    let controller = PortraitDocumentScannerController(scanner: scanner) { [weak self] _ in
-      guard let self, self.scannerPresentationID == presentationID,
-        self.pendingResult != nil else { return }
-      let flutterResult = self.pendingResult
-      self.pendingResult = nil
-      self.finish {
-        flutterResult?(FlutterError(
-          code: "scan_portrait_unavailable",
-          message: "Ouvrez l’app en plein écran pour scanner en portrait.",
-          details: nil
-        ))
-      }
-    }
+    Self.scannerOrientationMask = .portrait
+    let controller = PortraitDocumentScannerController(scanner: scanner)
     captureController = controller
 
     DispatchQueue.main.async {
@@ -277,9 +279,10 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
     let previousOrientation = previousScannerOrientation
     scannerScene = nil
     previousScannerOrientation = nil
-    scannerPresentationID = nil
     let presenter = controller?.presentingViewController
     let complete = {
+      Self.scannerOrientationMask = nil
+      self.pendingResult = nil
       if let scene, let previousOrientation {
         presenter?.setNeedsUpdateOfSupportedInterfaceOrientations()
         if #available(iOS 26.0, *) { presenter?.setNeedsUpdateOfPrefersInterfaceOrientationLocked() }
@@ -304,7 +307,6 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
 
   func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
     let flutterResult = pendingResult
-    pendingResult = nil
     finish {
       flutterResult?(
         FlutterError(
@@ -321,7 +323,6 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
     didFailWithError error: Error
   ) {
     let flutterResult = pendingResult
-    pendingResult = nil
     finish {
       flutterResult?(
         FlutterError(
@@ -338,7 +339,6 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
     didFinishWith scan: VNDocumentCameraScan
   ) {
     let flutterResult = pendingResult
-    pendingResult = nil
 
     finish {
       guard scan.pageCount > 0 else {
