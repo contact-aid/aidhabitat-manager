@@ -1,5 +1,7 @@
 # Ouverture du scanner iPad en portrait
 
+Suite au retour terrain, le parcours et la langue sont repris dans [la correction du 28 octobre](ipad-scanner-fullscreen-fr-2026-10-28.md). Le refus de rotation conserve désormais un écran de transition annulable, avant de présenter le scanner natif.
+
 ## Diagnostic
 
 Le message `scan_portrait_unavailable` vient du gestionnaire d’erreur de `requestGeometryUpdate`, ajouté par la PR #50. Toute erreur de rotation provoquait la fermeture de VisionKit et le message générique « Ouvrez l’app en plein écran ». L’erreur native était ignorée : la capture seule ne permet pas d’identifier son code ni de conclure que l’app était en mode fenêtre.
