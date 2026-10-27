@@ -1,3 +1,6 @@
+import '../services/visit_assistant_service.dart';
+import '../components/visit_recording_button.dart';
+import 'visit_report/transcript_tab.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -87,7 +90,6 @@ class VisitReportScreen extends StatefulWidget {
   final int patientConflictRefreshToken;
   final VoidCallback onBack;
   final ValueChanged<Dossier>? onOpenDocuments;
-  final ValueChanged<String>? onContextChanged;
 
   const VisitReportScreen({
     super.key,
@@ -98,7 +100,6 @@ class VisitReportScreen extends StatefulWidget {
     this.patientConflictRefreshToken = 0,
     required this.onBack,
     this.onOpenDocuments,
-    this.onContextChanged,
   });
 
   @override
@@ -202,6 +203,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // (les 2 cadres notes ont déménagé dans Résumé). Alimente la
     // page 6 du PDF (« Préconisations »).
     'Préconisations',
+    if (VisitAssistantConfig.enabled) 'Transcription et IA',
   ];
 
   /// Sous-sections de chaque onglet. Le panneau notes à droite affiche
@@ -351,9 +353,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     );
     _lastHandledTabIndex = initialTabIndex;
     _tabController.addListener(_handleTabChange);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _notifyContextChanged();
-    });
     _refreshDossier();
 
     // Synchronise l'état "génération en cours" avec le singleton global —
@@ -785,7 +784,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       }
     }
     _VisitReportStateCache.setTabIndex(_dossier.id, _tabController.index);
-    _notifyContextChanged();
     setState(() {});
   }
 
@@ -799,20 +797,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // Also refresh when the room edit was saved by the debounce timer before
     // navigation, or when the target tab was already mounted.
     setState(() => _housingVersion++);
-  }
-
-  void _notifyContextChanged() {
-    final tabIndex = _tabController.index.clamp(0, _tabs.length - 1).toInt();
-    final tab = _tabs[tabIndex];
-    final subsections = _tabSubsections[tab];
-    final sectionIndex = _activeSubsectionByTab[tab] ?? 0;
-    final safeSectionIndex = subsections == null || subsections.isEmpty
-        ? 0
-        : sectionIndex.clamp(0, subsections.length - 1).toInt();
-    final section = subsections == null || subsections.isEmpty
-        ? tab
-        : '$tab / ${subsections[safeSectionIndex]}';
-    widget.onContextChanged?.call(section);
   }
 
   /// Compteur incrémenté à chaque pull bulk de notes terminé. Passé en
@@ -2653,7 +2637,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     setState(() {
       _activeSubsectionByTab[tabName] = index;
     });
-    _notifyContextChanged();
   }
 
   void _navigateToAccessibilityLevels() {
@@ -2802,7 +2785,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
               const SizedBox(height: 16),
               SizedBox(
                 height: constraints.maxHeight < 600
-                    ? constraints.maxHeight * 0.3
+                    ? (constraints.maxHeight * 0.3).clamp(180.0, 280.0)
                     : 280,
                 child: notesPanel,
               ),
@@ -2967,6 +2950,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 _dossierDetailPullToken + widget.conflictRefreshToken,
           ),
         ),
+        if (VisitAssistantConfig.enabled)
+          VisitTranscriptTab(dossierId: _dossier.id),
       ],
     );
 
@@ -2985,8 +2970,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
               trailing: Wrap(
                 spacing: 8,
                 runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 alignment: WrapAlignment.end,
                 children: [
+                  VisitRecordingButton(dossier: _dossier),
                   if (widget.onOpenDocuments != null) ...[
                     DossierSpaceShortcut(
                       toDocuments: true,

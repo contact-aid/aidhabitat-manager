@@ -3,59 +3,105 @@ import AVFoundation
 import UIKit
 import VisionKit
 
-// Contain VisionKit rather than subclassing its camera controller. Only this
-// full-screen capture flow restricts orientation; Flutter keeps its own policy.
-private final class PortraitDocumentScannerController: UIViewController {
-  private let scanner: VNDocumentCameraViewController
-  private var requestedPortrait = false
-  private var portraitLocked = false
+// Rotate the full-screen scene first, then PRESENT VisionKit. Embedding its
+// view as a child bypasses the native camera's modal layout and can crop controls.
+final class PortraitDocumentScannerController: UIViewController {
+  private let makeScanner: () -> UIViewController
+  private let cancel: () -> Void
+  private var didAppear = false
+  private var scannerPresented = false
+  private var presentationScheduled = false
 
-  init(scanner: VNDocumentCameraViewController) {
-    self.scanner = scanner
+  init(makeScanner: @escaping () -> UIViewController, cancel: @escaping () -> Void) {
+    self.makeScanner = makeScanner
+    self.cancel = cancel
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .fullScreen
   }
 
-  required init?(coder: NSCoder) { fatalError("Use init(scanner:)") }
+  required init?(coder: NSCoder) { fatalError("Use init(makeScanner:cancel:)") }
 
   override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
   override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .portrait }
   override var shouldAutorotate: Bool { true }
 
-  @available(iOS 26.0, *)
-  override var prefersInterfaceOrientationLocked: Bool { portraitLocked }
-
-  override var childForStatusBarHidden: UIViewController? { scanner }
-
   override func viewDidLoad() {
     super.viewDidLoad()
-    addChild(scanner)
-    scanner.view.frame = view.bounds
-    scanner.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    view.addSubview(scanner.view)
-    scanner.didMove(toParent: self)
+    view.backgroundColor = .systemBackground
+    let instructions = UILabel()
+    instructions.text = "Tournez l’iPad en portrait pour scanner le document."
+    instructions.numberOfLines = 0
+    instructions.textAlignment = .center
+    instructions.font = .preferredFont(forTextStyle: .title2)
+    instructions.adjustsFontForContentSizeCategory = true
+    instructions.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(instructions)
+
+    let cancelButton = UIButton(type: .system)
+    cancelButton.setTitle("Annuler", for: .normal)
+    cancelButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
+    cancelButton.addTarget(self, action: #selector(cancelScan), for: .touchUpInside)
+    cancelButton.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(cancelButton)
+    NSLayoutConstraint.activate([
+      instructions.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+      instructions.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
+      instructions.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+      instructions.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+      cancelButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+      cancelButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+      cancelButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+    ])
   }
+
+  @objc private func cancelScan() { cancel() }
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
-    guard !requestedPortrait, let scene = view.window?.windowScene else { return }
-    requestedPortrait = true
+    didAppear = true
+    guard !scannerPresented, let scene = view.window?.windowScene else { return }
     setNeedsUpdateOfSupportedInterfaceOrientations()
     scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { error in
-      // Windowing restrictions must never discard a working camera.
-      NSLog("Document scanner portrait request denied: %@", error as NSError)
+      // Stay on the cancellable rotation screen, never open a cropped camera.
+      NSLog("Rotation portrait du scanner refusée : %@", error as NSError)
     }
+    presentScannerWhenReady()
   }
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    presentScannerWhenReady()
+  }
+
+  override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+    super.viewWillTransition(to: size, with: coordinator)
+    coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+      self?.presentScannerWhenReady()
+    }
+  }
+
+  private func isPortrait(_ scene: UIWindowScene) -> Bool {
     if #available(iOS 26.0, *) {
-      // Lock only after rotation: locking the initial landscape scene can make
-      // our own portrait geometry request fail on iPadOS 26.
-      let isPortrait = view.window?.windowScene?.effectiveGeometry.interfaceOrientation == .portrait
-      guard portraitLocked != isPortrait else { return }
-      portraitLocked = isPortrait
-      setNeedsUpdateOfPrefersInterfaceOrientationLocked()
+      return scene.effectiveGeometry.interfaceOrientation == .portrait
+    }
+    return scene.interfaceOrientation == .portrait
+  }
+
+  private func presentScannerWhenReady() {
+    guard didAppear, !scannerPresented, !presentationScheduled else { return }
+    presentationScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.presentationScheduled = false
+      guard self.presentedViewController == nil, !self.isBeingDismissed,
+        let scene = self.view.window?.windowScene,
+        self.isPortrait(scene),
+        self.view.bounds.height > self.view.bounds.width,
+        self.transitionCoordinator == nil else { return }
+      self.scannerPresented = true
+      let scanner = self.makeScanner()
+      scanner.modalPresentationStyle = .fullScreen
+      self.present(scanner, animated: true)
     }
   }
 }
@@ -133,16 +179,27 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
 
     pendingResult = result
 
-    let scanner = VNDocumentCameraViewController()
-    scanner.delegate = self
     scannerScene = presenter.view.window?.windowScene
     if #available(iOS 26.0, *) {
       previousScannerOrientation = scannerScene?.effectiveGeometry.interfaceOrientation
     } else {
       previousScannerOrientation = scannerScene?.interfaceOrientation
     }
+    // This iPad workflow always returns to the landscape workspace, even if
+    // the user entered it while the device was still held in portrait.
+    if UIDevice.current.userInterfaceIdiom == .pad,
+      previousScannerOrientation?.isLandscape != true {
+      previousScannerOrientation = .landscapeRight
+    }
     Self.scannerOrientationMask = .portrait
-    let controller = PortraitDocumentScannerController(scanner: scanner)
+    let controller = PortraitDocumentScannerController(makeScanner: { [weak self] in
+      let scanner = VNDocumentCameraViewController()
+      scanner.delegate = self
+      return scanner
+    }, cancel: { [weak self] in
+      guard let self, let flutterResult = self.pendingResult else { return }
+      self.finish { flutterResult(nil) }
+    })
     captureController = controller
 
     DispatchQueue.main.async {
@@ -298,7 +355,11 @@ class DocumentScannerPlugin: NSObject, FlutterPlugin, VNDocumentCameraViewContro
       }
       result()
     }
-    if let controller {
+    if let presenter {
+      // Dismiss from BELOW the portrait host so UIKit removes both the host
+      // and its presented VisionKit camera, rather than only the camera.
+      presenter.dismiss(animated: true, completion: complete)
+    } else if let controller {
       controller.dismiss(animated: true, completion: complete)
     } else {
       complete()

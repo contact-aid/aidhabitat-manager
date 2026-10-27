@@ -1,3 +1,4 @@
+import '../components/visit_recording_button.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -536,7 +537,14 @@ class _DossierScreenState extends State<DossierScreen> {
       dossier: widget.dossier,
       occupants: _occupants,
       onBack: widget.onBack,
-      trailing: _buildVisitDateButton(context),
+      trailing: Wrap(
+        spacing: 10,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          VisitRecordingButton(dossier: widget.dossier),
+          _buildVisitDateButton(context),
+        ],
+      ),
     );
   }
 

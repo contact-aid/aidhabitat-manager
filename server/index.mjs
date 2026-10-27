@@ -13,7 +13,7 @@ import process from 'node:process';
 import { isDeepStrictEqual } from 'node:util';
 import express from 'express';
 import aiRouter from './routes/ai.mjs';
-import feedbackRouter from './routes/feedback.mjs';
+import { registerVisitAssistantRoutes } from './visitAssistantRoutes.mjs';
 import dataRetentionRouter from './routes/dataRetention.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import dotenv from 'dotenv';
@@ -9550,8 +9550,10 @@ app.put('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
   }
 });
 
+registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRecord,
+  canAccessDossierRecord, field, dataDir: DATA_DIR_PATH });
+
 app.use(aiRouter);
-app.use(feedbackRouter);
 app.use(dataRetentionRouter);
 
 app.all(['/', '/openapi.json'], (req, res, next) => {

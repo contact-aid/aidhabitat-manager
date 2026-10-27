@@ -1,3 +1,5 @@
+import '../services/visit_assistant_service.dart' show VisitAssistantConfig;
+import '../services/visit_ai_notes.dart';
 import '../services/ai_rewrite_context.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -428,6 +430,34 @@ class NotesWidget extends StatefulWidget {
 
 class _NotesWidgetState extends State<NotesWidget> {
   final DataService _dataService = DataService();
+  StreamSubscription<VisitNoteInsertion>? _visitInsertionSubscription;
+  final Map<int, Map<String, dynamic>> _pageVisitInsertions = {};
+
+  void _acceptVisitInsertion(VisitNoteInsertion insertion) {
+    if (!mounted ||
+        !widget.showText ||
+        insertion.patientId != widget.patientId ||
+        insertion.tabKey != widget.tabKey) {
+      return;
+    }
+    final known = _pageVisitInsertions.putIfAbsent(0, () => {});
+    if (known.containsKey(insertion.receipt)) return;
+    known[insertion.receipt] = insertion.text;
+    final base = _currentPage == 0 || widget.sharedText
+        ? _textController.text
+        : (_pageTexts[0] ?? '');
+    final next = appendVisitParagraph(base, insertion.text);
+    _pageTexts[0] = next;
+    if (_currentPage == 0 || widget.sharedText) {
+      final selection = _textController.selection;
+      _setControllerSilently(next);
+      if (selection.isValid && selection.end <= next.length) {
+        _textController.selection = selection;
+      }
+      _emitDraft();
+    }
+    setState(() {});
+  }
 
   Future<String?> _fetchNoteDrawingJson({
     required String patientId,
@@ -449,6 +479,12 @@ class _NotesWidgetState extends State<NotesWidget> {
     int pageNumber = 0,
     String? previewDataUrl,
   }) {
+    final known = _pageVisitInsertions[pageNumber];
+    if (known != null && known.isNotEmpty) {
+      final payload = jsonDecode(drawingJson) as Map<String, dynamic>;
+      payload[visitAiMetadataKey] = {...visitAiInsertions(payload), ...known};
+      drawingJson = jsonEncode(payload);
+    }
     return _dataService.saveNoteDrawingJson(
       patientId: patientId,
       tabKey: tabKey,
@@ -605,6 +641,9 @@ class _NotesWidgetState extends State<NotesWidget> {
     _activeTool = widget.activeTool ?? _availableToolsFor(widget.toolset).first;
     _previousTool = _defaultPreviousToolFor(_activeTool);
     _textController.addListener(_onTextChanged);
+    _visitInsertionSubscription = VisitNoteEvents.stream.listen(
+      _acceptVisitInsertion,
+    );
     _loadPages();
 
     _syncSubscription = SyncEngine().stateStream.listen((state) {
@@ -866,6 +905,7 @@ class _NotesWidgetState extends State<NotesWidget> {
     final disposeCurrentPage = _currentPage;
     final disposeTotalPages = _totalPages;
     final disposeSharedText = widget.sharedText;
+    _visitInsertionSubscription?.cancel();
     final disposeText = _textController.text;
     final disposeCurrentJson = _currentDrawingJson();
     final disposePageTexts = Map<int, String>.from(_pageTexts);
@@ -1134,6 +1174,8 @@ class _NotesWidgetState extends State<NotesWidget> {
     return jsonEncode({
       'version': 1,
       'text': _textController.text,
+      if (_pageVisitInsertions[_currentPage]?.isNotEmpty == true)
+        visitAiMetadataKey: _pageVisitInsertions[_currentPage],
       'strokes': _strokes.map((s) => s.toJson()).toList(),
       // Champ facultatif — omis quand il n'y a pas de flags pour éviter de
       // polluer les notes non-médicales. Trié pour un JSON stable.
@@ -1357,6 +1399,22 @@ class _NotesWidgetState extends State<NotesWidget> {
         if (hydrateController) _setControllerSilently('');
         return;
       }
+      // A local read begun before an insertion can finish afterwards. Keep
+      // the insertion visible until that reader has observed its receipt.
+      final knownInsertions = _pageVisitInsertions[page] ?? {};
+      final incomingInsertions = visitAiInsertions(decoded);
+      for (final entry in knownInsertions.entries) {
+        if (!incomingInsertions.containsKey(entry.key)) {
+          decoded['text'] = appendVisitParagraph(
+            decoded['text']?.toString() ?? '',
+            entry.value.toString(),
+          );
+          incomingInsertions[entry.key] = entry.value;
+        }
+      }
+      if (incomingInsertions.isNotEmpty) {
+        decoded[visitAiMetadataKey] = incomingInsertions;
+      }
       final text =
           page != 0 &&
               widget.sharedText &&
@@ -1364,6 +1422,10 @@ class _NotesWidgetState extends State<NotesWidget> {
               _sharedTextInitialized
           ? (_pageTexts[0] ?? '')
           : (decoded['text']?.toString() ?? '');
+      _pageVisitInsertions[page] = {
+        ...visitAiInsertions(decoded),
+        ...?_pageVisitInsertions[page],
+      };
       final rawStrokes = decoded['strokes'] as List?;
       final strokes = rawStrokes == null
           ? <Stroke>[]
@@ -2594,7 +2656,10 @@ class _NotesWidgetState extends State<NotesWidget> {
                     padding: EdgeInsets.fromLTRB(
                       widget.allowTextModal ? 38 : 16,
                       12,
-                      VoiceDictationButton.isSupported ? 92 : 54,
+                      (!VisitAssistantConfig.enabled &&
+                              VoiceDictationButton.isSupported)
+                          ? 92
+                          : 54,
                       6,
                     ),
                     child: TextField(
@@ -2652,7 +2717,8 @@ class _NotesWidgetState extends State<NotesWidget> {
                   ),
                 ),
               ),
-            if (VoiceDictationButton.isSupported)
+            if ((!VisitAssistantConfig.enabled &&
+                VoiceDictationButton.isSupported))
               Positioned(
                 right: 8,
                 top: 8,
@@ -2669,7 +2735,11 @@ class _NotesWidgetState extends State<NotesWidget> {
                 ),
               ),
             Positioned(
-              right: VoiceDictationButton.isSupported ? 48 : 8,
+              right:
+                  (!VisitAssistantConfig.enabled &&
+                      VoiceDictationButton.isSupported)
+                  ? 48
+                  : 8,
               top: 8,
               child: _AiRewriteButton(
                 controller: _textController,
@@ -3083,7 +3153,9 @@ class _NotesWidgetState extends State<NotesWidget> {
     final editorPadding = EdgeInsets.fromLTRB(
       widget.allowTextModal ? 38 : 14,
       10,
-      VoiceDictationButton.isSupported ? 92 : 52,
+      (!VisitAssistantConfig.enabled && VoiceDictationButton.isSupported)
+          ? 92
+          : 52,
       10,
     );
     final textField = TextField(
@@ -3138,7 +3210,7 @@ class _NotesWidgetState extends State<NotesWidget> {
               ),
             ),
           ),
-        if (VoiceDictationButton.isSupported)
+        if ((!VisitAssistantConfig.enabled && VoiceDictationButton.isSupported))
           Positioned(
             right: 8,
             top: 8,
@@ -3155,7 +3227,11 @@ class _NotesWidgetState extends State<NotesWidget> {
             ),
           ),
         Positioned(
-          right: VoiceDictationButton.isSupported ? 48 : 8,
+          right:
+              (!VisitAssistantConfig.enabled &&
+                  VoiceDictationButton.isSupported)
+              ? 48
+              : 8,
           top: 8,
           child: _AiRewriteButton(
             controller: _textController,
@@ -4624,7 +4700,8 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
                                     contentPadding: EdgeInsets.fromLTRB(
                                       14,
                                       14,
-                                      VoiceDictationButton.isSupported
+                                      (!VisitAssistantConfig.enabled &&
+                                              VoiceDictationButton.isSupported)
                                           ? 56
                                           : 14,
                                       14,
@@ -4632,7 +4709,8 @@ class _FloatingTextModalState extends State<_FloatingTextModal>
                                   ),
                             ),
                           ),
-                          if (VoiceDictationButton.isSupported)
+                          if ((!VisitAssistantConfig.enabled &&
+                              VoiceDictationButton.isSupported))
                             Positioned(
                               right: 12,
                               top: 12,

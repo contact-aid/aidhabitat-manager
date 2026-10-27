@@ -1,9 +1,12 @@
+import { createVisitProvider, visitError } from '../visitAssistant.mjs';
 import express from 'express';
 import { requireAuth } from '../middleware/auth.mjs';
 import {
   getLocalAiStatus,
   normalizeRewriteMode,
   rewriteNote,
+  buildRewriteMessages,
+  findMissingProtectedFragments,
 } from '../ai/rewrite.mjs';
 
 const router = express.Router();
@@ -26,7 +29,10 @@ const checkRateLimit = (userId) => {
 };
 
 router.get('/api/ai/status', requireAuth, async (_req, res) => {
-  const status = await getLocalAiStatus();
+  const status = process.env.VISIT_ASSISTANT_ENABLED === 'true'
+    ? { ready: Boolean(process.env.OPENROUTER_API_KEY && process.env.VISIT_AI_MODEL),
+        webEnabled: true, provider: 'openrouter', model: process.env.VISIT_AI_MODEL || null }
+    : await getLocalAiStatus();
   res.json({
     success: true,
     error: null,
@@ -61,6 +67,15 @@ router.post('/api/ai/rewrite', requireAuth, async (req, res, next) => {
       return;
     }
 
+    if (process.env.VISIT_ASSISTANT_ENABLED === 'true') {
+      const mode = normalizeRewriteMode(req.body?.mode);
+      const rewritten = await createVisitProvider().rewrite(buildRewriteMessages(text, mode, req.body?.context));
+      if (findMissingProtectedFragments(text, rewritten).length) {
+        throw visitError(422, 'La proposition a modifié une donnée protégée. La note est conservée.');
+      }
+      res.json({ success: true, data: { text: rewritten, mode, model: process.env.VISIT_AI_MODEL } });
+      return;
+    }
     const result = await rewriteNote({
       text,
       mode: normalizeRewriteMode(req.body?.mode),
@@ -72,6 +87,11 @@ router.post('/api/ai/rewrite', requireAuth, async (req, res, next) => {
       data: result,
     });
   } catch (error) {
+    if (process.env.VISIT_ASSISTANT_ENABLED === 'true') {
+      res.status(error.statusCode || 503).json({ success: false,
+        error: error.statusCode ? error.message : 'La reformulation est indisponible. La note est conservée.' });
+      return;
+    }
     next(error);
   }
 });

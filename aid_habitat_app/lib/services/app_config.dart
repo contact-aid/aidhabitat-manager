@@ -100,8 +100,34 @@ class AppConfig {
   static String _sanitizeApiBaseUrl(String url) {
     final trimmed = url.trim().replaceAll(RegExp(r'/+$'), '');
     if (trimmed.isEmpty) return '';
-    if (kReleaseMode && !_isHttpsUrl(trimmed)) return '';
+    if (kReleaseMode && !_isHttpsUrl(trimmed) && !_isPrivatePreviewUrl(trimmed)) {
+      return '';
+    }
     return trimmed;
+  }
+
+  // Compile-time opt-in for the separately signed fictitious device preview.
+  // Normal release builds retain their HTTPS-only behavior.
+  static bool _isPrivatePreviewUrl(String url) {
+    if (!const bool.fromEnvironment('AIDHABITAT_PREVIEW_LOCAL_HTTP')) {
+      return false;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        uri.scheme != 'http' ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return false;
+    }
+    final octets = uri.host.split('.').map(int.tryParse).toList();
+    if (octets.length != 4 || octets.any((v) => v == null || v < 0 || v > 255)) {
+      return false;
+    }
+    return octets[0] == 127 ||
+        octets[0] == 10 ||
+        (octets[0] == 192 && octets[1] == 168) ||
+        (octets[0] == 172 && octets[1]! >= 16 && octets[1]! <= 31);
   }
 
   static bool _isHttpsUrl(String url) {
