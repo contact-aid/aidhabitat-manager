@@ -1,3 +1,4 @@
+import 'visit_ai_notes.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -374,6 +375,26 @@ class NoteRepository {
     return result;
   }
 
+  Future<void> appendVisitText({
+    required String patientId,
+    required String dossierId,
+    required String tabKey,
+    required String recordingId,
+    required String text,
+  }) => saveDrawingJson(
+    patientId: patientId,
+    dossierId: dossierId,
+    tabKey: tabKey,
+    drawingJson: '{}',
+    mutationOrigin: SyncMutationOrigin.userEdit,
+    visitInsertion: VisitNoteInsertion(
+      patientId,
+      tabKey,
+      '$recordingId::$tabKey',
+      text,
+    ),
+  );
+
   Future<void> saveDrawingJson({
     required String patientId,
     required String tabKey,
@@ -384,6 +405,7 @@ class NoteRepository {
     String? scopeType,
     String? scopeId,
     required SyncMutationOrigin mutationOrigin,
+    VisitNoteInsertion? visitInsertion,
   }) async {
     drawingJson = stampNoteTextInitialization(tabKey, pageNumber, drawingJson);
     final db = await _database.database;
@@ -391,6 +413,7 @@ class NoteRepository {
     final noteId = 'note_${patientId}_${tabKey}_$pageNumber';
     final operationId = 'sync_$noteId';
 
+    var inserted = false;
     await db.transaction((txn) async {
       // Préserve `plan_phase` à travers un save : on n'écrase pas la
       // catégorie avant/après travaux quand l'ergo continue de dessiner.
@@ -401,6 +424,60 @@ class NoteRepository {
         whereArgs: [patientId, tabKey, pageNumber],
         limit: 1,
       );
+      final storedDrawing = existing.isEmpty
+          ? null
+          : await OfflineVault.instance.openNullableString(
+              existing.first['drawing_json'] as String?,
+            );
+      if (visitInsertion != null) {
+        final receipt = visitInsertion.receipt;
+        final applied = await txn.query(
+          'visit_ai_receipts',
+          where: 'receipt = ?',
+          whereArgs: [receipt],
+        );
+        if (applied.isNotEmpty) return;
+        final existingDossier = existing.isEmpty
+            ? null
+            : existing.first['dossier_local_id'];
+        if (existingDossier != null && existingDossier != dossierId) {
+          throw StateError('La note appartient à un autre dossier.');
+        }
+        final drawing = storedDrawing == null || storedDrawing.isEmpty
+            ? <String, dynamic>{'version': 1, 'text': '', 'strokes': []}
+            : jsonDecode(storedDrawing) as Map<String, dynamic>;
+        if (visitAiInsertions(drawing).containsKey(receipt)) {
+          // The note may already have arrived through normal cross-device
+          // synchronization before this device created its local receipt.
+          await txn.insert('visit_ai_receipts', {
+            'receipt': receipt,
+            'dossier_id': dossierId,
+            'applied_at': now,
+          });
+          return;
+        }
+        drawing['text'] = appendVisitParagraph(
+          drawing['text']?.toString() ?? '',
+          visitInsertion.text,
+        );
+        drawing[visitAiMetadataKey] = {
+          ...visitAiInsertions(drawing),
+          receipt: visitInsertion.text,
+        };
+        drawingJson = stampNoteTextInitialization(
+          tabKey,
+          pageNumber,
+          jsonEncode(drawing),
+        );
+        inserted = true;
+        await txn.insert('visit_ai_receipts', {
+          'receipt': receipt,
+          'dossier_id': dossierId,
+          'applied_at': now,
+        });
+      } else {
+        drawingJson = preserveUnseenVisitInsertions(drawingJson, storedDrawing);
+      }
       final preservedPhase = existing.isNotEmpty
           ? existing.first['plan_phase'] as String?
           : (tabKey == 'Plans' &&
@@ -510,6 +587,9 @@ class NoteRepository {
         'updated_at': now,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
+    if (inserted && visitInsertion != null) {
+      VisitNoteEvents.emit(visitInsertion);
+    }
     SyncEngine().notify();
   }
 

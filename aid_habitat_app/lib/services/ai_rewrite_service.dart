@@ -1,3 +1,4 @@
+import 'visit_assistant_service.dart' show VisitAssistantConfig;
 import 'dart:async';
 import 'dart:convert';
 
@@ -67,6 +68,12 @@ class AiRewriteService {
     String? apiBaseUrl,
     String? sessionToken,
   }) async {
+    if (VisitAssistantConfig.enabled) {
+      return _remoteAvailable(
+        apiBaseUrl: apiBaseUrl,
+        sessionToken: sessionToken,
+      );
+    }
     if (kIsWeb) {
       if (await isServerRewriteAvailable(
         apiBaseUrl: apiBaseUrl,
@@ -116,6 +123,7 @@ class AiRewriteService {
   }
 
   Future<bool> needsPreparation() async {
+    if (VisitAssistantConfig.enabled) return false;
     if (!kIsWeb) return false;
     if (await isServerRewriteAvailable()) return false;
     final status = await web_ai.localAiStatus();
@@ -151,6 +159,15 @@ class AiRewriteService {
     String? sessionToken,
   }) async {
     final sourceText = text.trim();
+    if (VisitAssistantConfig.enabled) {
+      return _rewriteRemotely(
+        text: sourceText,
+        mode: mode,
+        context: context,
+        apiBaseUrl: apiBaseUrl,
+        sessionToken: sessionToken,
+      );
+    }
     if (sourceText.length < 3) {
       throw Exception('La note est trop courte pour être reformulée.');
     }

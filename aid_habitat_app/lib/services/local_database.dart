@@ -1,3 +1,4 @@
+import 'visit_assistant_store.dart' show createVisitAssistantSchema;
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -33,7 +34,7 @@ class LocalDatabase {
   static final LocalDatabase instance = LocalDatabase._();
   static const _dbName = 'aid_habitat_offline.db';
   static const _debugFallbackDbName = 'aid_habitat_offline.debug_fallback.db';
-  static const _dbVersion = 27;
+  static const _dbVersion = 28;
 
   Database? _database;
   Future<Database>? _opening;
@@ -354,6 +355,7 @@ class LocalDatabase {
   // ---------------------------------------------------------------------------
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 28) await createVisitAssistantSchema(db);
     // Run each migration step in sequence so upgrading from any old version
     // to any new version works correctly (e.g. 1->4 runs steps 2, 3, 4).
     if (oldVersion < 2) {
@@ -1189,6 +1191,7 @@ class LocalDatabase {
   // ---------------------------------------------------------------------------
 
   Future<void> _onCreate(Database db, int version) async {
+    await createVisitAssistantSchema(db);
     await db.execute('''
       CREATE TABLE app_users (
         local_id TEXT PRIMARY KEY,

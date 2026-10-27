@@ -1,3 +1,4 @@
+import 'services/visit_assistant_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show PlatformDispatcher;
@@ -264,6 +265,7 @@ Future<void> main(List<String> args) async {
   // revient, le SyncEngine lance automatiquement un push des opérations
   // en attente (notes, documents, dossiers…) vers NocoDB.
   ConnectivityService().bindSyncEngine(SyncEngine());
+  VisitAssistantService.instance.initialize();
   // Active l'écoute des drops OS → Flutter (web uniquement). Permet à
   // l'ergo de glisser un fichier depuis le Finder Mac vers une section
   // Photos du VAD ou vers l'espace Documents. Sur natif (iPad

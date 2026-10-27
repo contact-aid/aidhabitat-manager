@@ -1,3 +1,4 @@
+import '../components/visit_recording_button.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1693,7 +1694,14 @@ class _DocumentsScreenState extends State<DocumentsScreen>
     return BeneficiaryHeader(
       dossier: widget.dossier,
       onBack: widget.onBack,
-      trailing: widget.onOpenVisitReport == null ? null : _buildVisitShortcut(),
+      trailing: Wrap(
+        spacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          VisitRecordingButton(dossier: widget.dossier),
+          if (widget.onOpenVisitReport != null) _buildVisitShortcut(),
+        ],
+      ),
     );
   }
 

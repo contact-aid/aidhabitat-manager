@@ -1,3 +1,6 @@
+import '../services/visit_assistant_service.dart';
+import '../components/visit_recording_button.dart';
+import 'visit_report/transcript_tab.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -202,6 +205,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // (les 2 cadres notes ont déménagé dans Résumé). Alimente la
     // page 6 du PDF (« Préconisations »).
     'Préconisations',
+    if (VisitAssistantConfig.enabled) 'Transcription et IA',
   ];
 
   /// Sous-sections de chaque onglet. Le panneau notes à droite affiche
@@ -2967,6 +2971,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 _dossierDetailPullToken + widget.conflictRefreshToken,
           ),
         ),
+        if (VisitAssistantConfig.enabled)
+          VisitTranscriptTab(dossierId: _dossier.id),
       ],
     );
 
@@ -2993,6 +2999,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                       onPressed: _openingDocuments ? null : _openDocuments,
                     ),
                   ],
+                  VisitRecordingButton(dossier: _dossier),
                   _buildGenerateReportButton(),
                 ],
               ),
