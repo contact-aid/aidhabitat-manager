@@ -331,7 +331,7 @@ class _SyncOwnershipReviewScreenState extends State<SyncOwnershipReviewScreen> {
             'Vos sauvegardes restent conservées sur ce navigateur ou cet appareil. '
             'Le compte actif a changé ou ne permet plus cette confirmation. '
             'Ne videz pas les données de l’application et ne supprimez pas les '
-            'sauvegardes en attente. Utilisez « Signaler » depuis la page précédente '
+            'sauvegardes en attente. Contactez votre administrateur '
             'pour demander une intervention, sans transmettre le contenu des sauvegardes.',
       );
     }

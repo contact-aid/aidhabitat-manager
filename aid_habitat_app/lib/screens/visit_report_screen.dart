@@ -90,7 +90,6 @@ class VisitReportScreen extends StatefulWidget {
   final int patientConflictRefreshToken;
   final VoidCallback onBack;
   final ValueChanged<Dossier>? onOpenDocuments;
-  final ValueChanged<String>? onContextChanged;
 
   const VisitReportScreen({
     super.key,
@@ -101,7 +100,6 @@ class VisitReportScreen extends StatefulWidget {
     this.patientConflictRefreshToken = 0,
     required this.onBack,
     this.onOpenDocuments,
-    this.onContextChanged,
   });
 
   @override
@@ -355,9 +353,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     );
     _lastHandledTabIndex = initialTabIndex;
     _tabController.addListener(_handleTabChange);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _notifyContextChanged();
-    });
     _refreshDossier();
 
     // Synchronise l'état "génération en cours" avec le singleton global —
@@ -789,7 +784,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       }
     }
     _VisitReportStateCache.setTabIndex(_dossier.id, _tabController.index);
-    _notifyContextChanged();
     setState(() {});
   }
 
@@ -803,20 +797,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // Also refresh when the room edit was saved by the debounce timer before
     // navigation, or when the target tab was already mounted.
     setState(() => _housingVersion++);
-  }
-
-  void _notifyContextChanged() {
-    final tabIndex = _tabController.index.clamp(0, _tabs.length - 1).toInt();
-    final tab = _tabs[tabIndex];
-    final subsections = _tabSubsections[tab];
-    final sectionIndex = _activeSubsectionByTab[tab] ?? 0;
-    final safeSectionIndex = subsections == null || subsections.isEmpty
-        ? 0
-        : sectionIndex.clamp(0, subsections.length - 1).toInt();
-    final section = subsections == null || subsections.isEmpty
-        ? tab
-        : '$tab / ${subsections[safeSectionIndex]}';
-    widget.onContextChanged?.call(section);
   }
 
   /// Compteur incrémenté à chaque pull bulk de notes terminé. Passé en
@@ -2657,7 +2637,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     setState(() {
       _activeSubsectionByTab[tabName] = index;
     });
-    _notifyContextChanged();
   }
 
   void _navigateToAccessibilityLevels() {

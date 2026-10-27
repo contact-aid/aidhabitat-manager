@@ -971,17 +971,16 @@ def build_document():
     add_steps(
         document,
         [
-            "Toucher Signaler dans l’application.",
-            "Choisir le type de problème.",
+            "Contacter votre administrateur.",
             "Décrire l’action réalisée juste avant le problème.",
-            "Envoyer le signalement.",
+            "Transmettre ces éléments sans joindre de données sensibles.",
         ],
         ordered_num_id,
     )
     add_callout(
         document,
         "Message utile",
-        "Décrire uniquement le problème observé. Le nom du dossier et l’onglet sont déjà ajoutés automatiquement au signalement. Exemple : « Après l’ajout d’une ligne, un bandeau rouge s’affiche. L’opération n’a pas été abandonnée. »",
+        "Décrire uniquement le problème observé. Préciser l’écran et l’onglet concernés. Exemple : « Après l’ajout d’une ligne, un bandeau rouge s’affiche. L’opération n’a pas été abandonnée. »",
         kind="success",
     )
 

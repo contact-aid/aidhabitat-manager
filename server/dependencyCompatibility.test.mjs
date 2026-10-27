@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import multer from 'multer';
-import nodemailer from 'nodemailer';
 import express from 'express';
 import qs from 'qs';
 import Ajv from 'ajv';
@@ -123,31 +122,6 @@ test('interrupted memory and disk uploads complete with error and clean partial 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
-
-test('nodemailer renders feedback-style MIME in memory with no SMTP delivery', async () => {
-  const transport = nodemailer.createTransport({
-    streamTransport: true, buffer: true, newline: 'unix',
-    disableFileAccess: true, disableUrlAccess: true,
-  });
-  const result = await transport.sendMail({
-    from: 'app@example.invalid', to: 'support@example.invalid',
-    replyTo: 'author@example.invalid', subject: 'Synthetic feedback',
-    text: 'Synthetic body', html: '<p>Synthetic body</p>',
-    attachments: [{ filename: 'fixture.txt', content: Buffer.from('synthetic attachment') }],
-  });
-  assert.deepEqual(result.envelope.to, ['support@example.invalid']);
-  const message = result.message.toString();
-  assert.match(message, /Subject: Synthetic feedback/);
-  assert.match(message, /Reply-To: author@example.invalid/);
-  assert.match(message, /multipart\/mixed/);
-  assert.match(message, /fixture.txt/);
-  assert.match(message, /Synthetic body/);
-  await assert.rejects(transport.sendMail({
-    from: 'app@example.invalid', to: 'support@example.invalid',
-    attachments: [{ path: '/nonexistent-agent5-fixture' }],
-  }), /File access rejected/i);
-  transport.close();
 });
 
 test('qs remains compatible with Express extended query parsing and rejects prototype injection', () => {

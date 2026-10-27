@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
-import '../components/feedback_tab.dart';
 import '../components/dossier_loading_status.dart';
 import '../models/dossier_refresh_phase.dart';
 import '../components/report_generation_overlay.dart';
@@ -24,7 +23,6 @@ import '../services/auth_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
 import '../services/dossier_repository.dart';
-import '../services/feedback_activity_service.dart';
 import '../services/references_service.dart';
 import '../services/sync_engine.dart';
 import '../services/local_database.dart';
@@ -82,7 +80,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _isLoading = true;
   bool _isOffline = false;
   String? _lastSyncError;
-  String _activeVisitSection = '';
   int _conflictRefreshToken = 0;
   int _housingConflictRefreshToken = 0;
   int _contextConflictRefreshToken = 0;
@@ -259,9 +256,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       view == 'dossier_detail' || view == 'visit_report';
 
   void _handleViewChange(String view) {
-    FeedbackActivityService.instance.track(
-      'Navigation vers ${_labelForView(view)}',
-    );
     // Pousser l'écran courant dans l'historique seulement si on change
     // vraiment de vue (évite d'empiler les doublons lors d'un re-clic
     // sur l'onglet actif).
@@ -308,9 +302,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _handleSelectDossier(Dossier dossier) {
-    FeedbackActivityService.instance.track(
-      'Ouverture du dossier ${_dossierDisplayName(dossier)}',
-    );
     _pushHistory();
     setState(() {
       _selectedDossier = dossier;
@@ -342,7 +333,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _handleSyncNow() {
-    FeedbackActivityService.instance.track('Synchronisation manuelle');
     _syncEngine.requestFullSync();
   }
 
@@ -664,137 +654,83 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return ReportGenerationOverlay(
-      child: Stack(
-        children: [
-          Scaffold(
-            body: SafeArea(
-              left: false,
-              right: false,
-              bottom: false,
-              child: Row(
-                children: [
-                  Sidebar(
-                    currentUser: widget.currentUser,
-                    // "dossier_detail", "visit_report" et "documents" remappent
-                    // à l'entrée Dossiers du menu latéral pour que la mise en
-                    // surbrillance reste cohérente — la sidebar est visible
-                    // pendant ces 3 écrans (cf. demande utilisateur 2026-04-29
-                    // qui voulait voir la sidebar sur Documents aussi).
-                    currentView:
-                        (_activeView == 'dossier_detail' ||
-                            _activeView == 'visit_report' ||
-                            _activeView == 'documents')
-                        ? 'dossiers'
-                        : _activeView,
-                    onNavigate: _handleViewChange,
-                    onLogout: widget.onLogout,
-                    pendingSyncCount: _pendingSyncCount,
-                    isSyncing: _isSyncing,
-                    onSyncTap: _handleSyncNow,
-                    onReviewSync: _showFailingOpDetails,
-                  ),
-                  Expanded(
-                    child: Column(
-                      children: [
-                        // Offline banner
-                        AnimatedSize(
-                          duration: const Duration(milliseconds: 250),
-                          child: _buildConnectivityBanner(),
-                        ),
-                        Expanded(
-                          child: _isLoading
-                              ? const Center(child: CircularProgressIndicator())
-                              : Stack(
-                                  children: [
-                                    // Transition douce (fade + slide 8 px) entre
-                                    // chaque vue — on assigne une Key unique à
-                                    // `_buildContent()` pour que l'AnimatedSwitcher
-                                    // détecte un changement et joue l'animation.
-                                    Positioned.fill(
-                                      child: SoftSwitcher(
-                                        child: KeyedSubtree(
-                                          key: ValueKey<String>(_contentKey()),
-                                          child: _buildContent(),
-                                        ),
+      child: Scaffold(
+        body: SafeArea(
+          left: false,
+          right: false,
+          bottom: false,
+          child: Row(
+            children: [
+              Sidebar(
+                currentUser: widget.currentUser,
+                // "dossier_detail", "visit_report" et "documents" remappent
+                // à l'entrée Dossiers du menu latéral pour que la mise en
+                // surbrillance reste cohérente — la sidebar est visible
+                // pendant ces 3 écrans (cf. demande utilisateur 2026-04-29
+                // qui voulait voir la sidebar sur Documents aussi).
+                currentView:
+                    (_activeView == 'dossier_detail' ||
+                        _activeView == 'visit_report' ||
+                        _activeView == 'documents')
+                    ? 'dossiers'
+                    : _activeView,
+                onNavigate: _handleViewChange,
+                onLogout: widget.onLogout,
+                pendingSyncCount: _pendingSyncCount,
+                isSyncing: _isSyncing,
+                onSyncTap: _handleSyncNow,
+                onReviewSync: _showFailingOpDetails,
+              ),
+              Expanded(
+                child: Column(
+                  children: [
+                    // Offline banner
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 250),
+                      child: _buildConnectivityBanner(),
+                    ),
+                    Expanded(
+                      child: _isLoading
+                          ? const Center(child: CircularProgressIndicator())
+                          : Stack(
+                              children: [
+                                // Transition douce (fade + slide 8 px) entre
+                                // chaque vue — on assigne une Key unique à
+                                // `_buildContent()` pour que l'AnimatedSwitcher
+                                // détecte un changement et joue l'animation.
+                                Positioned.fill(
+                                  child: SoftSwitcher(
+                                    child: KeyedSubtree(
+                                      key: ValueKey<String>(_contentKey()),
+                                      child: _buildContent(),
+                                    ),
+                                  ),
+                                ),
+                                // Anah WebView : on la garde en arrière-plan dès
+                                // qu'elle a été visitée au moins une fois, pour
+                                // préserver la session et le scroll entre deux
+                                // visites.
+                                if (_anahEverVisited)
+                                  Positioned.fill(
+                                    child: Offstage(
+                                      offstage: _activeView != 'anah',
+                                      child: TickerMode(
+                                        enabled: _activeView == 'anah',
+                                        child: const AnahScreen(),
                                       ),
                                     ),
-                                    // Anah WebView : on la garde en arrière-plan dès
-                                    // qu'elle a été visitée au moins une fois, pour
-                                    // préserver la session et le scroll entre deux
-                                    // visites.
-                                    if (_anahEverVisited)
-                                      Positioned.fill(
-                                        child: Offstage(
-                                          offstage: _activeView != 'anah',
-                                          child: TickerMode(
-                                            enabled: _activeView == 'anah',
-                                            child: const AnahScreen(),
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                        ),
-                      ],
+                                  ),
+                              ],
+                            ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
-          Positioned(
-            right: 0,
-            bottom: 18,
-            child: FeedbackTab(
-              currentUser: widget.currentUser,
-              contextSnapshot: _feedbackContextSnapshot,
-            ),
-          ),
-        ],
+        ),
       ),
     );
-  }
-
-  FeedbackContextSnapshot _feedbackContextSnapshot() {
-    final dossier = _selectedDossier;
-    return FeedbackActivityService.instance.snapshot(
-      page: _labelForView(_activeView),
-      dossierId: dossier?.id ?? '',
-      dossierName: dossier == null ? '' : _dossierDisplayName(dossier),
-      section: _activeView == 'visit_report' ? _activeVisitSection : '',
-    );
-  }
-
-  static String _dossierDisplayName(Dossier dossier) {
-    final firstName = dossier.patient.firstName.trim();
-    final lastName = dossier.patient.lastName.trim();
-    final fullName = [lastName, firstName].where((p) => p.isNotEmpty).join(' ');
-    return fullName.isEmpty ? dossier.id : fullName;
-  }
-
-  static String _labelForView(String view) {
-    switch (view) {
-      case 'dashboard':
-        return 'Tableau de bord';
-      case 'dossiers':
-        return 'Mes dossiers';
-      case 'dossier_detail':
-        return 'Dossier bénéficiaire';
-      case 'visit_report':
-        return 'Relevé de visite';
-      case 'documents':
-        return 'Espace documents';
-      case 'wiki':
-        return 'Bibliothèque';
-      case 'precos':
-        return 'Caisses de retraite';
-      case 'anah':
-        return 'ANAH';
-      case 'settings':
-        return 'Paramètres';
-      default:
-        return view;
-    }
   }
 
   /// Banner at the top of the shell. Three cases (priority order):
@@ -973,9 +909,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             print('[main] onOpenVisitReport ignoré: _selectedDossier=null');
             return;
           }
-          FeedbackActivityService.instance.track(
-            'Ouverture du relevé de visite ${_dossierDisplayName(selected)}',
-          );
+
           final fresh = await _dataService.fetchDossierById(selected.id);
           if (!mounted) return;
           _pushHistory();
@@ -1001,9 +935,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             print('[main] onOpenDocuments ignoré: _selectedDossier=null');
             return;
           }
-          FeedbackActivityService.instance.track(
-            'Ouverture documents ${_dossierDisplayName(selected)}',
-          );
+
           final fresh = await _dataService.fetchDossierById(selected.id);
           if (!mounted) return;
           _pushHistory();
@@ -1067,13 +999,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         housingConflictRefreshToken: _housingConflictRefreshToken,
         contextConflictRefreshToken: _contextConflictRefreshToken,
         patientConflictRefreshToken: _patientConflictRefreshToken,
-        onContextChanged: (section) {
-          if (!mounted || section == _activeVisitSection) return;
-          setState(() => _activeVisitSection = section);
-          FeedbackActivityService.instance.track(
-            'Navigation relevé : $section',
-          );
-        },
         onBack: () async {
           // Re-fetch the dossier pour que l'écran précédent voit les
           // éventuelles modifs (nom, ville…) faites dans le rapport.

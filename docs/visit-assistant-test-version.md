@@ -166,3 +166,14 @@ sans purge automatique dans cette version de test.
   cette variante comme prête pour une recette complète sur une visite réelle.
 - L’iPad de Coralie est disponible pour l’installation directe. Celui de
   Christelle est indisponible ; son installation physique reste à effectuer.
+
+## Retrait de « Signaler » pour la prochaine mise à jour
+
+Le bouton flottant, son formulaire, les services de collecte du contexte,
+le suivi des changements de page/onglet et les routes d’envoi/diagnostic SMTP
+sont supprimés. La dépendance Nodemailer, utilisée uniquement par cette
+fonction, est retirée. Les textes d’aide orientent vers l’administrateur.
+Le style partagé des boutons reste utilisé par les autres commandes.
+Les anciens signalements stockés et leur gestion de conservation ne sont pas
+supprimés par cette modification. Les documents d’audit datés décrivent l’état
+historique du système. Ce changement attend la prochaine diffusion iPad/API.

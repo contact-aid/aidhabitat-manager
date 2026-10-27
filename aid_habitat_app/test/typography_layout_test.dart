@@ -1,11 +1,9 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:aid_habitat_app/models/types.dart';
-import 'package:aid_habitat_app/components/feedback_tab.dart';
 import 'package:aid_habitat_app/components/cta_text_style.dart';
 import 'package:aid_habitat_app/components/beneficiary_header.dart';
 import 'package:aid_habitat_app/components/beneficiary_badges.dart';
 import 'package:aid_habitat_app/components/dossier_space_shortcut.dart';
-import 'package:aid_habitat_app/services/feedback_activity_service.dart';
 import 'package:aid_habitat_app/services/auth_service.dart';
 import 'package:aid_habitat_app/screens/dashboard_screen.dart';
 import 'package:aid_habitat_app/screens/dossier_screen.dart';
@@ -33,9 +31,7 @@ class _LayoutAuthService implements AuthService {
 }
 
 void main() {
-  testWidgets('CTA uses the former Signaler font variant at 14 px', (
-    tester,
-  ) async {
+  testWidgets('CTA uses the shared Quicksand font at 14 px', (tester) async {
     TextStyle? inheritedStyle;
     await tester.pumpWidget(
       MaterialApp(
@@ -331,46 +327,6 @@ void main() {
 
       await tester.pumpWidget(screen(online: true, refreshing: true));
       expect(tester.widget<ElevatedButton>(refreshButton).onPressed, isNull);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('Signaler panel fits at $width px', (tester) async {
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = Size(width, 800);
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Align(
-              alignment: Alignment.bottomRight,
-              child: FeedbackTab(
-                currentUser: const LocalAppUser(
-                  id: 'layout-test',
-                  email: 'test@example.invalid',
-                  displayName: 'Test',
-                  role: LocalUserRole.ergo,
-                ),
-                contextSnapshot: () => const FeedbackContextSnapshot(
-                  page: 'test',
-                  dossierId: '',
-                  dossierName: '',
-                  section: '',
-                  lastAction: '',
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const ValueKey('collapsed')),
-          matching: find.text('Signaler'),
-        ),
-      );
-      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
 

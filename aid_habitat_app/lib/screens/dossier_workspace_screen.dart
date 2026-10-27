@@ -10,7 +10,6 @@ class DossierWorkspaceScreen extends StatefulWidget {
   final bool initialDocuments;
   final VoidCallback onBack;
   final void Function(bool documents, Dossier dossier)? onSpaceChanged;
-  final ValueChanged<String>? onContextChanged;
   final int conflictRefreshToken;
   final int housingConflictRefreshToken;
   final int contextConflictRefreshToken;
@@ -22,7 +21,6 @@ class DossierWorkspaceScreen extends StatefulWidget {
     required this.onBack,
     this.initialDocuments = false,
     this.onSpaceChanged,
-    this.onContextChanged,
     this.conflictRefreshToken = 0,
     this.housingConflictRefreshToken = 0,
     this.contextConflictRefreshToken = 0,
@@ -63,7 +61,6 @@ class _DossierWorkspaceScreenState extends State<DossierWorkspaceScreen> {
       dossier: _dossier,
       onBack: widget.onBack,
       onOpenDocuments: (dossier) => _switchSpace(true, dossier),
-      onContextChanged: widget.onContextChanged,
       conflictRefreshToken: widget.conflictRefreshToken,
       housingConflictRefreshToken: widget.housingConflictRefreshToken,
       contextConflictRefreshToken: widget.contextConflictRefreshToken,
