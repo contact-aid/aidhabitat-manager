@@ -49,3 +49,15 @@ test('the report lists all complementary funds once, regardless of occupant or a
     'Fonds A, Fonds B sous conditions*');
   assert.equal(retirementFundLabelsForReport(['', null]), '/');
 });
+
+
+test('sanitary keyboard edits ignore old handwritten page texts, including after clearing', () => {
+  const pages = [
+    { ...page(0, 'Observation commune'), drawingJson: JSON.stringify({ text: 'Observation commune', noteTextInitialized: true }) },
+    page(1, 'Ancien texte page 2'),
+  ];
+  assert.equal(joinReportNotePagesText(pages, { canonicalPageZero: true }), 'Observation commune');
+  pages[0].drawingJson = JSON.stringify({ text: '', noteTextInitialized: true });
+  pages[0].textContent = 'Ancien texte ordinateur';
+  assert.equal(joinReportNotePagesText(pages, { canonicalPageZero: true }), '');
+});

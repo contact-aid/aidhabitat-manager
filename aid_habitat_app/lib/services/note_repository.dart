@@ -7,6 +7,7 @@ import '../models/types.dart';
 import '../models/visit_report_categories.dart';
 import 'local_database.dart';
 import 'independent_notes.dart';
+import 'sanitary_notes.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
@@ -264,7 +265,17 @@ class NoteRepository {
       ],
       limit: 1,
     );
-    if (rows.isEmpty) return null;
+    if (rows.isEmpty) {
+      if (!isSanitaryDrawingTab(tabKey)) return null;
+      return sanitaryLegacyDrawing(
+        await fetchDrawingJson(
+          patientId: patientId,
+          tabKey: sanitaryTextTabKey,
+          pageNumber: pageNumber,
+          dossierId: dossierId,
+        ),
+      );
+    }
     return OfflineVault.instance.openNullableString(
       rows.first['drawing_json'] as String?,
     );

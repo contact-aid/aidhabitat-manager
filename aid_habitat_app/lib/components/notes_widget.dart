@@ -492,7 +492,8 @@ class _NotesWidgetState extends State<NotesWidget> {
   bool get _usesCanonicalSharedText =>
       widget.sharedText &&
       (widget.tabKey == 'notes_rapides' ||
-          widget.tabKey == 'Accessibilité-Notes');
+          widget.tabKey == 'Accessibilité-Notes' ||
+          widget.tabKey == 'Sanitaires-Notes');
   bool _sharedTextInitialized = false;
   // Flags médicaux par page (1 = Pathologie, 2 = Suivi, 3 = Sensoriel).
   // Sérialisés dans `drawing_json['medicalFlags']`. Utilisé uniquement

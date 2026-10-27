@@ -6525,7 +6525,7 @@ const fetchVadOverlayNotesForReport = async (patientId, dossierId) => {
         tabKey: 'WC-Config. & équipements',
       }),
     ]);
-    const joinPages = (pages) => {
+    const joinPages = (pages, options) => {
       const filtered = asArray(pages)
         .filter((pg) => !!pg)
         // Filtre scope : on accepte les notes dont le scopeId est :
@@ -6546,7 +6546,14 @@ const fetchVadOverlayNotesForReport = async (patientId, dossierId) => {
           return false;
         })
         .sort((a, b) => Number(a.pageNumber) - Number(b.pageNumber));
-      return joinReportNotePagesText(filtered) || null;
+      const text = joinReportNotePagesText(filtered, options);
+      // An explicitly cleared canonical observation must also suppress legacy fallback.
+      if (options?.canonicalPageZero && filtered.some((pg) => {
+        if (Number(pg.pageNumber) !== 0) return false;
+        try { return JSON.parse(String(pg.drawingJson || '{}')).noteTextInitialized === true; }
+        catch { return false; }
+      })) return text;
+      return text || null;
     };
     // `accessibilite` du PDF (page 5 / champ `Observations1` =
     // « Observations sur l'accessibilité ») : priorité au tabKey
@@ -6582,11 +6589,11 @@ const fetchVadOverlayNotesForReport = async (patientId, dossierId) => {
     // Fallback : concat des anciens tabKeys séparés au cas où un
     // dossier historique aurait encore des lignes legacy après le
     // déploiement de la migration.
-    const sanitairesUnifiedText = joinPages(sanitairesUnifiedPages);
+    const sanitairesUnifiedText = joinPages(sanitairesUnifiedPages, { canonicalPageZero: true });
     const sdbText = joinPages(sdbPages);
     const wcText = joinPages(wcPages);
     const sanitaires = (() => {
-      if (sanitairesUnifiedText && sanitairesUnifiedText.trim()) {
+      if (sanitairesUnifiedText !== null) {
         return sanitairesUnifiedText;
       }
       const merged = [sdbText, wcText]
