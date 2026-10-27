@@ -16,6 +16,7 @@ import 'data_service.dart';
 import 'note_repository.dart';
 import 'dossier_repository.dart';
 import 'visit_assistant_store.dart';
+import 'visit_audio_meter.dart';
 
 class VisitAssistantConfig {
   static const enabled = bool.fromEnvironment(
@@ -42,7 +43,8 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
   Map<String, dynamic>? _recording;
   List<Map<String, dynamic>> jobs = [];
   double level = 0;
-  final List<double> voiceLevels = List<double>.filled(4, 0);
+  final _audioMeter = VisitAudioMeter();
+  List<double> get voiceLevels => _audioMeter.levels;
   double duration = 0;
   String? error;
   String? get recordingDossierId => _recording?['dossierId'] as String?;
@@ -120,7 +122,7 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
         throw StateError('Le microphone n’a pas démarré.');
       }
       _recording = job;
-      voiceLevels.fillRange(0, 4, 0);
+      _audioMeter.reset();
       duration = 0;
       _meterTimer?.cancel();
       _meterTimer = Timer.periodic(
@@ -146,12 +148,14 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
     try {
       final state =
           await _channel.invokeMapMethod<String, dynamic>('status') ?? {};
-      level = (state['level'] as num?)?.toDouble() ?? 0;
-      voiceLevels.removeAt(0);
-      voiceLevels.add(level);
-      duration = (state['duration'] as num?)?.toDouble() ?? 0;
-      if (state['active'] != true) {
-        await stop(interrupted: state['interrupted'] == true);
+      _audioMeter.update(state);
+      level = _audioMeter.level;
+      duration = _audioMeter.duration;
+      if (error == 'Vérifie le microphone : son état n’est plus disponible.') {
+        error = null;
+      }
+      if (!_audioMeter.active) {
+        await stop(interrupted: _audioMeter.interrupted);
       }
       notifyListeners();
     } catch (_) {

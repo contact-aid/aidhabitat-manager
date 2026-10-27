@@ -5,6 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 bash "$script_dir/test_safely.sh" \
   test/services/visit_ai_notes_test.dart \
+  test/services/visit_audio_meter_test.dart \
   test/components/visit_ai_note_editor_test.dart \
   test/services/document_scanner_service_test.dart \
   test/services/sanitary_notes_test.dart \
