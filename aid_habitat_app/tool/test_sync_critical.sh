@@ -4,6 +4,14 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 bash "$script_dir/test_safely.sh" \
+  test/services/document_scanner_service_test.dart \
+  test/services/sanitary_notes_test.dart \
+  test/components/sanitary_notes_panel_test.dart \
+  test/screens/sanitary_room_links_test.dart \
+  test/screens/sanitary_multiple_rooms_ui_test.dart \
+  test/screens/sanitary_level_refresh_test.dart \
+  test/screens/visit_report/recommendations_refresh_test.dart \
+  test/typography_layout_test.dart \
   test/services/media_auth_origin_test.dart \
   test/components/plan_web_viewport_test.dart \
   test/screens/visit_report/photo_title_performance_test.dart \
