@@ -8,7 +8,9 @@ String stampNoteTextInitialization(
   String drawingJson,
 ) {
   if (page != 0 ||
-      (tabKey != 'notes_rapides' && tabKey != 'Bénéficiaire-Notes')) {
+      (tabKey != 'notes_rapides' &&
+          tabKey != 'Bénéficiaire-Notes' &&
+          tabKey != 'Sanitaires-Notes')) {
     return drawingJson;
   }
   final drawing = drawingJson.trim().isEmpty

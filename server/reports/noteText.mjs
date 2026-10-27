@@ -1,6 +1,15 @@
 // Shared written notes are mirrored on each handwritten page. Keep distinct
 // legacy page texts, but print each complete written note only once.
-export function joinReportNotePagesText(pages) {
+export function joinReportNotePagesText(pages, { canonicalPageZero = false } = {}) {
+  if (canonicalPageZero) {
+    const first = (Array.isArray(pages) ? pages : []).find(page => Number(page?.pageNumber) === 0);
+    try {
+      const drawing = JSON.parse(String(first?.drawingJson || '{}'));
+      if (drawing.noteTextInitialized === true) {
+        return drawing.deleted === true ? '' : String(drawing.text || '').trim();
+      }
+    } catch { /* Legacy pages keep their historical text until the next edit. */ }
+  }
   const seen = new Set();
   return (Array.isArray(pages) ? pages : [])
     .filter(Boolean)

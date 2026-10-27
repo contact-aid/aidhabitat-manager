@@ -36,6 +36,8 @@ import 'visit_report/beneficiary_tab.dart';
 import 'visit_report/context_tab.dart';
 import 'visit_report/mesures_tab.dart';
 import 'visit_report/accessibility_tab.dart';
+import '../services/sanitary_notes.dart';
+import 'visit_report/sanitary_notes_panel.dart';
 import 'visit_report/bathroom_tab.dart';
 import 'visit_report/wc_tab.dart';
 import 'visit_report/photos_tab.dart';
@@ -209,11 +211,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// notes latéral.
   ///
   /// Cas particulier (demande utilisateur 2026-04-29) : « Salle de bain »
-  /// et « WC » partagent désormais une note unique stockée sous le
-  /// tabKey [_kSharedSanitairesNotesTabKey], peu importe la sous-section
-  /// active. Saisir / supprimer dans l'un est immédiatement répliqué
-  /// dans l'autre. Voir [_resolveNotesTabKey] pour la logique de
-  /// résolution.
+  /// et « WC » partagent le texte sous [_kSharedSanitairesNotesTabKey].
+  /// Leurs dessins ont des clés distinctes dans [SanitaryNotesPanel].
   static const Map<String, List<String>> _tabSubsections = {
     'Bénéficiaire': ['Profil', 'Foyer', 'Santé', 'Admin'],
     'Contexte de vie': ['Médical', 'Autonomie'],
@@ -233,7 +232,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// renommes ce tabKey, les dossiers existants perdront leur note —
   /// pense à une migration côté `note_repository` (lecture des deux
   /// clés possibles, écriture sur la nouvelle).
-  static const String _kSharedSanitairesNotesTabKey = 'Sanitaires-Notes';
+  static const String _kSharedSanitairesNotesTabKey = sanitaryTextTabKey;
 
   /// TabKey unique pour la note partagée entre les 4 sous-sections de
   /// l'onglet « Bénéficiaire » (Profil, Foyer, Santé, Admin). Même pattern
@@ -712,6 +711,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // text when a click or drawing-only edit emits an unchanged draft.
     if (_liveText[key] == text) return;
     _liveText[key] = text;
+    if (tabKey == sanitaryTextTabKey && mounted) setState(() {});
     _saveDebounce.remove(key)?.cancel();
     if (kIsWeb) {
       note_window_web.sendNoteIpc(
@@ -1056,6 +1056,18 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// éviter le doublon avec les pills Profil/Foyer/Santé/Admin dans le
   /// formulaire lui-même.
   Widget _buildNotesPanel(String activeTab, List<String> subsections) {
+    if (activeTab == 'Salle de bain' || activeTab == 'WC') {
+      final liveKey = '${_dossier.patient.id}::$sanitaryTextTabKey';
+      return SanitaryNotesPanel(
+        patientId: _dossier.patient.id,
+        isBathroom: activeTab == 'Salle de bain',
+        liveText: _liveText[liveKey],
+        externalRefreshToken: _notesBulkPullToken,
+        onTextDraft: (draft) =>
+            _pushDraftToOpenWindow(sanitaryTextTabKey, draft.text),
+        onExpandText: () => _openNoteInSeparateWindow(sanitaryTextTabKey),
+      );
+    }
     final activeIdx = _activeSubsectionByTab[activeTab] ?? 0;
     final safeIdx = activeIdx.clamp(0, subsections.length - 1);
 
