@@ -4,19 +4,19 @@ import {normalizeHousingAccessBaseline,sameHousingSourceVersion} from './housing
 import {createGuardedMutation,SYNC_REVISION_FIELD} from './guardedMutation.mjs';
 const original='2026-10-29T08:00:00.123456Z', newer='2026-10-29T08:01:00.123456Z';
 const revision='11111111-1111-4111-8111-111111111111', writeId='22222222-2222-4222-8222-222222222222';
-function setup({time=original,baseline='false',desired='true',race=false}={}) {
+function setup({time=original,baseline='false',desired='true',race=false,raceAccess=null}={}) {
   let row={acces_facile_rue:null,garage:'false',rdc:'false',chauffage:'false',updatedAt:time,[SYNC_REVISION_FIELD]:revision};
   const writes=[];
   const mutate=createGuardedMutation({readRecord:async()=>structuredClone(row),writer:async input=>{
     writes.push(input);
-    if(race){row.updatedAt=newer;row[SYNC_REVISION_FIELD]='33333333-3333-4333-8333-333333333333';return {reason:'revision_changed'};}
+    if(race){row.acces_facile_rue=raceAccess;row.updatedAt=newer;row[SYNC_REVISION_FIELD]='33333333-3333-4333-8333-333333333333';return {reason:'revision_changed'};}
     return {status:'applied'};
   }});
   const args={tableId:'housing',recordId:1,writeId,
     fields:{acces_facile_rue:desired,garage:'true',rdc:'true',chauffage:'true'},
     baseFields:{acces_facile_rue:baseline,garage:'false',rdc:'false',chauffage:'false'},
     canPromoteDefault:(key,observed)=>key!=='acces_facile_rue'||sameHousingSourceVersion(original,observed.updatedAt),
-    normalizeBaseline:(base,observed)=>normalizeHousingAccessBaseline({baseline:base,observed,expectedUpdatedAt:original,observedUpdatedAt:observed.updatedAt})};
+    normalizeBaseline:(base,observed)=>normalizeHousingAccessBaseline({baseline:base,observed,desiredAccess:desired,expectedUpdatedAt:original,observedUpdatedAt:observed.updatedAt})};
   return {mutate,args,writes};
 }
 for(const desired of ['true','false'])test(`first answer ${desired} accepts the complete levels/equipment/exterior patch`,async()=>{
@@ -40,4 +40,9 @@ test('missing versions, explicit false and sub-millisecond version changes never
   for(const options of [{expectedUpdatedAt:null},{observedUpdatedAt:null},{observedUpdatedAt:'2026-10-29T08:00:00.123457Z'},{observed:{acces_facile_rue:'false'}},{observed:{}}]) {
     assert.deepEqual(normalizeHousingAccessBaseline({baseline,observed:{acces_facile_rue:null},expectedUpdatedAt:original,observedUpdatedAt:original,...options}),baseline);
   }
+});
+
+test('a real No entered on the web while an old default-based upload races is protected',async()=>{
+ const {mutate,args,writes}=setup({race:true,raceAccess:'false'});
+ await assert.rejects(mutate(args),e=>e.code==='SYNC_FIELD_CONFLICT');assert.equal(writes.length,1);
 });
