@@ -48,8 +48,9 @@ import '../../services/web_file_picker.dart';
 /// (entier croissant) — réordonné via drag (ReorderableListView).
 class PhotosTab extends StatefulWidget {
   final Dossier dossier;
+  final DataService? dataService;
 
-  const PhotosTab({super.key, required this.dossier});
+  const PhotosTab({super.key, required this.dossier, this.dataService});
 
   @override
   State<PhotosTab> createState() => _PhotosTabState();
@@ -68,7 +69,7 @@ class _PhotosTabState extends State<PhotosTab>
   static const double _kCompressMaxWidth = 1280;
   static const int _kCompressQuality = 74;
 
-  final DataService _dataService = DataService();
+  late final DataService _dataService = widget.dataService ?? DataService();
   final ImagePicker _imagePicker = ImagePicker();
 
   bool _isImporting = false;
@@ -923,7 +924,8 @@ class _PhotosTabState extends State<PhotosTab>
     // DragTarget englobe TOUT le container — drop n'importe où dans la
     // section (entête, photos, espace vide, boutons) accepte la photo.
     // Le drop se traduit par `_moveToCategory(doc, newTag = tag)` :
-    //   - si l'origine == catégorie courante → no-op (déjà au bon endroit)
+    //   - même catégorie : accepte le dépôt pour confirmer l'ordre aperçu,
+    //     même si la vignette déplacée est maintenant sous le pointeur.
     //   - sinon → la photo est re-taggée et apparaît dans cette section.
     //
     // `onWillAcceptWithDetails` highlight la cible quand un drag survole
@@ -938,7 +940,7 @@ class _PhotosTabState extends State<PhotosTab>
       categoryTag: tag,
       onDrop: (files) => _persistDroppedFiles(files, tag),
       child: DragTarget<_DragPhotoPayload>(
-        onWillAcceptWithDetails: (details) => details.data.fromTag != tag,
+        onWillAcceptWithDetails: (_) => true,
         onAcceptWithDetails: (details) async {
           if (details.data.fromTag == tag) return;
           await _moveToCategory(doc: details.data.doc, newTag: tag);
