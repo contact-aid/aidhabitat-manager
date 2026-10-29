@@ -11,28 +11,21 @@
 1. Install dependencies: `npm install`
 2. Run the app: `npm run dev`
 
-## Local note rewriting
+## Note rewriting with OpenRouter
 
-The Express API can reformulate written notes with the locally hosted
-`gemma3:4b` model. Note contents stay between the application backend and
-Ollama.
-
-1. Install Ollama: `brew install ollama`
-2. Start it at login: `brew services start ollama`
-3. Download the model: `ollama pull gemma3:4b`
-4. Check the service: `curl http://127.0.0.1:11434/api/tags`
+Written notes use `deepseek/deepseek-v4-flash` through the authenticated API.
+Set `OPENROUTER_API_KEY` on the server. No key or local language model is
+shipped to the browser or iPad. Rewriting is independent of the visit assistant
+feature flag and its transcription/vision model settings.
 
 Authenticated endpoints:
 
 - `GET /api/ai/status`
 - `POST /api/ai/rewrite` with `{ "text": "...", "mode": "professional" }`
 
-Available modes are `professional`, `concise`, and `correct`.
-
-Optional server variables:
-
-- `OLLAMA_BASE_URL` defaults to `http://127.0.0.1:11434`
-- `OLLAMA_REWRITE_MODEL` defaults to `gemma3:4b`
-- `OLLAMA_REWRITE_TIMEOUT_MS` defaults to `120000`
-- `OLLAMA_REWRITE_KEEP_ALIVE` defaults to `0` so the production server
-  releases the model memory after each rewrite
+Modes: `professional`, `concise`, `correct`. The editable proposal is reviewed
+before replacing the source. Requests use price routing, reasoning disabled,
+and the existing ZDR/no-data-collection provider constraints. Truncated output
+or changes to protected facts are rejected. Rewriting requires connectivity;
+o local fallback is used. Existing browser rewrite model caches are retired
+at the next page load without touching the local patient database.

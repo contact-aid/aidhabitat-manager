@@ -4,7 +4,8 @@ import {
   buildRewriteMessages,
   findMissingProtectedFragments,
   findProtectedFragments,
-  getLocalAiStatus,
+  getAiRewriteStatus,
+  REWRITE_MODEL,
   getRewriteConfig,
   normalizeRewriteMode,
   rewriteNote,
@@ -39,107 +40,55 @@ test('protects names, measurements, ages, percentages and GIR values', () => {
   );
 });
 
-test('sends the note to Ollama without streaming', async () => {
-  let request;
-  const result = await rewriteNote({
-    text: 'La personne a du mal à entrer dans la douche.',
-    mode: 'professional',
-    config: {
-      baseUrl: 'http://ollama.test',
-      model: 'gemma3:4b',
-      timeoutMs: 1_000,
-    },
-    fetchImpl: async (url, options) => {
-      request = { url, options };
-      return new Response(JSON.stringify({
-        message: {
-          content: "La personne rencontre des difficultés pour accéder à la douche.",
-        },
-      }), { status: 200 });
-    },
-  });
-
-  const body = JSON.parse(request.options.body);
-  assert.equal(request.url, 'http://ollama.test/api/chat');
-  assert.equal(body.stream, false);
-  assert.equal(body.model, 'gemma3:4b');
-  assert.equal(body.keep_alive, '10m');
-  assert.equal(body.messages[1].content, 'La personne a du mal à entrer dans la douche.');
-  assert.equal(
-    result.text,
-    'La personne rencontre des difficultés pour accéder à la douche.',
-  );
-});
-
-test('reports whether the configured model is installed', async () => {
-  const status = await getLocalAiStatus({
-    config: {
-      baseUrl: 'http://ollama.test',
-      model: 'gemma3:4b',
-      timeoutMs: 1_000,
-    },
-    fetchImpl: async () => new Response(JSON.stringify({
-      models: [{ name: 'gemma3:4b' }],
-    }), { status: 200 }),
-  });
-
-  assert.deepEqual(status, {
-    ready: true,
-    model: 'gemma3:4b',
-    installed: true,
-  });
-});
-
-
-test('keeps Ollama resident and requires explicit web processing opt-in', () => {
-  const config = getRewriteConfig({});
-  assert.equal(config.keepAlive, '10m');
-  assert.equal(config.webEnabled, false);
-  const native = getRewriteConfig({ AI_REWRITE_PROVIDER: 'llama.cpp', AI_REWRITE_WEB_ENABLED: 'true' });
-  assert.equal(native.provider, 'llama.cpp');
-  assert.equal(native.webEnabled, true);
-});
-
-test('llama.cpp status checks readiness without sending a note', async () => {
-  let requestedUrl;
-  const result = await getLocalAiStatus({
-    config: { provider: 'llama.cpp', webEnabled: true, baseUrl: 'http://private.test', model: 'qwen', timeoutMs: 1000 },
-    fetchImpl: async (url) => {
-      requestedUrl = url;
-      return new Response(JSON.stringify({ status: 'ok' }));
-    },
-  });
-  assert.equal(requestedUrl, 'http://private.test/health');
-  assert.deepEqual(result, { ready: true, installed: true, model: 'qwen', webEnabled: true });
-});
-
-test('llama.cpp rewrites without reasoning and validates protected facts', async () => {
-  let body;
-  const config = { provider: 'llama.cpp', baseUrl: 'http://private.test', model: 'qwen', timeoutMs: 1000 };
-  const fetchImpl = async (url, options) => {
-    assert.equal(url, 'http://private.test/v1/chat/completions');
-    body = JSON.parse(options.body);
-    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'Mme Test a 82 ans et vit seule.' } }] }));
-  };
-  const result = await rewriteNote({ text: 'Mme Test a 82 ans et vit seul.', config, fetchImpl });
-  assert.equal(result.text, 'Mme Test a 82 ans et vit seule.');
-  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
-  assert.equal(body.temperature, 0);
-  await assert.rejects(rewriteNote({ text: 'Mme Test a 83 ans et vit seul.', config, fetchImpl }), { statusCode: 422 });
-});
-
-test('rejects truncated llama.cpp output before it can replace the original', async () => {
-  await assert.rejects(rewriteNote({
-    text: 'Une note complète.',
-    config: { provider: 'llama.cpp', baseUrl: 'http://private.test', model: 'qwen', timeoutMs: 1000 },
-    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: 'Une note' } }] })),
-  }), { statusCode: 422 });
-});
-
 test('professional report context corrects awkward phrasing and cannot inject instructions', () => {
   const [system] = buildRewriteMessages('Note fictive.', 'professional', 'beneficiary');
   assert.match(system.content, /note sur le bénéficiaire/);
   assert.match(system.content, /reformule les tournures maladroites/);
   assert.match(system.content, /Conserve les négations/);
   assert.doesNotMatch(buildRewriteMessages('Note fictive.', 'professional', 'INJECTED_CONTEXT')[0].content, /INJECTED_CONTEXT/);
+});
+
+const config = getRewriteConfig({ OPENROUTER_API_KEY: 'synthetic-key' });
+const completion = (content, finish_reason = 'stop') => Response.json({ choices: [{ message: { content }, finish_reason }] });
+
+test('rewrites exclusively with DeepSeek V4 Flash, cheapest eligible provider and reasoning off', async () => {
+  let request;
+  const result = await rewriteNote({ text: 'Le seuil mesure 15 cm.', config,
+    fetchImpl: async (url, options) => {
+      request = { url, options, body: JSON.parse(options.body) };
+      return completion('Le seuil mesure 15 cm.');
+    } });
+  assert.equal(request.url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(request.options.headers.Authorization, 'Bearer synthetic-key');
+  assert.equal(request.body.model, 'deepseek/deepseek-v4-flash');
+  assert.deepEqual(request.body.reasoning, { enabled: false });
+  assert.deepEqual(request.body.provider, { sort: 'price', zdr: true, data_collection: 'deny', allow_fallbacks: false, require_parameters: true });
+  assert.equal(result.text, 'Le seuil mesure 15 cm.');
+  assert.equal(result.model, REWRITE_MODEL);
+});
+
+test('OpenRouter readiness does not depend on visit feature flags or legacy model settings', () => {
+  assert.equal(getAiRewriteStatus({config: getRewriteConfig({})}).ready, false);
+  const status = getAiRewriteStatus({config: getRewriteConfig({ OPENROUTER_API_KEY: 'synthetic-key', VISIT_ASSISTANT_ENABLED: 'false', OLLAMA_REWRITE_MODEL: 'ignored' })});
+  assert.deepEqual(status, {ready:true, webEnabled:true, provider:'openrouter', model:REWRITE_MODEL});
+  assert.equal(JSON.stringify(status).includes('synthetic-key'), false);
+});
+
+test('missing credentials never attempts local inference or provider access', async () => {
+  let calls = 0;
+  await assert.rejects(rewriteNote({text:'Note fictive.',config:getRewriteConfig({}),fetchImpl:async()=>{calls++;}}), {statusCode:503});
+  assert.equal(calls,0);
+});
+
+test('rejects incomplete and empty results, altered facts and malformed responses', async () => {
+  for (const response of [completion('Texte partiel', 'length'),completion(''),completion('Le seuil mesure 20 cm.'),new Response('not JSON')]) {
+    await assert.rejects(rewriteNote({text:'Le seuil mesure 15 cm.',config,fetchImpl:async()=>response}), e=>[422,502].includes(e.statusCode));
+  }
+});
+
+test('provider failures never expose echoed notes or credentials and never fall back locally', async () => {
+  let calls = 0;
+  await assert.rejects(rewriteNote({text:'Note fictive.',config,fetchImpl:async()=>{calls++;return new Response('private note synthetic-key',{status:500});}}), e => e.statusCode===502 && !e.message.includes('synthetic-key') && !e.message.includes('private note'));
+  assert.equal(calls,1);
+  await assert.rejects(rewriteNote({text:'Note fictive.',config,fetchImpl:async()=>{throw Object.assign(new Error('private note'),{name:'TimeoutError'});}}), {statusCode:504});
 });

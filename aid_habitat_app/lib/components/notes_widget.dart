@@ -4271,24 +4271,9 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
         barrierDismissible: false,
         builder: (dialogContext) => AiRewritePreviewDialog(
           originalText: originalText,
-          phase: () => AiRewriteService.instance.preparationPhase,
-          onCancel: AiRewriteService.instance.cancelPreparation,
+          phase: () => 'Reformulation en cours…',
+          onCancel: () {},
           generate: (previewContext) async {
-            if (await AiRewriteService.instance.needsPreparation()) {
-              if (!previewContext.mounted) {
-                throw Exception('Reformulation annulée.');
-              }
-              final prepared = await showSoftDialog<bool>(
-                context: previewContext,
-                barrierDismissible: false,
-                builder: (_) => const _LocalAiSetupDialog(),
-              );
-              if (prepared != true) {
-                throw Exception(
-                  'Installation annulée. La note originale est conservée.',
-                );
-              }
-            }
             if (!previewContext.mounted) {
               throw Exception('Reformulation annulée.');
             }
@@ -4350,102 +4335,6 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
       ),
     );
   }
-}
-
-class _LocalAiSetupDialog extends StatefulWidget {
-  const _LocalAiSetupDialog();
-
-  @override
-  State<_LocalAiSetupDialog> createState() => _LocalAiSetupDialogState();
-}
-
-class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
-  bool _busy = false;
-  double _progress = 0;
-  String _phase = 'Démarrage du téléchargement…';
-  String? _error;
-  Timer? _timer;
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    if (_busy) AiRewriteService.instance.cancelPreparation();
-    super.dispose();
-  }
-
-  Future<void> _prepare() async {
-    if (_busy) return;
-    setState(() {
-      _busy = true;
-      _progress = 0;
-      _error = null;
-    });
-    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (mounted) {
-        setState(() {
-          _progress = AiRewriteService.instance.preparationProgress;
-          _phase = AiRewriteService.instance.preparationPhase;
-        });
-      }
-    });
-    try {
-      await AiRewriteService.instance.prepareLocalModel();
-      if (mounted) {
-        _busy = false;
-        Navigator.pop(context, true);
-      }
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
-        });
-      }
-    } finally {
-      _timer?.cancel();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Reformulation locale'),
-    content: SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Télécharger le modèle dans ce navigateur (environ 1 Go). '
-            'Prévoyez au moins 1,3 Go libre. Les notes ne sont pas envoyées à un serveur. '
-            'Le téléchargement provient de Hugging Face.',
-          ),
-          if (_busy) ...[
-            const SizedBox(height: 16),
-            LinearProgressIndicator(
-              value: _progress > 0 && _progress < 1 ? _progress : null,
-            ),
-            const SizedBox(height: 8),
-            Text(_phase.isEmpty ? 'Préparation du modèle…' : _phase),
-          ],
-          if (_error != null) ...[const SizedBox(height: 12), Text(_error!)],
-        ],
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () {
-          AiRewriteService.instance.cancelPreparation();
-          Navigator.pop(context, false);
-        },
-        child: const Text('Annuler'),
-      ),
-      FilledButton.icon(
-        onPressed: _busy ? null : _prepare,
-        icon: const Icon(LucideIcons.download, size: 16),
-        label: const Text('Télécharger'),
-      ),
-    ],
-  );
 }
 
 class _FloatingTextModal extends StatefulWidget {

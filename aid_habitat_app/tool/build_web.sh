@@ -53,9 +53,6 @@ fi
 
 API_BASE_URL="${AIDHABITAT_API_BASE_URL:-}"
 
-npm --prefix tool/local_ai ci --ignore-scripts --no-audit --no-fund
-npm --prefix tool/local_ai test
-npm --prefix tool/local_ai run build
 
 npm --prefix tool/local_voice ci --ignore-scripts --no-audit --no-fund
 npm --prefix tool/local_voice run build
@@ -102,7 +99,6 @@ for dir in wiki-offline retirement-logos; do
   fi
 done
 
-node tool/local_ai/build-offline.mjs
 
 echo "[build_web] build/web produced:"
 ls -lah build/web | head -20

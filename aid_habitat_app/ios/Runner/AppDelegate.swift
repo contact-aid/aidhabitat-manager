@@ -22,9 +22,6 @@ import UIKit
     if let scannerRegistrar = registrar(forPlugin: "DocumentScannerPlugin") {
       DocumentScannerPlugin.register(with: scannerRegistrar)
     }
-    if let rewriteRegistrar = registrar(forPlugin: "AppleIntelligenceRewritePlugin") {
-      AppleIntelligenceRewritePlugin.register(with: rewriteRegistrar)
-    }
     if let registrar = registrar(forPlugin: "PdfRotationChannel") {
       let channel = FlutterMethodChannel(
         name: pdfRotationChannelName,
