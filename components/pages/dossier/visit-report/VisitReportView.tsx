@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useVisitRecommendations } from '../../../hooks/useVisitRecommendations';
 import { AlertTriangle, ArrowLeft, Ban, Bath, Blinds, Check, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, Coins, DoorOpen, FolderOpen, Hand, Heart, House, ImagePlus, LayoutGrid, MapPin, Plus, Search, ShowerHead, Toilet, Trash2, User, X, Zap } from 'lucide-react';
 import { BathroomLevelInstance, Dossier, HeatingMode, DiagnosticSanitaires, MesuresAnthropometriques, NotePage, ObservationsSynthese, VisitRecommendationItem, VisitReportLocation, WikiLibraryItem, WcLevelInstance } from '../../../../types';
 import { NotesCanvas, buildNotePreviewDataUrlFromContent, type DrawingTool } from '../../../shared/NotesCanvas';
@@ -11,7 +12,6 @@ import {
     normalizeAutonomyChecklist,
 } from '../../../../shared/autonomyContract.js';
 import {
-    fetchVisitRecommendations,
     updateDossier,
     updateBeneficiary as updateBeneficiaryService,
     updateHousing,
@@ -29,7 +29,6 @@ import {
     fetchWikiLibrary,
     normalizeCityInput,
     saveNotePage,
-    saveVisitRecommendations,
     upsertObservationsSynthese,
 } from '../../../../services/dataService';
 
@@ -913,7 +912,6 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
     const sanitairesSnapshotRef = useRef<string | null>(null);
     const mesuresSnapshotRef = useRef<string | null>(null);
     const syntheseSnapshotRef = useRef<string | null>(null);
-    const recommendationsSnapshotRef = useRef<string | null>(null);
     const tabsScrollRef = useRef<HTMLDivElement | null>(null);
     const tabButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
     const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
@@ -1331,22 +1329,25 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
         observationEquipements: '', projetSouhaitUsage: '', resumePreconisations: ''
     });
 
-    const [recommendationsData, setRecommendationsData] = useState<VisitRecommendationItem[]>([]);
+    const {
+        items: recommendationsData,
+        ready: recommendationsReady,
+        error: recommendationsError,
+        update: updateRecommendations,
+    } = useVisitRecommendations(dossier.id);
 
     // --- Load sub-entities (Sanitaires, Mesures, Synthese) on mount ---
     useEffect(() => {
         const loadSubEntities = async () => {
             if (dossier.id.startsWith('temp-')) return;
-            const [san, mes, obs, recommendations] = await Promise.all([
+            const [san, mes, obs] = await Promise.all([
                 fetchDiagnosticSanitaires(dossier.id),
                 fetchMesuresAnthropometriques(dossier.id),
                 fetchObservationsSynthese(dossier.id, dossier.patient.id),
-                fetchVisitRecommendations(dossier.id),
             ]);
             if (san) setSanitairesData(normalizeSanitairesForHousing(san, formData.housing));
             if (mes) setMesuresData(mes);
             if (obs) setSyntheseData(obs);
-            setRecommendationsData(recommendations);
         };
         loadSubEntities()
             .catch((error) => {
@@ -1370,7 +1371,6 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
     const debouncedSanitaires = useDebounce(sanitairesData, RELEVE_BLOCK_SYNC_DEBOUNCE_MS);
     const debouncedMesures = useDebounce(mesuresData, RELEVE_BLOCK_SYNC_DEBOUNCE_MS);
     const debouncedSynthese = useDebounce(syntheseData, RELEVE_BLOCK_SYNC_DEBOUNCE_MS);
-    const debouncedRecommendations = useDebounce(recommendationsData, RELEVE_BLOCK_SYNC_DEBOUNCE_MS);
 
     const pendingSavesRef = useRef(new Map<string, {
         label: string;
@@ -1557,12 +1557,7 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
                 .then(() => { syntheseSnapshotRef.current = serializeForAutosave(syntheseData); })
                 .catch(() => undefined);
         }
-        if (activeTab === 'Préconisations') {
-            void runSave('recommendations', async () => saveVisitRecommendations(dossier.id, recommendationsData), 'Préconisations')
-                .then(() => { recommendationsSnapshotRef.current = serializeForAutosave(recommendationsData); })
-                .catch(() => undefined);
-        }
-    }, [activeTab, formData, sanitairesData, mesuresData, syntheseData, recommendationsData, dossier, runSave]);
+    }, [activeTab, formData, sanitairesData, mesuresData, syntheseData, dossier, runSave]);
 
     // Save Beneficiary (includes occupation status, APA, etc.)
     useEffect(() => {
@@ -1850,25 +1845,6 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
             })
             .catch(() => undefined);
     }, [debouncedSynthese, dossier.id, dossier.patient.id, runSave]);
-
-    // Save Recommendations
-    useEffect(() => {
-        if (!isAutosaveReadyRef.current) return;
-        if (dossier.id.startsWith('temp-')) return;
-        const recommendationsSnapshot = serializeForAutosave(debouncedRecommendations);
-        if (recommendationsSnapshotRef.current === null) {
-            recommendationsSnapshotRef.current = recommendationsSnapshot;
-            return;
-        }
-        if (recommendationsSnapshotRef.current === recommendationsSnapshot) return;
-        runSave('recommendations', async () => saveVisitRecommendations(dossier.id, debouncedRecommendations), 'Préconisations')
-            .then((result) => {
-                if (result.success) {
-                    recommendationsSnapshotRef.current = recommendationsSnapshot;
-                }
-            })
-            .catch(() => undefined);
-    }, [debouncedRecommendations, dossier.id, runSave]);
 
     // =============================================================
     // FORM HANDLERS — Instant state update, debounced save
@@ -2188,16 +2164,16 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
 
     const addRecommendation = () => {
         const nextItem = createEmptyRecommendationItem();
-        setRecommendationsData((prev) => [...prev, nextItem]);
+        updateRecommendations((prev) => [...prev, nextItem]);
         return nextItem.id;
     };
 
     const removeRecommendation = (itemId: string) => {
-        setRecommendationsData((prev) => prev.filter((item) => item.id !== itemId));
+        updateRecommendations((prev) => prev.filter((item) => item.id !== itemId));
     };
 
     const updateRecommendation = (itemId: string, updates: Partial<VisitRecommendationItem>) => {
-        setRecommendationsData((prev) => prev.map((item) => (
+        updateRecommendations((prev) => prev.map((item) => (
             item.id === itemId
                 ? { ...item, ...updates, updatedAt: new Date().toISOString() }
                 : item
@@ -2520,7 +2496,6 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
         sanitairesSnapshotRef.current = null;
         mesuresSnapshotRef.current = null;
         syntheseSnapshotRef.current = null;
-        recommendationsSnapshotRef.current = null;
         notePagesCacheRef.current = {};
         notePageMemoryRef.current = {};
         pendingPageSelectionRef.current = null;
@@ -3067,11 +3042,10 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
             sanitairesSnapshotRef.current = serializeForAutosave(debouncedSanitaires);
             mesuresSnapshotRef.current = serializeForAutosave(debouncedMesures);
             syntheseSnapshotRef.current = serializeForAutosave(debouncedSynthese);
-            recommendationsSnapshotRef.current = serializeForAutosave(debouncedRecommendations);
             isAutosaveReadyRef.current = true;
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [debouncedBeneficiary, debouncedContext, debouncedHousing, debouncedMesures, debouncedRecommendations, debouncedSanitaires, debouncedSynthese]);
+    }, [debouncedBeneficiary, debouncedContext, debouncedHousing, debouncedMesures, debouncedSanitaires, debouncedSynthese]);
 
     useEffect(() => {
         onSavingChange?.(isNavigationLocked);
@@ -3143,6 +3117,7 @@ export const VisitReportView: React.FC<VisitReportViewProps> = ({ dossier, onBac
                     />
                 );
             case 'Préconisations':
+                if (!recommendationsReady) return <p role="status" className="p-4 text-slate-500">{recommendationsError || 'Chargement des préconisations…'}</p>;
                 return (
                     <PreconisationsForm
                         items={recommendationsData}
