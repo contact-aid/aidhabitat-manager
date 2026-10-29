@@ -188,3 +188,20 @@ test('finish starts server processing without client process requests and expose
   assert.deepEqual(poll.result.sections,{});
   assert.deepEqual(jobs[0].result.sections,{'Accessibilité-Notes':'Seuil mesuré à 12 cm.'});
 });
+
+
+test('long visit extraction has enough output budget and audits costs without source content', async () => {
+  let body;const audit=[];
+  const provider=createVisitProvider({env:{OPENROUTER_API_KEY:'synthetic-key'},
+    onUsage:entry=>audit.push(entry),fetchImpl:async (_,options)=>{
+      body=JSON.parse(options.body);
+      return Response.json({id:'generation-fiction',model:'deepseek/deepseek-v4-flash',
+        usage:{cost:0.001,prompt_tokens:40000,completion_tokens:14000,completion_tokens_details:{reasoning_tokens:0}},
+        choices:[{message:{content:JSON.stringify({facts:[],warnings:[]})},finish_reason:'stop'}]});}});
+  await provider.extractFacts({transcript:[{index:0,text:'PRIVATE SYNTHETIC SOURCE'}],context:{},handwrittenText:[]});
+  assert.equal(body.max_tokens,32768);assert.deepEqual(body.reasoning,{enabled:false});
+  assert.equal(body.response_format.type,'json_schema');assert.equal(body.response_format.json_schema.strict,true);
+  assert.deepEqual(body.response_format.json_schema.schema.required,['facts','warnings']);
+  assert.equal(audit.length,1);assert.equal(audit[0].task,'facts');assert.equal(audit[0].cost,0.001);
+  assert.equal(audit[0].completionTokens,14000);assert.ok(!JSON.stringify(audit).includes('PRIVATE SYNTHETIC SOURCE'));
+});
