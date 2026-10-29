@@ -7918,7 +7918,7 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
           canPromoteDefault: (key, observed) => key !== 'acces_facile_rue' || sameHousingSourceVersion(
             updates.concurrency?.expectedUpdatedAt, getRecordUpdatedAt({fields:observed})),
           normalizeBaseline: (baseline, observed) => normalizeHousingAccessBaseline({
-            baseline, observed,
+            baseline, observed, desiredAccess:fields.acces_facile_rue,
             expectedUpdatedAt: updates.concurrency?.expectedUpdatedAt,
             observedUpdatedAt: getRecordUpdatedAt({fields:observed}),
           }),
