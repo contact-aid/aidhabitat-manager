@@ -1,3 +1,4 @@
+import { OPENROUTER_TEXT_MODEL, TEXT_PROVIDER_POLICY } from './ai/models.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -71,13 +72,15 @@ function parseJson(text) {
 }
 
 export function createVisitProvider({ env = process.env, fetchImpl = fetch } = {}) {
-  const complete = async (messages, { model = env.VISIT_AI_MODEL, json = false } = {}) => {
+  const complete = async (messages, { model = OPENROUTER_TEXT_MODEL, json = false } = {}) => {
     if (!env.OPENROUTER_API_KEY || !model) throw visitError(503, 'Le service IA de visite n’est pas configuré.');
     const response = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(150_000),
       headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 12000,
-        provider: { zdr: true, data_collection: 'deny', allow_fallbacks: false },
+        ...(model === OPENROUTER_TEXT_MODEL ? { reasoning: { enabled: false } } : {}),
+        provider: model === OPENROUTER_TEXT_MODEL ? TEXT_PROVIDER_POLICY
+          : { sort: 'price', zdr: true, data_collection: 'deny', allow_fallbacks: false },
         ...(json ? { response_format: { type: 'json_object' } } : {}) }),
     });
     // Never propagate provider bodies: they can echo clinical content or keys.

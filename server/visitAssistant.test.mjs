@@ -138,7 +138,9 @@ test('OpenRouter receives enforced privacy preferences; invalid and truncated an
       return Response.json({ choices: [{ message: { content: '{"answer":"Absent","sources":[99]}' }, finish_reason: 'stop' }] });
     } });
   await assert.rejects(provider.ask({ transcript: [{ index: 0, text: 'Texte' }] }, 'Question'), { statusCode: 502 });
-  assert.deepEqual(payload.provider, { zdr: true, data_collection: 'deny', allow_fallbacks: false });
+  assert.equal(payload.model, 'deepseek/deepseek-v4-flash');
+  assert.deepEqual(payload.reasoning, { enabled: false });
+  assert.deepEqual(payload.provider, { sort: 'price', zdr: true, data_collection: 'deny', allow_fallbacks: false, require_parameters: true });
   const truncated = createVisitProvider({ env: { OPENROUTER_API_KEY: 'synthetic-key', VISIT_AI_MODEL: 'synthetic-model' },
     fetchImpl: async () => Response.json({ choices: [{ message: { content: 'Partial' }, finish_reason: 'length' }] }) });
   await assert.rejects(truncated.rewrite([]), { statusCode: 502 });
@@ -153,4 +155,19 @@ test('draft preserves both profile and environment additions in their common env
   assert.equal(draft.sections['Bénéficiaire-Notes'],'Vit en couple.\n\nMaison isolée.');
   assert.equal(draft.sections['Contexte de vie-Habitudes'],'Marche quotidienne.');
   assert.equal(draft.sections['Contexte de vie-Médical'],undefined);
+});
+
+
+test('audio and images retain compatible models while every text call uses V4 Flash', async () => {
+  const calls = [];
+  const provider = createVisitProvider({env:{OPENROUTER_API_KEY:'synthetic-key',
+    VISIT_AI_MODEL:'expensive-old-model',VISIT_TRANSCRIPTION_MODEL:'audio-model',VISIT_VISION_MODEL:'vision-model'},
+    fetchImpl:async (_,options)=>{calls.push(JSON.parse(options.body));return Response.json({choices:[{message:{content:'Texte'},finish_reason:'stop'}]});}});
+  await provider.rewrite([{role:'user',content:'Texte synthétique'}]);
+  await provider.transcribe(Buffer.from('synthetic audio'));
+  await provider.readHandwriting('data:image/png;base64,eA==');
+  assert.deepEqual(calls.map(c=>c.model),['deepseek/deepseek-v4-flash','audio-model','vision-model']);
+  assert.ok(calls.every(c=>c.provider.sort==='price' && c.provider.zdr===true));
+  assert.equal(calls[1].messages[0].content[1].type,'input_audio');
+  assert.equal(calls[2].messages[0].content[1].type,'image_url');
 });

@@ -1,5 +1,6 @@
 import { rewriteInstructions } from '../../shared/aiRewritePrompt.mjs';
-export const REWRITE_MODEL = 'deepseek/deepseek-v4-flash';
+import { OPENROUTER_TEXT_MODEL, TEXT_PROVIDER_POLICY } from './models.mjs';
+export const REWRITE_MODEL = OPENROUTER_TEXT_MODEL;
 export const REWRITE_MODES = Object.freeze({
   professional: [
     "Corrige les fautes et reformule les tournures incorrectes ou maladroites dans un français professionnel.",
@@ -83,8 +84,7 @@ export const rewriteNote = async ({text, mode = 'professional', context = 'gener
       body: JSON.stringify({ model: REWRITE_MODEL, stream: false,
         messages: buildRewriteMessages(text, mode, context), temperature: 0,
         max_tokens: 4096, reasoning: { enabled: false },
-        provider: { sort: 'price', zdr: true, data_collection: 'deny',
-          allow_fallbacks: false, require_parameters: true },
+        provider: TEXT_PROVIDER_POLICY,
       }),
     });
   } catch (error) {
