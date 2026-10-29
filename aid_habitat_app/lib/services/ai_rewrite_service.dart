@@ -1,40 +1,36 @@
-import 'visit_assistant_service.dart' show VisitAssistantConfig;
 import 'dart:async';
 import 'dart:convert';
-
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-
 import 'app_config.dart';
-import 'ai_rewrite_web_stub.dart'
-    if (dart.library.js_interop) 'ai_rewrite_web.dart'
-    as web_ai;
 
+/// Notes are reformulated exclusively through the authenticated OpenRouter API.
 class AiRewriteService {
-  AiRewriteService({http.Client? client, MethodChannel? nativeChannel})
-    : _client = client ?? http.Client(),
-      _nativeChannel =
-          nativeChannel ??
-          const MethodChannel('aidhabitat/apple_intelligence_rewrite');
-
+  AiRewriteService({http.Client? client}) : _client = client ?? http.Client();
   static final AiRewriteService instance = AiRewriteService();
-
   final http.Client _client;
-  final MethodChannel _nativeChannel;
-  Future<bool>? _availability;
   Future<bool>? _serverProbe;
   String? _serverProbeKey;
   DateTime? _serverProbeExpires;
 
-  // Server processing is explicitly advertised by the authenticated API.
-  // Cache only availability, never the note or its generated response.
+  Future<bool> isAvailable({
+    bool refresh = false,
+    String? apiBaseUrl,
+    String? sessionToken,
+  }) => isServerRewriteAvailable(
+    apiBaseUrl: apiBaseUrl,
+    sessionToken: sessionToken,
+  );
+
   Future<bool> isServerRewriteAvailable({
     String? apiBaseUrl,
     String? sessionToken,
   }) {
-    final base = (apiBaseUrl ?? AppConfig.apiBaseUrl).trim();
+    final base = (apiBaseUrl ?? AppConfig.apiBaseUrl).trim().replaceAll(
+      RegExp(r'/+$'),
+      '',
+    );
     final token = (sessionToken ?? AppConfig.appSessionToken).trim();
+    if (base.isEmpty || token.isEmpty) return Future.value(false);
     final key = '$base|$token|${AppConfig.sessionEpoch}';
     if (_serverProbeKey == key &&
         _serverProbe != null &&
@@ -44,11 +40,7 @@ class AiRewriteService {
     }
     _serverProbeKey = key;
     _serverProbeExpires = null;
-    final probe = _remoteAvailable(
-      apiBaseUrl: base,
-      sessionToken: token,
-      requireWebEnabled: true,
-    );
+    final probe = _remoteAvailable(base, token);
     _serverProbe = probe;
     probe.then((ready) {
       if (_serverProbeKey == key && identical(_serverProbe, probe)) {
@@ -60,93 +52,21 @@ class AiRewriteService {
     return probe;
   }
 
-  bool get _usesAppleModel =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
-
-  Future<bool> isAvailable({
-    bool refresh = false,
-    String? apiBaseUrl,
-    String? sessionToken,
-  }) async {
-    if (VisitAssistantConfig.enabled) {
-      return _remoteAvailable(
-        apiBaseUrl: apiBaseUrl,
-        sessionToken: sessionToken,
-      );
-    }
-    if (kIsWeb) {
-      if (await isServerRewriteAvailable(
-        apiBaseUrl: apiBaseUrl,
-        sessionToken: sessionToken,
-      )) {
-        return true;
-      }
-      final state = await web_ai.localAiStatus();
-      return state['supported'] == true;
-    }
-    if (!_usesAppleModel) return false;
-    if (refresh || _availability == null) {
-      _availability = _readNativeAvailability();
-    }
-    if (await _availability!) return true;
-    return _remoteAvailable(apiBaseUrl: apiBaseUrl, sessionToken: sessionToken);
-  }
-
-  Future<bool> _remoteAvailable({
-    String? apiBaseUrl,
-    String? sessionToken,
-    bool requireWebEnabled = false,
-  }) async {
-    final apiBase = (apiBaseUrl ?? AppConfig.apiBaseUrl).trim().replaceAll(
-      RegExp(r'/+$'),
-      '',
-    );
-    final token = (sessionToken ?? AppConfig.appSessionToken).trim();
-    if (apiBase.isEmpty || token.isEmpty) return false;
+  Future<bool> _remoteAvailable(String base, String token) async {
     try {
       final response = await _client
           .get(
-            Uri.parse('$apiBase/api/ai/status'),
+            Uri.parse('$base/api/ai/status'),
             headers: {'X-App-Session': token},
           )
-          .timeout(Duration(milliseconds: requireWebEnabled ? 1500 : 7000));
+          .timeout(const Duration(seconds: 7));
       if (response.statusCode != 200) return false;
       final payload = jsonDecode(response.body);
-      return payload is Map &&
-          payload['data'] is Map &&
-          (payload['data'] as Map)['ready'] == true &&
-          (!requireWebEnabled ||
-              (payload['data'] as Map)['webEnabled'] == true);
+      final data = payload is Map ? payload['data'] : null;
+      return data is Map &&
+          data['ready'] == true &&
+          data['provider'] == 'openrouter';
     } catch (_) {
-      return false;
-    }
-  }
-
-  Future<bool> needsPreparation() async {
-    if (VisitAssistantConfig.enabled) return false;
-    if (!kIsWeb) return false;
-    if (await isServerRewriteAvailable()) return false;
-    final status = await web_ai.localAiStatus();
-    return status['installed'] != true;
-  }
-
-  String get preparationPhase => web_ai.localAiPhase();
-
-  Future<void> prepareLocalModel() => web_ai.prepareLocalAi();
-  double get preparationProgress => web_ai.localAiProgress();
-  void cancelPreparation() => web_ai.cancelLocalAi();
-
-  Future<bool> _readNativeAvailability() async {
-    try {
-      return await _nativeChannel
-              .invokeMethod<bool>('isAvailable')
-              .timeout(const Duration(seconds: 3)) ??
-          false;
-    } on MissingPluginException {
-      return false;
-    } on PlatformException {
-      return false;
-    } on TimeoutException {
       return false;
     }
   }
@@ -157,114 +77,21 @@ class AiRewriteService {
     String context = 'general',
     String? apiBaseUrl,
     String? sessionToken,
-  }) async {
-    final sourceText = text.trim();
-    if (VisitAssistantConfig.enabled) {
-      return _rewriteRemotely(
-        text: sourceText,
-        mode: mode,
-        context: context,
-        apiBaseUrl: apiBaseUrl,
-        sessionToken: sessionToken,
-      );
-    }
-    if (sourceText.length < 3) {
+  }) {
+    final source = text.trim();
+    if (source.length < 3) {
       throw Exception('La note est trop courte pour être reformulée.');
     }
-    if (sourceText.length > 8000) {
+    if (source.length > 8000) {
       throw Exception('La note ne doit pas dépasser 8000 caractères.');
     }
-
-    if (kIsWeb &&
-        await isServerRewriteAvailable(
-          apiBaseUrl: apiBaseUrl,
-          sessionToken: sessionToken,
-        )) {
-      return _rewriteRemotely(
-        text: sourceText,
-        mode: mode,
-        context: context,
-        apiBaseUrl: apiBaseUrl,
-        sessionToken: sessionToken,
-      );
-    }
-
-    if (!kIsWeb &&
-        !_usesAppleModel &&
-        (apiBaseUrl != null || sessionToken != null)) {
-      return _rewriteRemotely(
-        text: sourceText,
-        mode: mode,
-        context: context,
-        apiBaseUrl: apiBaseUrl,
-        sessionToken: sessionToken,
-      );
-    }
-
-    // Apple Intelligence is unavailable on older iPads (including iPad Air
-    // 4). Use the authenticated Aid'Habitat API only for that case; supported
-    // devices continue to process the note locally.
-    if (_usesAppleModel && !await _readNativeAvailability()) {
-      if ((apiBaseUrl != null && sessionToken != null) ||
-          AppConfig.hasRemoteConfig) {
-        return _rewriteRemotely(
-          text: sourceText,
-          mode: mode,
-          context: context,
-          apiBaseUrl: apiBaseUrl,
-          sessionToken: sessionToken,
-        );
-      }
-      throw Exception(
-        'La reformulation nécessite une connexion à votre session sur cet iPad.',
-      );
-    }
-
-    if (!await isAvailable(refresh: true)) {
-      throw Exception(
-        kIsWeb
-            ? "La reformulation locale n'est pas disponible dans ce navigateur."
-            : "La reformulation Apple n'est pas disponible sur cet iPad.",
-      );
-    }
-
-    final protectedText = _protect(sourceText);
-    if (kIsWeb) {
-      return protectedText.restore(
-        await web_ai.rewriteLocalAi(
-          protectedText.text,
-          _normalizeMode(mode),
-          context,
-        ),
-      );
-    }
-    try {
-      final response = await _nativeChannel
-          .invokeMethod<String>('rewrite', {
-            'text': protectedText.text,
-            'mode': _normalizeMode(mode),
-            'context': context,
-          })
-          .timeout(const Duration(seconds: 130));
-      final rewrittenText = response?.trim() ?? '';
-      if (rewrittenText.isEmpty) {
-        throw Exception("Apple Intelligence n'a renvoyé aucun texte.");
-      }
-      return protectedText.restore(rewrittenText);
-    } on PlatformException catch (error) {
-      final message = error.message?.trim() ?? '';
-      throw Exception(
-        message.isEmpty ? 'La reformulation locale a échoué.' : message,
-      );
-    } on MissingPluginException {
-      throw Exception(
-        "La reformulation Apple n'est pas disponible sur cet iPad.",
-      );
-    } on TimeoutException {
-      throw Exception(
-        "Apple Intelligence met trop de temps à répondre. Réessayez dans un instant.",
-      );
-    }
+    return _rewriteRemotely(
+      text: source,
+      mode: mode,
+      context: context,
+      apiBaseUrl: apiBaseUrl,
+      sessionToken: sessionToken,
+    );
   }
 
   Future<String> _rewriteRemotely({
@@ -295,7 +122,7 @@ class AiRewriteService {
             'context': context,
           }),
         )
-        .timeout(const Duration(seconds: 130));
+        .timeout(const Duration(seconds: 65));
 
     if (response.statusCode == 401) {
       await AppConfig.notifyUnauthorized();
@@ -333,116 +160,5 @@ class AiRewriteService {
     return const {'professional', 'concise', 'correct'}.contains(mode)
         ? mode
         : 'professional';
-  }
-
-  _ProtectedText _protect(String source) {
-    final patterns = [
-      RegExp(
-        r"\b(?:M(?:me|lle)?\.?|Mme|Mlle|Monsieur|Madame|Docteur|Dr\.?)\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]+(?:\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]+)?",
-        unicode: true,
-      ),
-      RegExp(r'\bGIR\s*[1-6]\b', caseSensitive: false, unicode: true),
-      RegExp(
-        r'\b\d+(?:[.,]\d+)?(?:\s*(?:mm|cm|m|kg|ans?|heures?|h|min|minutes?|%|€))?(?=\s|[.,;:!?)]|$)',
-        caseSensitive: false,
-        unicode: true,
-      ),
-    ];
-
-    final candidates = <_ProtectedFragment>[];
-    final seenRanges = <String>{};
-    for (final pattern in patterns) {
-      for (final match in pattern.allMatches(source)) {
-        final value = match.group(0);
-        final rangeKey = '${match.start}:${match.end}';
-        if (value == null || value.isEmpty || !seenRanges.add(rangeKey)) {
-          continue;
-        }
-        candidates.add(
-          _ProtectedFragment(start: match.start, end: match.end, value: value),
-        );
-      }
-    }
-
-    candidates.sort((a, b) {
-      final startOrder = a.start.compareTo(b.start);
-      if (startOrder != 0) return startOrder;
-      return (b.end - b.start).compareTo(a.end - a.start);
-    });
-
-    final selected = <_ProtectedFragment>[];
-    var protectedUntil = -1;
-    for (final candidate in candidates) {
-      if (candidate.start < protectedUntil) continue;
-      selected.add(candidate);
-      protectedUntil = candidate.end;
-    }
-
-    final buffer = StringBuffer();
-    var cursor = 0;
-    final fragments = <_ProtectedFragment>[];
-    for (var index = 0; index < selected.length; index++) {
-      final fragment = selected[index];
-      final placeholder = 'AIDHABITAT_DATA_${index.toString().padLeft(3, '0')}';
-      buffer
-        ..write(source.substring(cursor, fragment.start))
-        ..write(placeholder);
-      fragments.add(fragment.withToken(placeholder));
-      cursor = fragment.end;
-    }
-    buffer.write(source.substring(cursor));
-
-    return _ProtectedText(text: buffer.toString(), fragments: fragments);
-  }
-}
-
-class _ProtectedText {
-  const _ProtectedText({required this.text, required this.fragments});
-
-  final String text;
-  final List<_ProtectedFragment> fragments;
-
-  String restore(String rewrittenText) {
-    var restored = rewrittenText;
-    for (final fragment in fragments) {
-      final tokenPattern = RegExp('\\b${RegExp.escape(fragment.token)}\\b');
-      if (tokenPattern.allMatches(restored).length != 1) {
-        throw Exception(
-          "La proposition n'était pas assez fidèle à la note originale. "
-          'La note a été conservée.',
-        );
-      }
-      restored = restored.replaceAll(tokenPattern, fragment.value);
-    }
-    if (restored.contains('AIDHABITAT_DATA_')) {
-      throw Exception(
-        "La proposition n'était pas assez fidèle à la note originale. "
-        'La note a été conservée.',
-      );
-    }
-    return restored.trim();
-  }
-}
-
-class _ProtectedFragment {
-  const _ProtectedFragment({
-    required this.start,
-    required this.end,
-    required this.value,
-    this.token = '',
-  });
-
-  final int start;
-  final int end;
-  final String value;
-  final String token;
-
-  _ProtectedFragment withToken(String value) {
-    return _ProtectedFragment(
-      start: start,
-      end: end,
-      value: this.value,
-      token: value,
-    );
   }
 }
