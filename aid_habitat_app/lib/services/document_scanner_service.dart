@@ -39,7 +39,8 @@ class DocumentScannerService {
   bool get isNativeScannerSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
-  /// Full-screen iOS photo capture for Documents, with system rotation enabled.
+  /// Full-screen iOS photo capture for Documents, requesting portrait during
+  /// capture and restoring the iPad landscape workspace on completion.
   /// The returned local file follows the existing document import/sync path.
   Future<String?> capturePhoto() async {
     if (!isNativeScannerSupported) return null;
