@@ -62,6 +62,124 @@ void main() {
     AppConfig.clearAppSessionToken();
   });
 
+  for (final entity in ['patient', 'housing']) {
+    test(
+      'stored $entity conflict fills server defaults without old field references',
+      () async {
+        final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+        addTearDown(db.close);
+        final local = LocalDatabase.forTesting(db);
+        await local.createSchemaForTesting();
+        final repository = DossierRepository(database: local);
+        final queue = SyncRepository.forTesting(database: local);
+        final snapshot = dossier(baseline, 'Synthetic');
+        snapshot['patient'] = <String, dynamic>{
+          ...snapshot['patient'] as Map,
+          'dependenceTxt': '',
+          'occupants': [
+            {'firstName': 'Synthetic', 'lastName': 'Test', 'birthDate': ''},
+          ],
+        };
+        snapshot['housing'] = <String, dynamic>{
+          ...snapshot['housing'] as Map,
+          'rdc': false,
+          'roomsBreakdown': {'rdc': [], 'basement': [], 'floor': []},
+        };
+        await repository.mergeRemoteDossierPayloads([snapshot]);
+        if (entity == 'patient') {
+          await repository.updatePatient('patient-1', {
+            'dependence_txt': 'Aucune',
+            'occupants_json': jsonEncode([
+              {
+                'firstName': 'Synthetic',
+                'lastName': 'Test',
+                'birthDate': '',
+                'dependenceTxt': 'Aucune',
+                'numeroSecuriteSociale': 'synthetic',
+                'caisseRetraitePrincipale': 'Caisse fictive',
+              },
+            ]),
+          });
+        } else {
+          await repository.updateHousing('dossier-1', {
+            'rdc': true,
+            'rdc_rooms_json': jsonEncode(['Cuisine', 'Chambre', 'Chambre']),
+          });
+        }
+        final row = (await db.query('sync_operations')).single;
+        final payload =
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    row['payload_json'] as String,
+                  ),
+                )
+                as Map;
+        payload['concurrency']['baseValues'] = <String, dynamic>{};
+        payload['conflict'] = {
+          'remote': {'error': 'SYNC_FIELD_CONFLICT'},
+        };
+        await db.update(
+          'sync_operations',
+          {
+            'status': 'conflict',
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+          },
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+        var writes = 0;
+        final service = NocodbSyncService(
+          database: local,
+          syncRepository: queue,
+          apiClient: NocodbApiClient(
+            client: MockClient((request) async {
+              if (request.method == 'GET') {
+                return http.Response(jsonEncode([snapshot]), 200);
+              }
+              writes++;
+              final body = jsonDecode(request.body) as Map;
+              expect(body['concurrency']['baseValues'], isNotEmpty);
+              if (entity == 'patient') {
+                expect(body['occupants'][0]['dependenceTxt'], 'Aucune');
+                expect(
+                  body['occupants'][0]['numeroSecuriteSociale'],
+                  'synthetic',
+                );
+                expect(
+                  body['occupants'][0]['caisseRetraitePrincipale'],
+                  'Caisse fictive',
+                );
+              } else {
+                expect(body['rdc'], true);
+                expect(body['roomsBreakdown']['rdc'], [
+                  'Cuisine',
+                  'Chambre',
+                  'Chambre',
+                ]);
+              }
+              return http.Response(
+                jsonEncode({
+                  'data': {
+                    'id': 'housing-1',
+                    'updatedAt': '2026-10-29T10:00:00Z',
+                  },
+                }),
+                200,
+              );
+            }),
+          ),
+        );
+        final result = await service.pushPendingChanges();
+        expect(result.conflictCount, 0);
+        expect(result.pushedOperations, 1);
+        expect(writes, 1);
+        expect(await db.query('sync_conflict_history'), hasLength(1));
+      },
+    );
+  }
+
   for (final errorCode in [
     'SYNC_FIELD_CONFLICT',
     'SYNC_HOUSING_WRITE_SUPERSEDED',

@@ -5,6 +5,145 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'initial server values accept explicit answers without a historical base',
+    () {
+      final plan = planSyncMerge(
+        baseValues: {},
+        updates: {
+          'dependenceTxt': 'Aucune',
+          'rdc': true,
+          'roomsBreakdown': {
+            'rdc': ['Cuisine', 'Chambre', 'Chambre'],
+          },
+        },
+        remoteValues: {
+          'dependenceTxt': null,
+          'rdc': false,
+          'roomsBreakdown': {'basement': [], 'rdc': [], 'floor': []},
+        },
+      );
+      expect(plan.canApplyAutomatically, isTrue);
+      expect(plan.updates['dependenceTxt'], 'Aucune');
+      expect(plan.updates['rdc'], true);
+      expect(plan.updates['roomsBreakdown']['rdc'], hasLength(3));
+    },
+  );
+
+  test(
+    'initial local values preserve explicit remote answers symmetrically',
+    () {
+      final plan = planSyncMerge(
+        baseValues: {},
+        updates: {'dependenceTxt': '', 'rdc': false, 'roomsBreakdown': {}},
+        remoteValues: {
+          'dependenceTxt': 'Aucune',
+          'rdc': true,
+          'roomsBreakdown': {
+            'rdc': ['WC'],
+          },
+        },
+      );
+      expect(plan.canApplyAutomatically, isTrue);
+      expect(plan.updates, isEmpty);
+    },
+  );
+
+  test(
+    'occupants enrich empty fields and preserve independent server answers',
+    () {
+      const identity = {
+        'firstName': 'Camille',
+        'lastName': 'Fictif',
+        'birthDate': '',
+      };
+      final local = {
+        ...identity,
+        'dependenceTxt': 'Aucune',
+        'numeroSecuriteSociale': 'synthetic',
+        'caisseRetraitePrincipale': '',
+      };
+      final remote = {
+        ...identity,
+        'dependenceTxt': '',
+        'numeroSecuriteSociale': '',
+        'caisseRetraitePrincipale': 'Caisse fictive',
+      };
+      final plan = planSyncMerge(
+        baseValues: {},
+        updates: {
+          'occupants': [local],
+        },
+        remoteValues: {
+          'occupants': [remote],
+        },
+      );
+      expect(plan.canApplyAutomatically, isFalse);
+      final merged = mergeLatestPatientValues(
+        local: {
+          'occupants': [local],
+        },
+        remote: {
+          'occupants': [remote],
+        },
+        baseline: {},
+      );
+      final person = merged['occupants'][0];
+      expect(person['dependenceTxt'], 'Aucune');
+      expect(person['numeroSecuriteSociale'], 'synthetic');
+      expect(person['caisseRetraitePrincipale'], 'Caisse fictive');
+      final competing = {...remote, 'dependenceTxt': 'Canne'};
+      expect(
+        planSyncMerge(
+          baseValues: {},
+          updates: {
+            'occupants': [local],
+          },
+          remoteValues: {
+            'occupants': [competing],
+          },
+        ).canApplyAutomatically,
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'real answers, unknown defaults and malformed room lists still conflict',
+    () {
+      for (final values in [
+        ('dependenceTxt', 'Aucune', 'Canne'),
+        (
+          'roomsBreakdown',
+          {
+            'rdc': ['Cuisine'],
+          },
+          {
+            'rdc': ['WC'],
+          },
+        ),
+        (
+          'roomsBreakdown',
+          {
+            'rdc': ['Cuisine'],
+          },
+          {'unknown': []},
+        ),
+        ('accessFacileRue', true, false),
+        ('fiscalRevenue', 100, 0),
+      ]) {
+        expect(
+          planSyncMerge(
+            baseValues: {},
+            updates: {values.$1: values.$2},
+            remoteValues: {values.$1: values.$3},
+          ).canApplyAutomatically,
+          isFalse,
+        );
+      }
+    },
+  );
+
+  test(
     'latest occupant pension preserves independent server health and unknown properties',
     () {
       final merged = mergeLatestPatientValues(

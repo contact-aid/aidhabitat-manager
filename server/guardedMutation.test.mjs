@@ -287,3 +287,20 @@ test('an iPad room edit and scalar edit apply together after a room identity JSO
     baseFields: { first: 'old', rooms_breakdown_json: baseline } }), e => e.code === 'SYNC_FIELD_CONFLICT');
   assert.equal(competing.patches(), 0);
 });
+
+test('enriching initial room values still rechecks a concurrent real answer', async () => {
+  const f = fixture();
+  f.row.rooms_breakdown_json = null;
+  let attempts = 0;
+  const apply = createGuardedMutation({ readRecord: f.readRecord, writer: async () => {
+    attempts++;
+    f.row.rooms_breakdown_json = JSON.stringify({ rdc: ['WC'] });
+    f.row.app_sync_revision = randomUUID();
+    return { status: 'not_confirmed', reason: 'revision_changed' };
+  } });
+  await assert.rejects(apply({ ...f.mutation, baseFields: {},
+    fields: { rooms_breakdown_json: JSON.stringify({ rdc: ['Cuisine'] }) } }),
+  e => e.code === 'SYNC_FIELD_CONFLICT');
+  assert.equal(attempts, 1);
+  assert.deepEqual(JSON.parse(f.row.rooms_breakdown_json), { rdc: ['WC'] });
+});

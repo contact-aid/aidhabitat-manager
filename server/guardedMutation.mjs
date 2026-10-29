@@ -1,3 +1,4 @@
+import { initialValuePreference } from './syncInitialValues.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
 import { validateConditionalPatch } from './nocodbConditionalWrite.mjs';
@@ -42,6 +43,8 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
   for (const [key, value] of Object.entries(fields)) {
     if (!Object.hasOwn(observed, key)) conflicts.push(key);
     else if (equals(key, observed[key], value)) continue;
+    else if (initialValuePreference(key, value, observed[key]) === 'local') patch[key] = value;
+    else if (initialValuePreference(key, value, observed[key]) === 'remote') retainedFields.push(key);
     else if (!Object.hasOwn(baseFields, key)) conflicts.push(key);
     else if (equals(key, baseFields[key], value)) retainedFields.push(key);
     else if (equals(key, baseFields[key], observed[key])) patch[key] = value;

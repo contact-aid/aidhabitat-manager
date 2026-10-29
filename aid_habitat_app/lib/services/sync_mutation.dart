@@ -355,6 +355,107 @@ occupantConflictDifferences(Object? local, Object? remote) {
   return result;
 }
 
+// Only initial form values qualify. “Aucune” is an explicit answer.
+const _initialFalseFields = {
+  'basement',
+  'rdc',
+  'floor',
+  'secondFloor',
+  'thirdFloor',
+};
+const _initialTextFields = {
+  'dependenceTxt',
+  'numeroSecuriteSociale',
+  'caisseRetraitePrincipale',
+  'caissesRetraiteComplementaires',
+  'apaGir',
+  'apaDetails',
+  'invalidityTxt',
+  'invalidityDetails',
+  'homeHelpTxt',
+  'fiscalReferenceYear',
+};
+
+bool _initialSyncValue(String key, Object? value) {
+  if (_initialFalseFields.contains(key)) return value == null || value == false;
+  if (_initialTextFields.contains(key)) {
+    return value == null || (value is String && value.trim().isEmpty);
+  }
+  if (key != 'roomsBreakdown') return false;
+  if (value == null || value == '') return true;
+  if (value is! Map) return false;
+  return value.entries.every((entry) {
+    if (entry.key == '_roomIds') {
+      return entry.value is Map &&
+          (entry.value as Map).entries.every(
+            (ids) =>
+                _initialFalseFields.contains(ids.key) &&
+                ids.value is List &&
+                (ids.value as List).isEmpty,
+          );
+    }
+    return _initialFalseFields.contains(entry.key) &&
+        entry.value is List &&
+        (entry.value as List).isEmpty;
+  });
+}
+
+/// Returns a field-wise plan only for an unchanged, unambiguous roster.
+/// Identity changes, unknown properties and competing answers stay conflicts.
+List<Map<String, dynamic>>? _mergeOccupants(
+  Object? local,
+  Object? remote,
+  Object? baseline,
+) {
+  final after = canonicalOccupantValues(local);
+  final current = canonicalOccupantValues(remote);
+  final before = canonicalOccupantValues(baseline);
+  if (after is! List || current is! List || after.length != current.length) {
+    return null;
+  }
+  String? identity(Object? person) {
+    if (person is! Map ||
+        '${person['firstName'] ?? ''}${person['lastName'] ?? ''}'
+            .trim()
+            .isEmpty) {
+      return null;
+    }
+    return jsonEncode([
+      person['firstName'] ?? '',
+      person['lastName'] ?? '',
+      person['birthDate'] ?? '',
+    ]);
+  }
+
+  final seen = <String>{};
+  final result = <Map<String, dynamic>>[];
+  for (var i = 0; i < after.length; i++) {
+    final id = identity(after[i]);
+    if (id == null || id != identity(current[i]) || !seen.add(id)) return null;
+    final a = (after[i] as Map).cast<String, dynamic>();
+    final r = (current[i] as Map).cast<String, dynamic>();
+    final b =
+        before is List &&
+            before.length == after.length &&
+            identity(before[i]) == id
+        ? (before[i] as Map).cast<String, dynamic>()
+        : <String, dynamic>{};
+    // Missing optional properties are defaults only for the known form fields.
+    final observed = {...r};
+    for (final key in _initialTextFields) {
+      observed.putIfAbsent(key, () => null);
+    }
+    final plan = planSyncMerge(
+      baseValues: b,
+      updates: a,
+      remoteValues: observed,
+    );
+    if (!plan.canApplyAutomatically) return null;
+    result.add({...r, ...plan.updates});
+  }
+  return result;
+}
+
 class SyncMergePlan {
   const SyncMergePlan({required this.updates, required this.conflictingFields});
 
@@ -364,8 +465,8 @@ class SyncMergePlan {
   bool get canApplyAutomatically => conflictingFields.isEmpty;
 }
 
-/// Three-way comparison of canonical API fields. Structured fields are atomic:
-/// arrays must never be merged by position (occupants can be reordered).
+/// Three-way comparison with explicit initial-value enrichment. Occupants
+/// require stable unique identities; other structured fields stay atomic.
 /// The caller must apply NOTHING if [SyncMergePlan.canApplyAutomatically] is
 /// false, and must use a server-side version condition when applying a plan.
 SyncMergePlan planSyncMerge({
@@ -382,6 +483,31 @@ SyncMergePlan planSyncMerge({
     } else if (equivalentSyncField(key, remoteValues[key], entry.value)) {
       // Already applied (e.g. a successful request whose response was lost).
       continue;
+    } else if (key == 'occupants' &&
+        baseValues.containsKey(key) &&
+        equivalentSyncField(key, baseValues[key], remoteValues[key])) {
+      patch[key] = entry.value;
+    } else if (key == 'occupants') {
+      final people = _mergeOccupants(
+        entry.value,
+        remoteValues[key],
+        baseValues[key],
+      );
+      if (people == null) {
+        conflicts.add(key);
+      } else if (equivalentSyncField(key, people, entry.value)) {
+        patch[key] = entry.value;
+      } else if (!equivalentSyncField(key, people, remoteValues[key])) {
+        // Field-choice screens select whole collections. A mixed result must
+        // use mergeLatestPatientValues, which also restores that merged copy.
+        conflicts.add(key);
+      }
+    } else if (_initialSyncValue(key, remoteValues[key]) &&
+        !_initialSyncValue(key, entry.value)) {
+      patch[key] = entry.value;
+    } else if (_initialSyncValue(key, entry.value) &&
+        !_initialSyncValue(key, remoteValues[key])) {
+      continue;
     } else if (!baseValues.containsKey(key)) {
       conflicts.add(key);
     } else if (equivalentSyncField(key, baseValues[key], entry.value)) {
@@ -396,7 +522,8 @@ SyncMergePlan planSyncMerge({
   return SyncMergePlan(updates: patch, conflictingFields: conflicts);
 }
 
-/// Only content conflicts with an original baseline can resume automatically.
+/// Content conflicts may be reconsidered against a fresh remote snapshot.
+/// The planner still requires a baseline except for known initial values.
 /// Malformed values, missing records and authorization failures stay visible.
 bool canAutomaticallyResumeConflict(Map<String, dynamic> payload) {
   final conflict = payload['conflict'];
@@ -410,10 +537,7 @@ bool canAutomaticallyResumeConflict(Map<String, dynamic> payload) {
   }
   final remote = conflict['remote'];
   final code = (remote is Map ? remote['error'] : null) ?? conflict['code'];
-  if (guard['writeId'] is! String ||
-      !(payload['updates'] as Map).keys.every(
-        (guard['baseValues'] as Map).containsKey,
-      )) {
+  if (guard['writeId'] is! String) {
     return false;
   }
   return const {
@@ -449,42 +573,15 @@ Map<String, dynamic> mergeLatestPatientValues({
           : remote[key];
       continue;
     }
-    final before = canonicalOccupantValues(baseline[key]);
-    final after = canonicalOccupantValues(entry.value);
-    final current = canonicalOccupantValues(remote[key]);
-    if (before is! List ||
-        after is! List ||
-        current is! List ||
-        before.length != after.length ||
-        before.length != current.length) {
-      throw StateError('La composition du foyer a changé.');
+    if (equivalentSyncField(key, entry.value, remote[key])) {
+      merged[key] = remote[key];
+      continue;
     }
-    final people = <Map<String, dynamic>>[];
-    for (var i = 0; i < before.length; i++) {
-      final b = before[i], a = after[i], r = current[i];
-      if (b is! Map || a is! Map || r is! Map) {
-        throw StateError('Occupant invalide.');
-      }
-      for (final identity in ['firstName', 'lastName', 'birthDate']) {
-        if (!equivalentSyncField(
-          identity,
-          b[identity] ?? '',
-          r[identity] ?? '',
-        )) {
-          throw StateError('L’identité des occupants a changé.');
-        }
-      }
-      final plan = planSyncMerge(
-        baseValues: b.cast<String, dynamic>(),
-        updates: a.cast<String, dynamic>(),
-        remoteValues: r.cast<String, dynamic>(),
+    final people = _mergeOccupants(entry.value, remote[key], baseline[key]);
+    if (people == null) {
+      throw StateError(
+        'Deux versions différentes des informations du foyer existent.',
       );
-      if (!plan.canApplyAutomatically) {
-        throw StateError(
-          'Deux versions différentes des informations du foyer existent.',
-        );
-      }
-      people.add({...r.cast<String, dynamic>(), ...plan.updates});
     }
     merged[key] = people;
   }
