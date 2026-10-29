@@ -83,6 +83,78 @@ void main() {
     },
   );
 
+  for (final answer in [true, false]) {
+    test(
+      'first accessibility answer $answer preserves an unanswered baseline and the full housing patch',
+      () async {
+        await repository.updateHousing('dossier-1', {
+          'easy_access': answer ? 1 : 0,
+          'easy_access_set': 1,
+          'garage': 1,
+          'rdc': 1,
+          'heating_details_json': jsonEncode({'Électrique': true}),
+        });
+        final op = await operation('housing');
+        expect(op['updates']['easyAccess'], answer);
+        expect(
+          (op['concurrency']['baseValues'] as Map).containsKey('easyAccess'),
+          isTrue,
+        );
+        expect(op['concurrency']['baseValues']['easyAccess'], isNull);
+        expect(op['updates']['garage'], isNotNull);
+        expect(op['updates']['rdc'], isNotNull);
+        expect(op['updates']['heatingDetails']['electric'], isTrue);
+      },
+    );
+  }
+
+  test('No is queued even when only the unanswered marker changes', () async {
+    await repository.updateHousing('dossier-1', {
+      'easy_access': 0,
+      'easy_access_set': 1,
+    });
+    final op = await operation('housing');
+    expect(op['updates'], {'easyAccess': false});
+    expect(op['concurrency']['baseValues'], {'easyAccess': null});
+  });
+
+  test('clearing an explicit No sends null with a false baseline', () async {
+    await db.update('housings', {'easy_access': 0, 'easy_access_set': 1});
+    await repository.updateHousing('dossier-1', {
+      'easy_access': 0,
+      'easy_access_set': 0,
+    });
+    final op = await operation('housing');
+    expect(op['updates'], {'easyAccess': null});
+    expect(op['concurrency']['baseValues'], {'easyAccess': false});
+  });
+
+  test(
+    'successive offline answers retain the original unanswered reference',
+    () async {
+      await repository.updateHousing('dossier-1', {
+        'easy_access': 1,
+        'easy_access_set': 1,
+      });
+      await repository.updateHousing('dossier-1', {
+        'easy_access': 0,
+        'easy_access_set': 1,
+      });
+      final op = await operation('housing');
+      expect(op['updates'], {'easyAccess': false});
+      expect(op['concurrency']['baseValues'], {'easyAccess': null});
+    },
+  );
+
+  test(
+    'equipment-only edits do not submit an unanswered exterior answer',
+    () async {
+      await repository.updateHousing('dossier-1', {'garage': 1});
+      final op = await operation('housing');
+      expect((op['updates'] as Map).containsKey('easyAccess'), isFalse);
+    },
+  );
+
   test('patient save captures the reference before updating SQLite', () async {
     await repository.updatePatient('patient-1', {
       'first_name': 'Local',

@@ -224,6 +224,7 @@ class NocodbSyncService {
     try {
       await _syncRepository.recoverInterruptedVersionedWrites();
       await _syncRepository.recoverEmptyHousingRoomConflicts();
+      await _syncRepository.recoverUnansweredHousingAccessConflicts();
       final rehabCount = await _syncRepository.rehabilitateTransientFailures();
       final recoveredCount = await _syncRepository
           .recoverInterruptedDocumentUploads();

@@ -1,3 +1,4 @@
+import { normalizeHousingAccessBaseline } from './housingNullableAccess.mjs';
 import { createJournaledHousingWriter } from './housingWriteJournal.mjs';
 import { joinReportNotePagesText } from './reports/noteText.mjs';
 import { retirementFundLabelsForReport } from './reports/retirementFundNames.mjs';
@@ -550,7 +551,7 @@ const changesCollection = (tableId, body) => {
 };
 
 async function applyConditionalSync(req, res, { tableId, record, fields, mapBaseline,
-  normalizeObserved }) {
+  normalizeObserved, normalizeBaseline }) {
   if (!guardedMutation) return false;
   try {
     const guard = req.body?.concurrency;
@@ -564,7 +565,7 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
       : changesCollection(tableId, req.body) ? strictCollectionMutation : guardedMutation;
     await mutate({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
-      normalizeObserved,
+      normalizeObserved, normalizeBaseline,
       authorizeObserved: tableId === TABLES.dossiers
         ? (row) => canAccessDossierRecord(req.appUser, { id: String(record.id), fields: row })
         : undefined,
@@ -7911,6 +7912,11 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
         if (await applyConditionalSync(req, res, {
           tableId: TABLES.logements, record: existingHousing, fields,
           mapBaseline: mapHousingFields,
+          normalizeBaseline: (baseline, observed) => normalizeHousingAccessBaseline({
+            baseline, observed,
+            expectedUpdatedAt: updates.concurrency?.expectedUpdatedAt,
+            observedUpdatedAt: getRecordUpdatedAt({fields:observed}),
+          }),
         })) return;
       } else {
         if (recoverLegacySync(req, res, existingHousing, fields,

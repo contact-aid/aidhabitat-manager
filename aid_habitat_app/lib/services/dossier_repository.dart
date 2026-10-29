@@ -3380,6 +3380,18 @@ class DossierRepository {
       final existingRow = existingRows.isEmpty ? null : existingRows.first;
 
       final changedFields = _diffAgainstRow(existingRow, fields);
+      // The answer and its local presence marker form one nullable value.
+      // In particular, unanswered -> No changes only easy_access_set.
+      if (changedFields.containsKey('easy_access') ||
+          changedFields.containsKey('easy_access_set')) {
+        for (final key in ['easy_access', 'easy_access_set']) {
+          if (fields.containsKey(key)) {
+            changedFields[key] = fields[key];
+          } else if (existingRow != null && existingRow.containsKey(key)) {
+            changedFields[key] = existingRow[key];
+          }
+        }
+      }
       _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
       if (changedFields.keys.any(
         (key) =>
@@ -3578,12 +3590,17 @@ class DossierRepository {
         }
         return;
       }
-      // `easy_access_set` est local-only (migration v15→v16). NocoDB n'a
-      // pas de colonne dédiée — on garde la sémantique « non renseigné »
-      // côté Flutter uniquement. Si plus tard on veut propager la
-      // distinction, ajouter une colonne `easy_access_set` (Checkbox)
-      // côté serveur et mettre à jour ce mapping.
+      // Keep the presence marker local, but transmit its semantics through
+      // the API's existing nullable easyAccess field, including baselines.
       if (key == 'easy_access_set') return;
+      if (key == 'easy_access') {
+        out['easyAccess'] = fields['easy_access_set'] == 0
+            ? null
+            : value is int
+            ? value == 1
+            : value;
+        return;
+      }
 
       // Cas spécial : `heating_details_json` est un JSON encodé
       // (Map<String label, bool>). On le décode et on le convertit

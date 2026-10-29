@@ -56,7 +56,7 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
  */
 export function createGuardedMutation({ readRecord, writer, readColumns, preferLocal = false }) {
   return async ({ tableId, recordId, fields, baseFields, writeId, authorizeObserved,
-    normalizeObserved }) => {
+    normalizeObserved, normalizeBaseline }) => {
     if (!uuid.test(writeId ?? '') || typeof writeId !== 'string') {
       throw new SyncMutationError(428, 'SYNC_MUTATION_ID_REQUIRED');
     }
@@ -81,12 +81,15 @@ export function createGuardedMutation({ readRecord, writer, readColumns, preferL
       const comparisonObserved = normalizeObserved
         ? await normalizeObserved(structuredClone(observed))
         : observed;
+      const comparisonBaseline = normalizeBaseline
+        ? await normalizeBaseline(structuredClone(baseline), structuredClone(observed))
+        : baseline;
       const revision = observed[SYNC_REVISION_FIELD];
       if (!uuid.test(revision ?? '')) {
         throw new SyncMutationError(503, 'SYNC_REVISION_NOT_PREPARED');
       }
       if (revision === writeId) {
-        const replayPlan = planDatabaseMutation({ fields: desired, baseFields: baseline,
+        const replayPlan = planDatabaseMutation({ fields: desired, baseFields: comparisonBaseline,
           observed: comparisonObserved, equals });
         if (!replayPlan.conflicts.length && !replayPlan.retainedFields.length && !Object.keys(replayPlan.patch).length) {
           return { applied: true, replay: true };
@@ -106,7 +109,7 @@ export function createGuardedMutation({ readRecord, writer, readColumns, preferL
         ? { patch: Object.fromEntries(Object.entries(desired).filter(([key, value]) =>
             !Object.hasOwn(comparisonObserved, key) || !equals(key, comparisonObserved[key], value))),
           conflicts: [], retainedFields: [] }
-        : planDatabaseMutation({ fields: desired, baseFields: baseline,
+        : planDatabaseMutation({ fields: desired, baseFields: comparisonBaseline,
           observed: comparisonObserved, equals });
       if (plan.conflicts.length) {
         throw new SyncMutationError(409, 'SYNC_FIELD_CONFLICT', observed, {

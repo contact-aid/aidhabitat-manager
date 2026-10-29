@@ -2443,6 +2443,126 @@ class SyncRepository {
   /// Renvoie le nombre de lignes modifiées (0 ou 1).
   /// Retry the old null-versus-empty room conflict once with its ORIGINAL
   /// baseline and write ID. The server still rejects any real concurrent edit.
+  /// Retry this legacy projection bug once, without changing the write ID,
+  /// baseline or submitted values. The server rechecks the source timestamp
+  /// on its fresh read and its conditional write protects a racing web edit.
+  Future<int> recoverUnansweredHousingAccessConflicts() async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        where: "entity_type = 'housing' AND status = 'conflict'",
+      );
+      var recovered = 0;
+      for (final row in rows) {
+        Map<String, dynamic> payload;
+        try {
+          payload = Map<String, dynamic>.from(
+            jsonDecode(
+                  await OfflineVault.instance.openString(
+                    row['payload_json'] as String,
+                  ),
+                )
+                as Map,
+          );
+        } catch (_) {
+          continue;
+        }
+        final guard = payload['concurrency'];
+        final baseline = guard is Map ? guard['baseValues'] : null;
+        final updates = payload['updates'];
+        final conflict = payload['conflict'];
+        final remote = conflict is Map ? conflict['remote'] : null;
+        final observed = remote is Map ? remote['remoteData'] : null;
+        final fields = remote is Map ? remote['conflictFields'] : null;
+        final retained = remote is Map ? remote['retainedFields'] : null;
+        final before = guard is Map && guard['expectedUpdatedAt'] is String
+            ? DateTime.tryParse(guard['expectedUpdatedAt'] as String)
+            : null;
+        final current = remote is Map && remote['remoteUpdatedAt'] is String
+            ? DateTime.tryParse(remote['remoteUpdatedAt'] as String)
+            : null;
+        if (payload['unansweredHousingAccessRecoveryAttempted'] == true ||
+            payload['retryMutation'] != null ||
+            guard is! Map ||
+            guard['version'] != 1 ||
+            guard['housingPolicy'] != HousingVisitHandoff.protocol ||
+            guard['createIfAbsent'] == true ||
+            guard['writeId'] is! String ||
+            baseline is! Map ||
+            baseline['easyAccess'] != false ||
+            updates is! Map ||
+            updates['easyAccess'] is! bool ||
+            remote is! Map ||
+            remote['error'] != 'SYNC_FIELD_CONFLICT' ||
+            fields is! List ||
+            fields.length != 1 ||
+            fields.single != 'acces_facile_rue' ||
+            retained is! List ||
+            retained.isNotEmpty ||
+            observed is! Map ||
+            !observed.containsKey('acces_facile_rue') ||
+            observed['acces_facile_rue'] != null ||
+            before == null ||
+            current == null ||
+            !before.isAtSameMomentAs(current)) {
+          continue;
+        }
+        final original = row['payload_json'] as String;
+        payload['unansweredHousingAccessRecoveryAttempted'] = true;
+        payload.remove('conflict');
+        final id = row['id'] as String;
+        // Check ownership before touching the sealed payload: changing another
+        // author's payload would itself quarantine it through SQLite triggers.
+        await txn.update(
+          'sync_operations',
+          {'status': 'pending'},
+          where: "id = ? AND status = 'conflict'",
+          whereArgs: [id],
+        );
+        if (_enforceOwnership &&
+            !await SyncOperationOwnership.mayClaim(txn, id)) {
+          await txn.update(
+            'sync_operations',
+            {'status': 'conflict'},
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          continue;
+        }
+        await txn.update(
+          'sync_operations',
+          {
+            'attempt_count': 0,
+            'last_error': null,
+            'payload_json': await OfflineVault.instance.sealString(
+              jsonEncode(payload),
+            ),
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: "id = ? AND status = 'pending'",
+          whereArgs: [id],
+        );
+        await txn.insert('sync_conflict_history', {
+          'operation_id': id,
+          'entity_type': 'housing',
+          'entity_local_id': row['entity_local_id'],
+          'decision': 'retry_unanswered_housing_access',
+          'snapshot_json': original,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+        await _updateEntitySyncState(
+          db: txn,
+          entityType: 'housing',
+          entityLocalId: row['entity_local_id'] as String,
+          syncState: SyncState.pendingSync,
+        );
+        recovered++;
+      }
+      return recovered;
+    });
+  }
+
   Future<int> recoverEmptyHousingRoomConflicts() async {
     final db = await _database.database;
     return db.transaction((txn) async {
