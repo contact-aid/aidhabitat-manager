@@ -39,7 +39,7 @@ app.build_configurations.each do |config|
     'INFOPLIST_KEY_NSCameraUsageDescription' => 'Tester le scan de documents et la prise de photo sur cet iPad.',
     'FRAMEWORK_SEARCH_PATHS' => ['$(inherited)', File.dirname(framework)],
     'LD_RUNPATH_SEARCH_PATHS' => ['$(inherited)', '@executable_path/Frameworks'],
-    'CURRENT_PROJECT_VERSION' => '1', 'MARKETING_VERSION' => '1.0'
+    'CURRENT_PROJECT_VERSION' => '2', 'MARKETING_VERSION' => '1.0'
   })
 end
 project.root_object.attributes['DevelopmentTeam'] = 'HRFWLL68V9'

@@ -46,7 +46,7 @@ class RunnerTests: XCTestCase {
     await settle()
     XCTAssertEqual(creations, 1)
     XCTAssertEqual(host.supportedInterfaceOrientations, .portrait)
-    XCTAssertTrue(host.prefersInterfaceOrientationLocked)
+    XCTAssertFalse(host.prefersInterfaceOrientationLocked)
   }
 
   func testAnimatedModalOpensAfterPresentationTransition() async {

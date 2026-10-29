@@ -27,8 +27,10 @@ final class PortraitDocumentScannerController: UIViewController {
   override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
   override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .portrait }
   override var shouldAutorotate: Bool { true }
+  // Locking during this handoff can retain the old landscape camera geometry.
+  // Keep rotation available while the portrait modal and VisionKit settle.
   @available(iOS 26.0, *)
-  override var prefersInterfaceOrientationLocked: Bool { true }
+  override var prefersInterfaceOrientationLocked: Bool { false }
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -126,6 +128,10 @@ final class PortraitDocumentScannerController: UIViewController {
       }
       self.rotationDeadline?.cancel()
       self.scannerPresented = true
+      if let scene = self.view.window?.windowScene {
+        NSLog("Scanner prêt : scène=%ld, vue=%.0fx%.0f, appareil=%ld", scene.effectiveGeometry.interfaceOrientation.rawValue,
+          self.view.bounds.width, self.view.bounds.height, UIDevice.current.orientation.rawValue)
+      }
       let scanner = self.makeScanner()
       scanner.modalPresentationStyle = .fullScreen
       self.present(scanner, animated: true)

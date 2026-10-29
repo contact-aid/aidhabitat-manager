@@ -4,7 +4,7 @@ La capture terrain du 29 octobre montre l’écran « Tournez l’iPad en portra
 
 ## Comportement
 
-- Le scan PDF et la photo utilisent le même hôte natif plein écran avec préférence portrait et demande de verrouillage d’orientation iPadOS 26+.
+- Le scan PDF et la photo utilisent le même hôte natif plein écran avec préférence portrait, sans verrouillage d’orientation pendant la transition vers la caméra.
 - L’ouverture se base sur les dimensions réellement affichées, sans attendre une valeur d’orientation de scène concordante. Une transition UIKit en cours est suivie jusqu’à sa fin avant de présenter la caméra.
 - En cas de rotation refusée, ou après deux secondes sans géométrie portrait, la caméra est présentée nativement dans la fenêtre disponible. Cette solution évite un écran d’attente infini. UIKit dimensionne la caméra et ses commandes, sans intégration manuelle de ses sous-vues.
 - Annuler invalide les ouvertures différées. La fermeture du scan ou de la photo retire l’ensemble des écrans natifs, demande le retour au paysage précédent sur iPad et protège le résultat contre une double fermeture.
@@ -37,8 +37,15 @@ Références : [orientations prises en charge](https://developer.apple.com/docum
 
 ## Application physique de recette
 
-Une application indépendante **Scan Test** (`com.aidhabitat.scannertest`, version 1.0, build 1) a été compilée, signée, installée et lancée sur l’iPad de test connecté sous iPadOS 26.6.1. App’Ergo (`com.aidhabitat.manager`, build 106) reste installée à côté.
+Une application indépendante **Scan Test** (`com.aidhabitat.scannertest`, version 1.0, build 2) a été compilée, signée, installée et lancée sur l’iPad de test connecté sous iPadOS 26.6.1. App’Ergo (`com.aidhabitat.manager`, build 106) reste installée à côté.
 
-Cette application exécute le même `DocumentScannerPlugin.swift`, avec un écran d’accueil paysage, deux boutons scan/photo, l’aperçu local du PDF ou de l’image et un export système facultatif. Elle n’initialise pas le moteur Flutter et n’appelle aucun serveur. Elle sert à valider la caméra et les transitions natives ; elle ne valide pas l’import ou la synchronisation des dossiers dans App’Ergo. L’installation et le lancement sont confirmés, la recette manuelle reste à effectuer.
+Cette application exécute le même `DocumentScannerPlugin.swift`, avec un écran d’accueil paysage, deux boutons scan/photo, l’aperçu local du PDF ou de l’image et un export système facultatif. Elle n’initialise pas le moteur Flutter et n’appelle aucun serveur. Elle sert à valider la caméra et les transitions natives ; elle ne valide pas l’import ou la synchronisation des dossiers dans App’Ergo. La recette manuelle du parcours scan a été effectuée sur l’iPad de test : aperçu dans le bon sens en portrait, PDF enregistré dans le bon sens et retour à l’écran paysage, confirmés par Renan. Les autres cas de la recette restent à vérifier.
 
 Construction : `ruby aid_habitat_app/tool/scanner_device_test/build.rb DEVICE_UDID`, depuis la racine du dépôt. Les sources et le lanceur sont dans `aid_habitat_app/tool/scanner_device_test/` ; le bundle signé est produit dans `aid_habitat_app/build/scanner-device-test/DerivedData/Build/Products/Release-iphoneos/ScanTest.app`.
+
+
+## Correction du décalage de 90 degrés, validée sur appareil
+
+Le premier essai physique ouvrait le scanner dans un écran portrait, mais le flux caméra restait tourné de 90 degrés avec des bandes noires. La préférence `prefersInterfaceOrientationLocked = true` de l’hôte a été retirée : elle pouvait conserver l’ancienne géométrie paysage pendant le passage à VisionKit. Le masque portrait et la présentation plein écran sont conservés ; la scène peut maintenant terminer sa rotation pendant la transition caméra.
+
+Le build 2 de Scan Test a été recompilé, signé, installé et lancé sur l’iPad de test. Renan a confirmé l’aperçu dans le bon sens, puis le PDF enregistré dans le bon sens et le retour en paysage. Une capture directe de l’iPad montre le flux caméra remplissant l’écran portrait, avec les commandes à droite. Les six tests natifs ont été relancés avec succès après ce changement, dont le contrôle que l’hôte ne verrouille plus l’orientation. Cela valide le parcours natif sur cet appareil ; l’import et la synchronisation dans l’application Flutter complète restent hors de cette application de recette.
