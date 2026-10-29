@@ -1,3 +1,4 @@
+import { contextNotesForReport } from './contextNotes.mjs';
 import { joinReportNotePagesText } from './noteText.mjs';
 import { drawReportFrame, drawPaginatedReportText, drawBeneficiaryOccupants, drawTrustedPerson, wrapReportLines } from './adaptiveReportLayout.mjs';
 import { formatMobilityAidsForReport, printableMobilityAidsForReport, applyMobilityAidsToReport } from './mobilityAids.mjs';
@@ -1192,37 +1193,7 @@ function buildViewModel({
       //   • autre/vide   → '/' (sécurité — on n'invente pas un montant)
       amoLabel: (pigPloermelResolved ?? dossier?.pigPloermel) === true ? '0 €' : amoLabelForNature(dossier?.natureAccompagnement),
     },
-    contexte: (() => {
-      // Source UNIQUE : les NOTES écrites par l'ergo dans
-      // `Contexte de vie > Médical` (Environnement) et
-      // `Contexte de vie > Autonomie` (Habitudes de vie).
-      //
-      // Avant 2026-05-07 : fallback automatique sur les checkboxes
-      // structurées (`buildEnvironnementText` / `buildHabitudesText`)
-      // si la note était vide. Conséquence : Marie Pommier sans note
-      // Habitudes mais avec quelques cases cochées dans le formulaire
-      // → le PDF affichait une liste « Autonomie observée : … » alors
-      // que l'ergo n'avait rien saisi en habitudes. Symptôme reporté :
-      // « j'avais rien mis dans habitudes de vie donc ça aurait dû
-      // rester vierge ».
-      //
-      // Désormais : note vide = section vide dans le PDF. L'ergo a
-      // le contrôle total, les checkboxes structurées ne sont plus
-      // exposées au lecteur du rapport (elles restent stockées en base
-      // pour les requêtes/stats internes). `buildEnvironnementText` et
-      // `buildHabitudesText` deviennent dead code mais sont gardés au
-      // cas où on souhaite réintroduire un opt-in plus tard.
-      const medicalPages = contexteNotes.filter(
-        (pg) => String(pg?.tabKey || '') === 'Contexte de vie-Médical',
-      );
-      const autonomyPages = contexteNotes.filter(
-        (pg) => String(pg?.tabKey || '') === 'Contexte de vie-Autonomie',
-      );
-      return {
-        environnement: joinReportNotePagesText(medicalPages),
-        habitudes: joinReportNotePagesText(autonomyPages),
-      };
-    })(),
+    contexte: contextNotesForReport(contexteNotes),
     housing: housingView,
     sanitaires: sanitairesView,
     observations: observationsView,

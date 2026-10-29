@@ -13,10 +13,14 @@ void main() {
   test(
     'note tabs select report context without sending an arbitrary heading',
     () {
-      expect(aiRewriteContextForTab('Bénéficiaire-Notes'), 'beneficiary');
+      expect(aiRewriteContextForTab('Bénéficiaire-Notes'), 'living_context');
       expect(aiRewriteContextForTab('Contexte de vie-Médical'), 'medical');
       expect(aiRewriteContextForTab('Contexte de vie-Autonomie'), 'autonomy');
       expect(aiRewriteContextForTab('Contexte de vie'), 'living_context');
+      expect(
+        aiRewriteContextForTab('Contexte de vie-Habitudes'),
+        'living_context',
+      );
       expect(aiRewriteContextForTab('Autre titre'), 'general');
     },
   );

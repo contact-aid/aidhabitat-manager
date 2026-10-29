@@ -13,6 +13,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/types.dart';
 import '../services/data_service.dart';
+import '../services/context_notes.dart';
 import '../services/ai_rewrite_service.dart';
 import '../services/pencil_interaction_service.dart';
 import '../services/sync_engine.dart';
@@ -533,7 +534,8 @@ class _NotesWidgetState extends State<NotesWidget> {
       widget.sharedText &&
       (widget.tabKey == 'notes_rapides' ||
           widget.tabKey == 'Accessibilité-Notes' ||
-          widget.tabKey == 'Sanitaires-Notes');
+          widget.tabKey == 'Sanitaires-Notes' ||
+          isContextTextTab(widget.tabKey));
   bool _sharedTextInitialized = false;
   // Flags médicaux par page (1 = Pathologie, 2 = Suivi, 3 = Sensoriel).
   // Sérialisés dans `drawing_json['medicalFlags']`. Utilisé uniquement

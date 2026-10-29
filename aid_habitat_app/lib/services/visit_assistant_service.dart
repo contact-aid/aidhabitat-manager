@@ -1,3 +1,4 @@
+import 'context_notes.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -373,7 +374,8 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
     required String dossierId,
   }) async {
     const keys = [
-      'Bénéficiaire-Notes',
+      environmentTextTabKey,
+      habitsTextTabKey,
       'Contexte de vie-Médical',
       'Contexte de vie-Autonomie',
       'Accessibilité-Notes',
@@ -432,6 +434,17 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
           });
         }
       }
+    }
+    text.remove(medicalDrawingTabKey);
+    text.remove(autonomyDrawingTabKey);
+    for (final key in [environmentTextTabKey, habitsTextTabKey]) {
+      final raw = await _notes.fetchDrawingJson(
+        patientId: patientId,
+        tabKey: key,
+        dossierId: dossierId,
+      );
+      final content = jsonDecode(raw ?? '{}')['text']?.toString() ?? '';
+      text[key] = content.trim().isEmpty ? [] : [content];
     }
     return {'existingText': text, 'handwritten': handwriting};
   }
