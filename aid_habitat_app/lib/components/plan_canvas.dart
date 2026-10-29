@@ -333,6 +333,7 @@ class _PendingPlanErasure {
 
 class PlanCanvasController {
   _PlanCanvasState? _state;
+  final Map<String, Matrix4> _viewports = {};
 
   Future<String?> previewDataUrl({
     String? patientId,
@@ -417,6 +418,17 @@ class PlanCanvas extends StatefulWidget {
 class _PlanCanvasState extends State<PlanCanvas> {
   late final DataService _dataService = widget.dataService ?? DataService();
   final GlobalKey _drawAreaKey = GlobalKey();
+  final GlobalKey _webViewportKey = GlobalKey();
+  String get _viewportKey =>
+      '${widget.patientId}/${widget.tabKey}/${widget.pageNumber}';
+
+  void _rememberViewport() {
+    if (kIsWeb && _viewportCentered) {
+      widget.controller?._viewports[_viewportKey] = _viewportController.value
+          .clone();
+    }
+  }
+
   final TransformationController _viewportController =
       TransformationController();
   bool _viewportCentered = false;
@@ -525,6 +537,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
   void initState() {
     super.initState();
     widget.controller?._state = this;
+    _viewportController.addListener(_rememberViewport);
     _loadStrokes();
     _pencilDoubleTapSubscription = PencilInteractionService.instance.onDoubleTap
         .listen((_) {
@@ -584,6 +597,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
     }
     _pencilDoubleTapSubscription?.cancel();
     _pencilDoubleTapSubscription = null;
+    _viewportController.removeListener(_rememberViewport);
     _viewportController.dispose();
     super.dispose();
   }
@@ -857,7 +871,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
     );
     if (!mounted || generation != _loadGeneration) return;
     _editableDrawing =
-        json == null || json.isEmpty || isEditablePlanDrawing(json);
+        json == null || json.trim().isEmpty || isEditablePlanDrawing(json);
     _drawingMetadata = {};
     try {
       final decoded = jsonDecode(json ?? '{}');
@@ -927,7 +941,11 @@ class _PlanCanvasState extends State<PlanCanvas> {
     try {
       final box = _drawAreaKey.currentContext?.findRenderObject() as RenderBox?;
       if (box == null) return null;
-      final size = box.size;
+      final exportBounds = kIsWeb
+          ? (_planContentBounds() ?? (Offset.zero & _canvasSize)).inflate(24)
+          : Offset.zero & box.size;
+      final rasterScale = math.min(1.0, 4096 / exportBounds.longestSide);
+      final size = exportBounds.size * rasterScale;
       if (size.width < 1 || size.height < 1) return null;
 
       final recorder = ui.PictureRecorder();
@@ -936,7 +954,9 @@ class _PlanCanvasState extends State<PlanCanvas> {
         Rect.fromLTWH(0, 0, size.width, size.height),
         Paint()..color = Colors.white,
       );
-      _GridPainter().paint(canvas, size);
+      canvas.scale(rasterScale);
+      _GridPainter().paint(canvas, exportBounds.size);
+      canvas.translate(-exportBounds.left, -exportBounds.top);
       _DrawPainter.paintStrokes(canvas, _strokes, null);
       final picture = recorder.endRecording();
       final img = await picture.toImage(
@@ -944,6 +964,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
         size.height.toInt(),
       );
       final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+      img.dispose();
+      picture.dispose();
       if (byteData == null) return null;
       final base64 = base64Encode(byteData.buffer.asUint8List());
       return 'data:image/png;base64,$base64';
@@ -976,9 +998,13 @@ class _PlanCanvasState extends State<PlanCanvas> {
   // ----- Gesture handlers -----
 
   Offset _localPoint(Offset global) {
-    final box = _drawAreaKey.currentContext?.findRenderObject() as RenderBox?;
+    final box =
+        (kIsWeb ? _webViewportKey : _drawAreaKey).currentContext
+                ?.findRenderObject()
+            as RenderBox?;
     if (box == null) return global;
-    return box.globalToLocal(global);
+    final local = box.globalToLocal(global);
+    return kIsWeb ? _viewportController.toScene(local) : local;
   }
 
   void _startStrokeAt(Offset pt) {
@@ -1117,7 +1143,11 @@ class _PlanCanvasState extends State<PlanCanvas> {
   Future<void> _downloadPng() async {
     final box = _drawAreaKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return;
-    final size = box.size;
+    final exportBounds = kIsWeb
+        ? (_planContentBounds() ?? (Offset.zero & _canvasSize)).inflate(24)
+        : Offset.zero & box.size;
+    final rasterScale = math.min(1.0, 4096 / exportBounds.longestSide);
+    final size = exportBounds.size * rasterScale;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
@@ -1129,12 +1159,16 @@ class _PlanCanvasState extends State<PlanCanvas> {
     );
 
     // Quadrillage simple + strokes.
-    _GridPainter().paint(canvas, size);
+    canvas.scale(rasterScale);
+    _GridPainter().paint(canvas, exportBounds.size);
+    canvas.translate(-exportBounds.left, -exportBounds.top);
     _DrawPainter.paintStrokes(canvas, _strokes, null);
 
     final picture = recorder.endRecording();
     final img = await picture.toImage(size.width.toInt(), size.height.toInt());
     final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    img.dispose();
+    picture.dispose();
     if (byteData == null) return;
     final bytes = byteData.buffer.asUint8List();
 
@@ -2194,14 +2228,38 @@ class _PlanCanvasState extends State<PlanCanvas> {
           );
           _canvasSize = Size(width, height);
           if (kIsWeb && (!_viewportCentered || _viewportSize != viewportSize)) {
+            final previousSize = _viewportSize;
+            final saved = widget.controller?._viewports[_viewportKey]?.clone();
+            final initial = !_viewportCentered;
             _viewportCentered = true;
             _viewportSize = viewportSize;
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _viewportSize == viewportSize) {
-                _fitPlanToViewport();
+              if (!mounted || _viewportSize != viewportSize) return;
+              if (initial) {
+                if (saved != null) {
+                  _viewportController.value = saved;
+                } else {
+                  _fitPlanToViewport();
+                }
+              } else {
+                final matrix = _viewportController.value.clone();
+                matrix.setEntry(
+                  0,
+                  3,
+                  matrix.entry(0, 3) +
+                      (viewportSize.width - previousSize.width) / 2,
+                );
+                matrix.setEntry(
+                  1,
+                  3,
+                  matrix.entry(1, 3) +
+                      (viewportSize.height - previousSize.height) / 2,
+                );
+                _viewportController.value = matrix;
               }
             });
           }
+          if (kIsWeb) return _buildInfiniteWebCanvas(viewportSize);
           if (!kIsWeb && !_viewportCentered) {
             _viewportCentered = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2305,6 +2363,62 @@ class _PlanCanvasState extends State<PlanCanvas> {
     );
   }
 
+  Widget _buildInfiniteWebCanvas(Size size) {
+    final selected =
+        _editingMode && _selectedIndex >= 0 && _selectedIndex < _strokes.length
+        ? _strokes[_selectedIndex]
+        : null;
+    return AnimatedBuilder(
+      animation: _viewportController,
+      builder: (context, _) => Stack(
+        key: _webViewportKey,
+        children: [
+          Positioned.fill(
+            child: Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: _onCanvasPointerDown,
+              onPointerMove: _onCanvasPointerMove,
+              onPointerUp: _onCanvasPointerUp,
+              onPointerCancel: _onCanvasPointerCancel,
+              child: MouseRegion(
+                cursor: _tool == PlanTool.hand
+                    ? SystemMouseCursors.grab
+                    : SystemMouseCursors.precise,
+                child: InteractiveViewer(
+                  transformationController: _viewportController,
+                  constrained: false,
+                  panEnabled: _tool == PlanTool.hand,
+                  scaleEnabled:
+                      _activeCanvasPointerKind == null ||
+                      !_isStylusPointer(_activeCanvasPointerKind!),
+                  minScale: .01,
+                  maxScale: 4,
+                  boundaryMargin: const EdgeInsets.all(double.infinity),
+                  child: SizedBox(width: size.width, height: size.height),
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                key: _drawAreaKey,
+                painter: _InfinitePlanPainter(
+                  transform: _viewportController.value,
+                  strokes: _strokes,
+                  current: _current,
+                  selected: selected,
+                ),
+              ),
+            ),
+          ),
+          if (selected != null && _symbolTools.contains(selected.tool))
+            _buildSelectedSymbolActions(),
+        ],
+      ),
+    );
+  }
+
   /// Place une petite barre d'actions (flip H / flip V / supprimer)
   /// au-dessus du coin haut-droit du symbole sélectionné. Suit la
   /// rotation du symbole pour rester "collé" à son coin visuel.
@@ -2321,7 +2435,12 @@ class _PlanCanvasState extends State<PlanCanvas> {
       relative.dx * cos - relative.dy * sin,
       relative.dx * sin + relative.dy * cos,
     );
-    final canvasPoint = center + rotated;
+    final canvasPoint = kIsWeb
+        ? MatrixUtils.transformPoint(
+            _viewportController.value,
+            center + rotated,
+          )
+        : center + rotated;
     // Barre horizontale : ~3 boutons de 30px + 2 gaps de 6px = ~106px,
     // on la place centrée au-dessus du coin.
     const barWidth = 108.0;
@@ -2469,7 +2588,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
       _discardActiveCanvasGesture();
     }
 
-    final pt = event.localPosition;
+    final pt = _localPoint(event.position);
     _activeCanvasPointer = event.pointer;
     _activeCanvasPointerKind = event.kind;
     _canvasPointerDown = pt;
@@ -2502,7 +2621,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
     if (_activeCanvasPointer != event.pointer) return;
     final down = _canvasPointerDown;
     if (down != null) {
-      final distanceSquared = (event.localPosition - down).distanceSquared;
+      final distanceSquared =
+          (_localPoint(event.position) - down).distanceSquared;
       if (distanceSquared > _canvasPointerMaxDistanceSquared) {
         _canvasPointerMaxDistanceSquared = distanceSquared;
       }
@@ -2514,7 +2634,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
       _updateSelectedSymbol(event.position);
       return;
     }
-    _updateStrokeAt(event.localPosition);
+    _updateStrokeAt(_localPoint(event.position));
   }
 
   void _onCanvasPointerUp(PointerUpEvent event) {
@@ -2537,7 +2657,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
     // La gomme a toujours priorité sur la sélection/manipulation des
     // symboles. Un simple tap produit aussi un point de gomme.
     if (_tool == PlanTool.eraser) {
-      _updateStrokeAt(event.localPosition);
+      _updateStrokeAt(_localPoint(event.position));
       _finishCurrentStroke();
       _resetCanvasPointer();
       return;
@@ -2545,7 +2665,8 @@ class _PlanCanvasState extends State<PlanCanvas> {
 
     final down = _canvasPointerDown;
     if (down != null) {
-      final distanceSquared = (event.localPosition - down).distanceSquared;
+      final distanceSquared =
+          (_localPoint(event.position) - down).distanceSquared;
       if (distanceSquared > _canvasPointerMaxDistanceSquared) {
         _canvasPointerMaxDistanceSquared = distanceSquared;
       }
@@ -2556,7 +2677,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
             _kSymbolTapTolerance * _kSymbolTapTolerance;
     final symbolIndex = isStableSymbolTap
         ? _canvasPointerDownSymbolIndex
-        : _symbolIndexAt(event.localPosition);
+        : _symbolIndexAt(_localPoint(event.position));
     if ((isStableSymbolTap || !_canvasPointerMoved) && symbolIndex >= 0) {
       setState(() {
         _current = null;
@@ -2571,7 +2692,7 @@ class _PlanCanvasState extends State<PlanCanvas> {
         _editingMode = false;
       });
     } else {
-      _updateStrokeAt(event.localPosition);
+      _updateStrokeAt(_localPoint(event.position));
       _finishCurrentStroke();
     }
     _resetCanvasPointer();
@@ -2874,6 +2995,50 @@ class _HandlesPainter extends CustomPainter {
 // ---------------------------------------------------------------------------
 // Grid + ruler painter
 // ---------------------------------------------------------------------------
+
+/// Paint only the visible region; neither panning nor zooming allocates a larger canvas.
+class _InfinitePlanPainter extends CustomPainter {
+  final Matrix4 transform;
+  final List<_PlanStroke> strokes;
+  final _PlanStroke? current;
+  final _PlanStroke? selected;
+  _InfinitePlanPainter({
+    required this.transform,
+    required this.strokes,
+    this.current,
+    this.selected,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.clipRect(Offset.zero & size);
+    final scale = transform.getMaxScaleOnAxis();
+    // Thin out the grid at distant zoom levels to keep it readable and bounded.
+    var step = 24.0 * scale;
+    while (step < 12) {
+      step *= 5;
+    }
+    final paint = Paint()
+      ..color = const Color(0xFF8A939D).withValues(alpha: .22)
+      ..strokeWidth = 1;
+    for (var x = transform.entry(0, 3) % step; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (var y = transform.entry(1, 3) % step; y < size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+    canvas.save();
+    canvas.transform(transform.storage);
+    _DrawPainter.paintStrokes(canvas, strokes, current);
+    if (selected != null) {
+      _HandlesPainter(stroke: selected!).paint(canvas, size);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _InfinitePlanPainter oldDelegate) => true;
+}
 
 class _GridPainter extends CustomPainter {
   static const double _cellPx = 24;

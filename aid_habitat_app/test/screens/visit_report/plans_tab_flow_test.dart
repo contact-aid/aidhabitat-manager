@@ -10,6 +10,22 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _PlansDataService implements DataService {
   final drawings = <int, String>{};
+  final remoteUrls = <int, String>{};
+  final remotePages = <int, LocalNotePageSnapshot>{};
+  bool remoteUnavailable = false;
+
+  @override
+  Future<LocalNotePageSnapshot?> fetchRemotePlanPage({
+    required String patientId,
+    required int pageNumber,
+  }) async => remoteUnavailable
+      ? null
+      : remotePages[pageNumber] ??
+            LocalNotePageSnapshot(
+              pageNumber: pageNumber,
+              drawingJson: '',
+              textContent: '',
+            );
   final phases = <int, PlanPhase?>{};
   String? lastDuplicatePreview;
   int? lastDuplicateSource;
@@ -27,6 +43,7 @@ class _PlansDataService implements DataService {
         drawingJson: entry.value,
         textContent: '',
         planPhase: phases[entry.key],
+        remoteUrl: remoteUrls[entry.key],
       ),
   ];
 
@@ -123,6 +140,69 @@ Dossier _fictionalDossier() => Dossier(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('empty saved scenario with HTML preview stays editable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _PlansDataService();
+    service.drawings[0] = '{"format":"plan_canvas_v1","strokes":[]}';
+    service.drawings[2] = '';
+    service.remoteUrls[2] =
+        'https://api.example.test/public/note-pages/empty/preview';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PlansTab(dossier: _fictionalDossier(), dataService: service),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Scénario 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Plan ancien conservé en lecture seule'), findsNothing);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(service.writes, 0);
+    expect(service.drawings[2], '');
+  });
+
+  for (final offline in [false, true]) {
+    testWidgets(
+      'ambiguous empty local page protects historical preview (offline=$offline)',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1400, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final service = _PlansDataService()..remoteUnavailable = offline;
+        service.drawings[0] = '';
+        service.remoteUrls[0] =
+            'https://api.example.test/public/note-pages/old/preview';
+        service.remotePages[0] = const LocalNotePageSnapshot(
+          pageNumber: 0,
+          drawingJson: '',
+          textContent: '',
+          previewDataUrl:
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PlansTab(
+                dossier: _fictionalDossier(),
+                dataService: service,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Plan ancien conservé en lecture seule'),
+          findsOneWidget,
+        );
+        expect(service.writes, 0);
+      },
+    );
+  }
 
   final validStroke = {
     'tool': 'pen',

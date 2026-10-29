@@ -816,6 +816,27 @@ class DataService {
     return _noteRepository.purgeLegacySanitairesNotes(patientId);
   }
 
+  /// Read-only evidence for image-only or empty historical plan pages.
+  Future<LocalNotePageSnapshot?> fetchRemotePlanPage({
+    required String patientId,
+    required int pageNumber,
+  }) async {
+    final note = await _nocodbApiClient.fetchNotePage(
+      patientId: patientId,
+      tabKey: 'Plans',
+      pageNumber: pageNumber,
+    );
+    if (note == null) return null;
+    return LocalNotePageSnapshot(
+      pageNumber: pageNumber,
+      drawingJson: note['drawingJson']?.toString() ?? '',
+      textContent: note['textContent']?.toString() ?? '',
+      planPhase: planPhaseFromDb(note['planPhase']?.toString()),
+      previewDataUrl: note['previewDataUrl']?.toString(),
+      remoteUrl: note['remoteUrl']?.toString(),
+    );
+  }
+
   Future<bool> refreshNotePageFromRemote({
     required String patientId,
     required String tabKey,

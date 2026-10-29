@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
 import 'package:aid_habitat_app/components/plan_canvas.dart';
 import 'package:aid_habitat_app/components/plan_viewport.dart';
 import 'package:aid_habitat_app/components/web_plan_image_viewport.dart';
@@ -10,6 +12,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _Plans extends Fake implements DataService {
   int writes = 0;
+  String? savedDrawing;
+  String? savedPreview;
   @override
   Future<String?> fetchNoteDrawingJson({
     required String patientId,
@@ -50,6 +54,8 @@ class _Plans extends Fake implements DataService {
   dynamic noSuchMethod(Invocation invocation) {
     if (invocation.memberName == #saveNoteDrawingJson) {
       writes++;
+      savedDrawing = invocation.namedArguments[#drawingJson] as String;
+      savedPreview = invocation.namedArguments[#previewDataUrl] as String?;
       return Future<void>.value();
     }
     return super.noSuchMethod(invocation);
@@ -75,6 +81,13 @@ void main() {
       expect(visible.top, greaterThanOrEqualTo(0));
       expect(visible.right, lessThanOrEqualTo(viewport.width));
       expect(visible.bottom, lessThanOrEqualTo(viewport.height));
+      expect(
+        math.max(
+          visible.width / viewport.width,
+          visible.height / viewport.height,
+        ),
+        closeTo(.6, .001),
+      );
       expect(visible.center.dx, closeTo(viewport.width / 2, .001));
       expect(visible.center.dy, closeTo(viewport.height / 2, .001));
     });
@@ -143,9 +156,10 @@ void main() {
       await tester.tap(find.byTooltip('Recentrer le plan'));
       await tester.pumpAndSettle();
       expectFit(bounds);
+      final scaleBeforeResize = controller.value.getMaxScaleOnAxis();
       await tester.binding.setSurfaceSize(const Size(600, 420));
       await tester.pumpAndSettle();
-      expectFit(bounds);
+      expect(controller.value.getMaxScaleOnAxis(), scaleBeforeResize);
       await tester.pumpWidget(page(1));
       await tester.pumpAndSettle();
       expectFit(const Rect.fromLTRB(20, 20, 300, 220));
@@ -153,6 +167,79 @@ void main() {
       expect(service.writes, 0);
     },
   );
+  testWidgets('web retains each page viewport and draws beyond the old canvas', (
+    tester,
+  ) async {
+    if (!kIsWeb) return;
+    await tester.binding.setSurfaceSize(const Size(1100, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _Plans();
+    final shared = PlanCanvasController();
+    final imageKey = GlobalKey();
+    Widget page(int number) => MaterialApp(
+      home: Scaffold(
+        body: RepaintBoundary(
+          key: imageKey,
+          child: PlanCanvas(
+            key: ValueKey(number),
+            patientId: 'synthetic',
+            controller: shared,
+            dataService: service,
+            pageNumber: number,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(page(0));
+    await tester.pumpAndSettle();
+    TransformationController viewport() => tester
+        .widget<InteractiveViewer>(find.byType(InteractiveViewer))
+        .transformationController!;
+    final distant = Matrix4.identity()..setTranslationRaw(10000, 12000, 0);
+    viewport().value = distant.clone();
+    await tester.pumpAndSettle();
+    // Grid is still drawn far above/left of the former finite sheet.
+    final boundary =
+        imageKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+    final img = await boundary.toImage();
+    final pixels = (await img.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+    int value(int x, int y) => pixels.getUint8((y * img.width + x) * 4);
+    expect(value(112, 301), lessThan(value(116, 301)));
+    img.dispose();
+    final gesture = await tester.startGesture(const Offset(300, 300));
+    await gesture.moveTo(const Offset(400, 400));
+    await gesture.up();
+    await tester.pump();
+    await tester.runAsync(() => shared.flush());
+    expect(service.writes, 1);
+    final savedStrokes = jsonDecode(service.savedDrawing!)['strokes'] as List;
+    expect(savedStrokes.last['points'].first, [-9700, -11700]);
+    expect(service.savedPreview, startsWith('data:image/png;base64,'));
+    await tester.runAsync(() async {
+      final codec = await ui.instantiateImageCodec(
+        base64Decode(service.savedPreview!.split(',').last),
+      );
+      final frame = await codec.getNextFrame();
+      expect(frame.image.width, lessThanOrEqualTo(4096));
+      expect(frame.image.height, lessThanOrEqualTo(4096));
+      // Both the old plan and the new negative-coordinate stroke fit the export.
+      expect(frame.image.width, greaterThan(3000));
+      expect(frame.image.height, greaterThan(3000));
+      frame.image.dispose();
+      codec.dispose();
+    });
+    await tester.pumpWidget(page(1));
+    await tester.pumpAndSettle();
+    expect(viewport().value, isNot(distant));
+    final second = viewport().value.clone();
+    await tester.pumpWidget(page(0));
+    await tester.pumpAndSettle();
+    expect(viewport().value, distant);
+    await tester.pumpWidget(page(1));
+    await tester.pumpAndSettle();
+    expect(viewport().value, second);
+  });
+
   testWidgets('historical image reset and resize recover the fitted preview', (
     tester,
   ) async {

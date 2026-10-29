@@ -12,6 +12,10 @@ import '../../models/visit_report_categories.dart';
 import '../../services/data_service.dart';
 import '../../services/note_repository.dart';
 
+bool _isNotePreviewPageUrl(String url) => RegExp(
+  r'/public/note-pages/[^/]+/preview/?$',
+).hasMatch(Uri.tryParse(url)?.path ?? '');
+
 /// Plans tab — React-parity multi-page canvas:
 ///  - Pagination bar with Previous / Next / Add / Delete
 ///  - Each page persists its own strokes under the same `tabKey='Plans'`
@@ -90,8 +94,37 @@ class _PlansTabState extends State<PlansTab> {
         continue;
       }
       numbers.add(page.pageNumber);
-      if (!isEditablePlanDrawing(page.drawingJson)) {
-        _protectedPages[page.pageNumber] = page;
+      var preview = page;
+      var unverifiedEmptyPage = false;
+      // The canonical /preview URL is an authenticated HTML page, not an image.
+      // Local SQLite omits server thumbnails: verify before allowing edits so
+      // an image-only historical plan can never be mistaken for an empty page.
+      if (!isEditablePlanDrawing(page.drawingJson) &&
+          (page.previewDataUrl?.isEmpty ?? true) &&
+          _isNotePreviewPageUrl(page.remoteUrl ?? '')) {
+        try {
+          final remote = await _dataService.fetchRemotePlanPage(
+            patientId: widget.dossier.patient.id,
+            pageNumber: page.pageNumber,
+          );
+          if (!mounted) return;
+          unverifiedEmptyPage = remote == null;
+          if (remote != null) preview = remote;
+        } catch (_) {
+          unverifiedEmptyPage = true;
+        }
+        if (!mounted) return;
+      }
+      final hasSavedImage =
+          (preview.previewDataUrl?.isNotEmpty ?? false) ||
+          (preview.remoteUrl?.isNotEmpty == true &&
+              !_isNotePreviewPageUrl(preview.remoteUrl!));
+      if (unverifiedEmptyPage ||
+          (page.drawingJson.trim().isNotEmpty &&
+              !isEditablePlanDrawing(page.drawingJson)) ||
+          (page.drawingJson.trim().isEmpty &&
+              (preview.drawingJson.trim().isNotEmpty || hasSavedImage))) {
+        _protectedPages[page.pageNumber] = preview;
       }
       _blankPages[page.pageNumber] = _isBlankPage(page.drawingJson);
       _phaseCache[page.pageNumber] = page.planPhase;
@@ -245,8 +278,13 @@ class _PlansTabState extends State<PlansTab> {
         preview = Image.memory(
           base64Decode(dataUrl.substring(dataUrl.indexOf(',') + 1)),
           fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => const Center(
+            child: Text('Aperçu illisible. Le plan enregistré est conservé.'),
+          ),
         );
-      } else if (page.remoteUrl != null && page.remoteUrl!.isNotEmpty) {
+      } else if (page.remoteUrl != null &&
+          page.remoteUrl!.isNotEmpty &&
+          !_isNotePreviewPageUrl(page.remoteUrl!)) {
         preview = Image.network(
           page.remoteUrl!,
           fit: BoxFit.contain,
