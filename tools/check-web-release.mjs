@@ -157,6 +157,16 @@ async function checkLiveSecurityHeaders() {
       failures.push('security-headers: CSP encore présente en Report-Only');
       return;
     }
+    const html = await response.text();
+    const scripts = [...stripHtmlComments(html).matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+    const scriptPolicy = csp.split(';').find((part) => /^\s*script-src\s/.test(part)) || '';
+    for (const [, attributes, body] of scripts) {
+      if (/\bsrc\s*=/i.test(attributes) || !body.trim()) continue;
+      const hash = createHash('sha256').update(body).digest('base64');
+      if (!scriptPolicy.includes(`'sha256-${hash}'`)) {
+        failures.push(`security-headers: script inline bloqué par la CSP (sha256-${hash})`);
+      }
+    }
     checked.push('content-security-policy-enforced');
   } catch (error) {
     failures.push(`security-headers: ${error.message}`);

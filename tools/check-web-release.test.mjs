@@ -101,3 +101,21 @@ test('accepts only the expected build and exact bundle provenance', async (t) =>
     (error) => error.code === 1 && /empreinte main\.dart\.js incohérente/.test(error.stderr),
   );
 });
+
+
+test('nginx authorizes every inline startup script with its exact hash', async () => {
+  const html = (await readFile('aid_habitat_app/web/index.html', 'utf8')).replace(/<!--[\s\S]*?-->/g, '');
+  const nginx = await readFile('aid_habitat_app/nginx.conf', 'utf8');
+  const policy = nginx.match(/add_header Content-Security-Policy "([^"]+)"/)[1];
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
+  let checked = 0;
+  for (const [, attributes, body] of scripts) {
+    if (/\bsrc\s*=/i.test(attributes) || !body.trim()) continue;
+    const hash = createHash('sha256').update(body).digest('base64');
+    assert.ok(policy.includes(`'sha256-${hash}'`), `Startup script is blocked: sha256-${hash}`);
+    checked++;
+  }
+  assert.ok(checked >= 3);
+  const scriptPolicy = policy.split(';').find(part => part.trim().startsWith('script-src '));
+  assert.ok(!scriptPolicy.includes("'unsafe-inline'"));
+});
