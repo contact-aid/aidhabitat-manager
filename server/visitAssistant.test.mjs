@@ -143,3 +143,14 @@ test('OpenRouter receives enforced privacy preferences; invalid and truncated an
     fetchImpl: async () => Response.json({ choices: [{ message: { content: 'Partial' }, finish_reason: 'length' }] }) });
   await assert.rejects(truncated.rewrite([]), { statusCode: 502 });
 });
+
+test('draft preserves both profile and environment additions in their common environment note', async () => {
+  const sections = { beneficiary: 'Vit en couple.', environment: 'Maison isolée.',
+    autonomy: 'Marche quotidienne.', access: '', sanitary: '', project: '', summary: '' };
+  const provider = createVisitProvider({env:{OPENROUTER_API_KEY:'synthetic-key',VISIT_AI_MODEL:'synthetic-model'},
+    fetchImpl: async () => Response.json({choices:[{message:{content:JSON.stringify({sections,warnings:[]})},finish_reason:'stop'}]})});
+  const draft = await provider.draft({context:{existingText:{}},facts:{warnings:[]}});
+  assert.equal(draft.sections['Bénéficiaire-Notes'],'Vit en couple.\n\nMaison isolée.');
+  assert.equal(draft.sections['Contexte de vie-Habitudes'],'Marche quotidienne.');
+  assert.equal(draft.sections['Contexte de vie-Médical'],undefined);
+});

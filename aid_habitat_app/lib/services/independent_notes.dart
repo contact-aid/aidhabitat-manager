@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'context_notes.dart';
 
 /// Persisted in drawing_json, understood by the server without a schema change.
 /// Build 64 ignores this property; the server also adds it on legacy saves.
@@ -10,11 +11,16 @@ String stampNoteTextInitialization(
   if (page != 0 ||
       (tabKey != 'notes_rapides' &&
           tabKey != 'Bénéficiaire-Notes' &&
-          tabKey != 'Sanitaires-Notes')) {
+          tabKey != 'Sanitaires-Notes' &&
+          tabKey != habitsTextTabKey)) {
     return drawingJson;
   }
   final drawing = drawingJson.trim().isEmpty
       ? <String, dynamic>{'version': 1, 'text': '', 'strokes': <dynamic>[]}
       : jsonDecode(drawingJson) as Map<String, dynamic>;
-  return jsonEncode({...drawing, 'noteTextInitialized': true});
+  return jsonEncode({
+    ...drawing,
+    'noteTextInitialized': true,
+    if (isContextTextTab(tabKey)) contextTextInitializedKey: true,
+  });
 }
