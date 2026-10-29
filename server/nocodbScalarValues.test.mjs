@@ -96,3 +96,14 @@ test('empty legacy housing rooms match complete empty baselines without equating
   assert(!equals('occupants_json', null, '[]'));
   assert(!equals('rooms_breakdown_json', null, '{"rdc":["WC"]}'));
 });
+
+test('room identities ignore JSON object key order and formatting without hiding changed rooms', () => {
+  const stored = { rdc: ['Salle de bain', 'WC'], basement: [], floor: [], secondFloor: [], thirdFloor: [],
+    _roomIds: { rdc: ['bathroom-1', 'wc-1'], basement: [] } };
+  const baseline = { basement: [], rdc: ['Salle de bain', 'WC'], floor: [], secondFloor: [], thirdFloor: [],
+    _roomIds: { basement: [], rdc: ['bathroom-1', 'wc-1'] } };
+  assert(equals('rooms_breakdown_json', JSON.stringify(stored), JSON.stringify(baseline, null, 2)));
+  assert(!equals('rooms_breakdown_json', JSON.stringify(stored), JSON.stringify({ ...baseline,
+    _roomIds: { ...baseline._roomIds, rdc: ['bathroom-2', 'wc-1'] } })));
+  assert(!equals('rooms_breakdown_json', JSON.stringify(stored), JSON.stringify({ ...baseline, rdc: ['Cuisine', 'WC'] })));
+});
