@@ -47,7 +47,7 @@ void main() {
     final before = await db.query('note_pages');
     final ops = await db.query('sync_operations');
     final env = await read(environmentTextTabKey);
-    expect(env['text'], 'Projet : adapter la douche.\n\nMaison isolée.');
+    expect(env['text'], 'Maison isolée.');
     expect(env['strokes'], [
       {'source': environmentTextTabKey, 'page': 0},
     ]);
