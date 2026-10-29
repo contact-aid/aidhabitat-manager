@@ -518,7 +518,16 @@ class _RecommendationsTabState extends State<RecommendationsTab>
                 ),
               ),
             ),
-          SizedBox(width: cardWidth, child: _buildAddRecommendationCard()),
+          SizedBox(
+            width: cardWidth,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox.square(
+                dimension: cardWidth,
+                child: _buildAddRecommendationCard(),
+              ),
+            ),
+          ),
         ];
         return Column(
           children: [
