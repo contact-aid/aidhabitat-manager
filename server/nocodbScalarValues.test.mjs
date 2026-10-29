@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canonicalDatabasePatch, createDatabaseValueComparator } from './nocodbScalarValues.mjs';
+import { canonicalDatabasePatch, createDatabaseValueComparator, isDefaultFormValue } from './nocodbScalarValues.mjs';
+
+test('entered answers differ from field-specific form defaults', () => {
+  for (const empty of [null, '', '  ']) assert(isDefaultFormValue('acces_facile_rue', empty));
+  for (const answer of [false, 'false', true, 'true']) assert(!isDefaultFormValue('acces_facile_rue', answer));
+  assert(isDefaultFormValue('garage', false));
+  assert(!isDefaultFormValue('garage', true));
+  assert(isDefaultFormValue('observation_accessibilite', ''));
+  assert(!isDefaultFormValue('observation_accessibilite', 'Saisie de visite'));
+  assert(!isDefaultFormValue('unknown', null));
+});
 
 const columns = [{ title: 'instant', uidt: 'DateTime' }, { title: 'enabled', uidt: 'Checkbox' },
   { title: 'beneficiaire_apa', uidt: 'Checkbox' },

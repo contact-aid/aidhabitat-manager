@@ -4,6 +4,7 @@ import 'package:aid_habitat_app/services/dossier_repository.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/offline_vault.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
+import 'package:aid_habitat_app/services/sync_mutation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -26,7 +27,7 @@ Map<String, dynamic> remote({
     'phone': '123',
     'updatedAt': version,
   },
-  'housing': {
+  'housing': <String, dynamic>{
     'id': 'housing-1',
     'surface': 80,
     'updatedAt': version,
@@ -296,6 +297,53 @@ void main() {
       expect(snapshot['remoteValues']['surface'], 100);
     },
   );
+
+  for (final answer in [true, false]) {
+    test(
+      'entered accessibility answer $answer resumes against an empty server field',
+      () async {
+        await dossiers.updateHousing('dossier-1', {
+          'easy_access': answer ? 1 : 0,
+          'easy_access_set': 1,
+        });
+        expect((await payload())['updates']['easyAccess'], answer);
+        expect(
+          (await payload())['concurrency']['baseValues']['easyAccess'],
+          isNull,
+        );
+        await conflict(
+          'housing',
+          remoteData: {
+            'error': 'SYNC_FIELD_CONFLICT',
+            'remoteUpdatedAt': _new,
+            'remoteData': {'acces_facile_rue': null},
+          },
+        );
+        final raw = remote(version: _new);
+        (raw['housing'] as Map)['easyAccess'] = null;
+        final review = (await dossiers.reviewConflicts(
+          'dossier-1',
+          raw,
+        )).single;
+        final plan = planSyncMerge(
+          baseValues: {'easyAccess': answer},
+          updates: review.localValues,
+          remoteValues: review.remoteValues,
+        );
+        expect(plan.canApplyAutomatically, isTrue);
+        await dossiers.resolveReviewedConflict(
+          review,
+          keepLocal: true,
+          localFields: plan.updates.keys.toSet(),
+        );
+        expect((await payload())['updates']['easyAccess'], answer);
+        expect((await db.query('sync_operations')).single['status'], 'pending');
+        final saved = (await db.query('housings')).single;
+        expect(saved['easy_access'], answer ? 1 : 0);
+        expect(saved['easy_access_set'], 1);
+      },
+    );
+  }
 
   test('409 preserves both versions, blocks boot and protects pull', () async {
     await dossiers.updatePatient('patient-1', {'first_name': 'Local'});

@@ -119,6 +119,22 @@ function defaultFalse(value) {
   return checkbox(value);
 }
 
+const nullableAnswerColumns = new Set([
+  'acces_facile_rue', 'porte_sdb_largeur_suffisante', 'porte_sdb_sens_adapte',
+  'porte_wc_largeur_suffisante', 'porte_wc_sens_adapte',
+]);
+
+// Form defaults are weaker than entered values. Keep this separate from
+// equality: an explicit "No" is an answer for a nullable choice, whereas
+// false is the initial value for an ordinary checkbox.
+export function isDefaultFormValue(key, value) {
+  if (legacyDefaultFalseColumns.has(key)) return defaultFalse(value) === false;
+  if (legacyDefaultEmptyStringColumns.has(key) || nullableAnswerColumns.has(key)) {
+    return value == null || (typeof value === 'string' && value.trim() === '');
+  }
+  return false;
+}
+
 function dossierStatus(value) {
   if (typeof value !== 'string') return value;
   const normalized = value.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '')

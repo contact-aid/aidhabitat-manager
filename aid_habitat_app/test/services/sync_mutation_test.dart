@@ -75,7 +75,7 @@ void main() {
   );
 
   test(
-    'blank baseline fills automatically but deliberate clearing needs review',
+    'entered phone fills an empty server value even with an edited or absent baseline',
     () {
       for (final before in [null, '', 'old']) {
         final plan = planSyncMerge(
@@ -83,7 +83,8 @@ void main() {
           updates: {'phone': '123'},
           remoteValues: {'phone': null},
         );
-        expect(plan.canApplyAutomatically, before != 'old');
+        expect(plan.canApplyAutomatically, isTrue);
+        expect(plan.updates, {'phone': '123'});
       }
       expect(
         planSyncMerge(
@@ -91,7 +92,7 @@ void main() {
           updates: {'phone': '123'},
           remoteValues: {'phone': null},
         ).canApplyAutomatically,
-        isFalse,
+        isTrue,
       );
       expect(
         () => mergeLatestPatientValues(
@@ -102,7 +103,7 @@ void main() {
         throwsStateError,
       );
       expect(
-        () => mergeLatestPatientValues(
+        mergeLatestPatientValues(
           baseline: {
             'occupants': [
               {'firstName': 'A', 'homeHelp': false},
@@ -118,8 +119,38 @@ void main() {
               {'firstName': 'A', 'homeHelp': null},
             ],
           },
-        ),
-        throwsStateError,
+        )['occupants'][0]['homeHelp'],
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'entered nullable answers win over empty values in either direction',
+    () {
+      for (final answer in [true, false]) {
+        final local = planSyncMerge(
+          baseValues: {'easyAccess': answer},
+          updates: {'easyAccess': answer},
+          remoteValues: {'easyAccess': null},
+        );
+        expect(local.canApplyAutomatically, isTrue);
+        expect(local.updates, {'easyAccess': answer});
+        final remote = planSyncMerge(
+          baseValues: {'easyAccess': null},
+          updates: {'easyAccess': null},
+          remoteValues: {'easyAccess': answer},
+        );
+        expect(remote.canApplyAutomatically, isTrue);
+        expect(remote.updates, isEmpty);
+      }
+      expect(
+        planSyncMerge(
+          baseValues: {'easyAccess': null},
+          updates: {'easyAccess': false},
+          remoteValues: {'easyAccess': true},
+        ).conflictingFields,
+        ['easyAccess'],
       );
     },
   );

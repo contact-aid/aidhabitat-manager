@@ -3381,6 +3381,12 @@ class DossierRepository {
 
       final changedFields = _diffAgainstRow(existingRow, fields);
       _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
+      // Answering "No" changes the response marker while the stored 0
+      // remains unchanged. Queue the answer too, including its null baseline.
+      if (changedFields.containsKey('easy_access_set')) {
+        changedFields['easy_access'] =
+            fields['easy_access'] ?? existingRow?['easy_access'] ?? 0;
+      }
       if (changedFields.keys.any(
         (key) =>
             _kHousingRoomBreakdownColumns.contains(key) ||
@@ -3578,11 +3584,8 @@ class DossierRepository {
         }
         return;
       }
-      // `easy_access_set` est local-only (migration v15→v16). NocoDB n'a
-      // pas de colonne dédiée — on garde la sémantique « non renseigné »
-      // côté Flutter uniquement. Si plus tard on veut propager la
-      // distinction, ajouter une colonne `easy_access_set` (Checkbox)
-      // côté serveur et mettre à jour ce mapping.
+      // The local response marker maps to the API's nullable easyAccess
+      // below; it is not a separate database column on the server.
       if (key == 'easy_access_set') return;
 
       // Cas spécial : `heating_details_json` est un JSON encodé
@@ -3633,6 +3636,12 @@ class DossierRepository {
         }
       }
     });
+    if (fields.containsKey('easy_access_set')) {
+      final answered =
+          fields['easy_access_set'] == 1 || fields['easy_access_set'] == true;
+      final answer = fields['easy_access'];
+      out['easyAccess'] = answered ? answer == 1 || answer == true : null;
+    }
     // Si au moins un *_rooms_json a été traité, on attache l'objet
     // `roomsBreakdown` au payload sortant. NB : on attache MÊME quand
     // toutes les listes sont vides — c'est le moyen explicite de
