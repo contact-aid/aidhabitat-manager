@@ -2940,15 +2940,12 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 _pushDraftToOpenWindow(tabKey, text),
           ),
         ),
-        _wrapTabWithNotes(
-          'Préconisations',
-          RecommendationsTab(
-            dossier: _dossier,
-            repository: _repository,
-            controller: _recommendationsController,
-            externalRefreshToken:
-                _dossierDetailPullToken + widget.conflictRefreshToken,
-          ),
+        RecommendationsTab(
+          dossier: _dossier,
+          repository: _repository,
+          controller: _recommendationsController,
+          externalRefreshToken:
+              _dossierDetailPullToken + widget.conflictRefreshToken,
         ),
         if (VisitAssistantConfig.enabled)
           VisitTranscriptTab(dossierId: _dossier.id),
