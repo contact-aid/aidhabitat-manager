@@ -228,6 +228,7 @@ class NotesWidget extends StatefulWidget {
     this.stackedTextFraction,
     this.attachedToTitleBanner = false,
     this.borderlessTextEditor = false,
+    this.borderlessCanvas = false,
     this.focusOnTapAnywhere = true,
     this.canvasSlideIndex,
     this.showCanvasTopDivider = true,
@@ -418,6 +419,9 @@ class NotesWidget extends StatefulWidget {
   /// Retire le contour gris du bloc texte interne. Utilisé quand le
   /// parent fournit déjà le cadre visuel complet autour de la note.
   final bool borderlessTextEditor;
+
+  /// The parent supplies the continuous frame around the header and canvas.
+  final bool borderlessCanvas;
 
   /// Rend toute la surface de l'éditeur texte focalisable, y compris ses
   /// marges vides. Utile pour les grandes pages de notes écrites où
@@ -2809,8 +2813,12 @@ class _NotesWidgetState extends State<NotesWidget> {
       decoration: BoxDecoration(
         color: Colors.white,
         // Charte "Équilibrée" — 16 px (idem carte texte).
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kStackedBorder, width: 1),
+        borderRadius: widget.borderlessCanvas
+            ? BorderRadius.zero
+            : BorderRadius.circular(16),
+        border: widget.borderlessCanvas
+            ? null
+            : Border.all(color: _kStackedBorder, width: 1),
       ),
       // Clip.antiAlias sur le conteneur externe → le contenu (fond du
       // canvas, strokes, overlays) est rogné au rayon 16 px pour que

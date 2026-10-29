@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../components/notes_widget.dart';
+import '../../components/note_panel_frame.dart';
 import '../../components/notes_panel_title_banner.dart';
 import '../../services/sanitary_notes.dart';
 
@@ -29,27 +30,31 @@ class SanitaryNotesPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const NotesPanelTitleBanner(
-          title: 'Observations sur les équipements et utilisations',
-          attachedToBelow: true,
-        ),
         Expanded(
           flex: 3,
-          child: NotesWidget(
-            key: ValueKey('$patientId::$sanitaryTextTabKey'),
-            patientId: patientId,
-            tabKey: sanitaryTextTabKey,
-            liveText: liveText,
-            externalRefreshToken: externalRefreshToken,
-            onDraftChange: onTextDraft,
-            onExpandToTab: onExpandText,
-            showCanvas: false,
-            allowPagination: false,
-            maxPages: 1,
-            sharedText: true,
-            showSaveButton: false,
-            fillParentHeight: true,
-            placeholder: '',
+          child: NotePanelFrame(
+            header: const NotesPanelTitleBanner(
+              title: 'Observations sur les équipements et utilisations',
+              borderless: true,
+            ),
+            child: NotesWidget(
+              key: ValueKey('$patientId::$sanitaryTextTabKey'),
+              patientId: patientId,
+              tabKey: sanitaryTextTabKey,
+              liveText: liveText,
+              externalRefreshToken: externalRefreshToken,
+              onDraftChange: onTextDraft,
+              onExpandToTab: onExpandText,
+              showCanvas: false,
+              allowPagination: false,
+              maxPages: 1,
+              sharedText: true,
+              showSaveButton: false,
+              fillParentHeight: true,
+              placeholder: '',
+              attachedToTitleBanner: true,
+              borderlessTextEditor: true,
+            ),
           ),
         ),
         const SizedBox(height: 8),

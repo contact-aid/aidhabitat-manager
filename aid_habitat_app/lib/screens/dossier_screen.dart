@@ -18,6 +18,7 @@ import '../components/commune_field_group.dart';
 import '../components/confirmation_dialog.dart';
 import '../components/form_widgets.dart';
 import '../components/notes_widget.dart';
+import '../components/note_panel_frame.dart';
 import '../components/soft_transitions.dart';
 import '../models/types.dart';
 import '../services/data_service.dart';
@@ -1330,34 +1331,32 @@ class _DossierScreenState extends State<DossierScreen> {
   // ---------------------------------------------------------------------------
   Widget _buildNotesColumn() {
     final showWrittenNote = _quickNoteMode == 0;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _buildQuickNoteModeNav(),
-        Expanded(
-          child: NotesWidget(
-            patientId: widget.dossier.patient.id,
-            tabKey: 'notes_rapides',
-            dossierId: widget.dossier.id,
-            scopeType: 'dossier_detail',
-            scopeId: widget.dossier.id,
-            sharedText: true,
-            allowTextModal: false,
-            showText: showWrittenNote,
-            showCanvas: !showWrittenNote,
-            // Le mode dessin conserve la présentation avec outils et
-            // pagination flottants. Le mode texte occupe toute la zone.
-            stackedCards: !showWrittenNote,
-            allowPagination: true,
-            fillParentHeight: true,
-            // Autosave debounced → pas de bouton Save explicite.
-            showSaveButton: false,
-            // Jeton bumped dès que la note rapide a été hydratée avec le
-            // commentaire projet → force NotesWidget à re-fetch la page 0.
-            externalRefreshToken: _quickNoteRefreshToken,
-          ),
-        ),
-      ],
+    return NotePanelFrame(
+      header: _buildQuickNoteModeNav(),
+      child: NotesWidget(
+        patientId: widget.dossier.patient.id,
+        tabKey: 'notes_rapides',
+        dossierId: widget.dossier.id,
+        scopeType: 'dossier_detail',
+        scopeId: widget.dossier.id,
+        sharedText: true,
+        allowTextModal: false,
+        showText: showWrittenNote,
+        showCanvas: !showWrittenNote,
+        // Le mode dessin conserve la présentation avec outils et
+        // pagination flottants. Le mode texte occupe toute la zone.
+        stackedCards: !showWrittenNote,
+        attachedToTitleBanner: true,
+        borderlessTextEditor: true,
+        borderlessCanvas: true,
+        allowPagination: true,
+        fillParentHeight: true,
+        // Autosave debounced → pas de bouton Save explicite.
+        showSaveButton: false,
+        // Jeton bumped dès que la note rapide a été hydratée avec le
+        // commentaire projet → force NotesWidget à re-fetch la page 0.
+        externalRefreshToken: _quickNoteRefreshToken,
+      ),
     );
   }
 

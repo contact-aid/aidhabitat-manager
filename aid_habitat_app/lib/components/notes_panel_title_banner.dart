@@ -19,13 +19,17 @@ class NotesPanelTitleBanner extends StatelessWidget {
     super.key,
     required this.title,
     this.attachedToBelow = false,
+    this.borderless = false,
   });
   final String title;
   final bool attachedToBelow;
+  final bool borderless;
 
   @override
   Widget build(BuildContext context) {
-    final borderRadius = attachedToBelow
+    final borderRadius = borderless
+        ? BorderRadius.zero
+        : attachedToBelow
         ? const BorderRadius.only(
             topLeft: Radius.circular(12),
             topRight: Radius.circular(12),
@@ -34,7 +38,9 @@ class NotesPanelTitleBanner extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: borderRadius,
-        border: Border.all(color: const Color(0xFFEDE9EF), width: 1),
+        border: borderless
+            ? null
+            : Border.all(color: const Color(0xFFEDE9EF), width: 1),
       ),
       child: ClipRRect(
         borderRadius: borderRadius,
