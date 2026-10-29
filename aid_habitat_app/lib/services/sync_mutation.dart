@@ -504,6 +504,29 @@ bool canAutomaticallyResumeConflict(Map<String, dynamic> payload) {
   }
   final remote = conflict['remote'];
   final code = (remote is Map ? remote['error'] : null) ?? conflict['code'];
+  // A legacy false reference may actually mean unanswered. A newer null
+  // could be an intentional web clear; only the server's unchanged-version
+  // repair may authorize automatically retrying this ambiguous reference.
+  final updates = payload['updates'] as Map;
+  final base = guard['baseValues'] as Map;
+  final conflicting = remote is Map ? remote['conflictFields'] : null;
+  if (base['easyAccess'] == false &&
+      updates['easyAccess'] is bool &&
+      conflicting is List &&
+      conflicting.contains('acces_facile_rue')) {
+    final expected = guard['expectedUpdatedAt'] is String
+        ? DateTime.tryParse(guard['expectedUpdatedAt'])
+        : null;
+    final current = remote is Map && remote['remoteUpdatedAt'] is String
+        ? DateTime.tryParse(remote['remoteUpdatedAt'])
+        : null;
+    if (expected == null ||
+        current == null ||
+        !expected.isAtSameMomentAs(current)) {
+      return false;
+    }
+  }
+
   if (guard['writeId'] is! String ||
       !(payload['updates'] as Map).keys.every(
         (guard['baseValues'] as Map).containsKey,

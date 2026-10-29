@@ -4,6 +4,7 @@ import 'package:aid_habitat_app/services/dossier_repository.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/offline_vault.dart';
 import 'package:aid_habitat_app/services/sync_repository.dart';
+import 'package:aid_habitat_app/services/sync_operation_ownership.dart';
 import 'package:aid_habitat_app/services/sync_mutation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -638,6 +639,103 @@ void main() {
       expect(await db.query('sync_operations'), before);
     },
   );
+
+  Future<void> legacyAccessConflict({
+    String version = _old,
+    Object? observed,
+    List<String> fields = const ['acces_facile_rue'],
+  }) async {
+    await dossiers.updateHousing('dossier-1', {
+      'easy_access': 1,
+      'easy_access_set': 1,
+      'garage': 1,
+    });
+    final old = await payload();
+    old['concurrency']['baseValues']['easyAccess'] = false;
+    await db.update('sync_operations', {
+      'payload_json': await OfflineVault.instance.sealString(jsonEncode(old)),
+    });
+    await conflict(
+      'housing',
+      remoteData: {
+        'error': 'SYNC_FIELD_CONFLICT',
+        'remoteUpdatedAt': version,
+        'conflictFields': fields,
+        'retainedFields': [],
+        'remoteData': {'acces_facile_rue': observed},
+      },
+    );
+  }
+
+  test(
+    'automatic accessibility recovery never touches another author’s queue or ownership',
+    () async {
+      await db.insert('app_session', {
+        'id': 1,
+        'user_local_id': 'ergo-a',
+        'created_at': _old,
+        'updated_at': _old,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await SyncOperationOwnership.installMigration(db);
+      await legacyAccessConflict();
+      final originalOps = await db.query('sync_operations');
+      final originalOwners = await db.query(SyncOperationOwnership.tableName);
+      await db.update('app_session', {'user_local_id': 'ergo-b'});
+      final productionQueue = SyncRepository(databaseProvider: () async => db);
+      expect(
+        await productionQueue.recoverUnansweredHousingAccessConflicts(),
+        0,
+      );
+      expect(await db.query('sync_operations'), originalOps);
+      expect(await db.query(SyncOperationOwnership.tableName), originalOwners);
+      await db.update('app_session', {'user_local_id': 'ergo-a'});
+      expect(
+        await productionQueue.recoverUnansweredHousingAccessConflicts(),
+        1,
+      );
+    },
+  );
+
+  test(
+    'legacy empty accessibility conflict resumes once with original write and values preserved',
+    () async {
+      await legacyAccessConflict();
+      final before = await payload();
+      expect(await queue.recoverUnansweredHousingAccessConflicts(), 1);
+      final after = await payload();
+      expect(after['concurrency'], before['concurrency']);
+      expect(after['updates'], before['updates']);
+      expect(after.containsKey('conflict'), isFalse);
+      expect((await db.query('housings')).single['easy_access'], 1);
+      expect(
+        (await db.query('sync_conflict_history')).single['decision'],
+        'retry_unanswered_housing_access',
+      );
+      await conflict('housing', remoteData: before['conflict']['remote']);
+      expect(await queue.recoverUnansweredHousingAccessConflicts(), 0);
+    },
+  );
+
+  test(
+    'a later web edit keeps its conflict and never triggers recovery',
+    () async {
+      await legacyAccessConflict(version: _new);
+      final before = await payload();
+      expect(canAutomaticallyResumeConflict(before), isFalse);
+      expect(await queue.recoverUnansweredHousingAccessConflicts(), 0);
+      expect(await payload(), before);
+    },
+  );
+
+  test('an explicit web answer keeps its conflict', () async {
+    await legacyAccessConflict(observed: false);
+    expect(await queue.recoverUnansweredHousingAccessConflicts(), 0);
+  });
+
+  test('multiple conflicting fields are never auto-retried', () async {
+    await legacyAccessConflict(fields: ['acces_facile_rue', 'garage']);
+    expect(await queue.recoverUnansweredHousingAccessConflicts(), 0);
+  });
 
   test(
     'missing remote housing is reviewable and keep-local becomes a guarded create',

@@ -3380,13 +3380,19 @@ class DossierRepository {
       final existingRow = existingRows.isEmpty ? null : existingRows.first;
 
       final changedFields = _diffAgainstRow(existingRow, fields);
-      _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
-      // Answering "No" changes the response marker while the stored 0
-      // remains unchanged. Queue the answer too, including its null baseline.
-      if (changedFields.containsKey('easy_access_set')) {
-        changedFields['easy_access'] =
-            fields['easy_access'] ?? existingRow?['easy_access'] ?? 0;
+      // The answer and its local presence marker form one nullable value.
+      // In particular, unanswered -> No changes only easy_access_set.
+      if (changedFields.containsKey('easy_access') ||
+          changedFields.containsKey('easy_access_set')) {
+        for (final key in ['easy_access', 'easy_access_set']) {
+          if (fields.containsKey(key)) {
+            changedFields[key] = fields[key];
+          } else if (existingRow != null && existingRow.containsKey(key)) {
+            changedFields[key] = existingRow[key];
+          }
+        }
       }
+      _expandChangedRoomBreakdownFields(changedFields, fields, existingRow);
       if (changedFields.keys.any(
         (key) =>
             _kHousingRoomBreakdownColumns.contains(key) ||
@@ -3584,9 +3590,17 @@ class DossierRepository {
         }
         return;
       }
-      // The local response marker maps to the API's nullable easyAccess
-      // below; it is not a separate database column on the server.
+      // Keep the presence marker local, but transmit its semantics through
+      // the API's existing nullable easyAccess field, including baselines.
       if (key == 'easy_access_set') return;
+      if (key == 'easy_access') {
+        out['easyAccess'] = fields['easy_access_set'] == 0
+            ? null
+            : value is int
+            ? value == 1
+            : value;
+        return;
+      }
 
       // Cas spécial : `heating_details_json` est un JSON encodé
       // (Map<String label, bool>). On le décode et on le convertit
@@ -3636,12 +3650,6 @@ class DossierRepository {
         }
       }
     });
-    if (fields.containsKey('easy_access_set')) {
-      final answered =
-          fields['easy_access_set'] == 1 || fields['easy_access_set'] == true;
-      final answer = fields['easy_access'];
-      out['easyAccess'] = answered ? answer == 1 || answer == true : null;
-    }
     // Si au moins un *_rooms_json a été traité, on attache l'objet
     // `roomsBreakdown` au payload sortant. NB : on attache MÊME quand
     // toutes les listes sont vides — c'est le moyen explicite de

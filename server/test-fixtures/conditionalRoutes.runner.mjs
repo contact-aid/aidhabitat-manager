@@ -567,6 +567,7 @@ try {
       mock.row(entity).acces_facile_rue = null;
       const body = mutation({ easyAccess: true }, { easyAccess: true });
       body.concurrency.housingPolicy = 'housing-visit-v1';
+      body.concurrency.expectedUpdatedAt = (await read(clientA)).updatedAt;
       expectStatus(await patch(clientA, body), 200);
       assert.equal((await read(clientA)).easyAccess, true);
       const count = mock.patches().length;
