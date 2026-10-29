@@ -1,12 +1,17 @@
 import express from 'express';
+import {VisitQueue} from './visitQueue.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { VisitStore, VisitProcessor, createVisitProvider, visitDigest, visitError, validVisitId } from './visitAssistant.mjs';
 
 export function registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRecord,
-  canAccessDossierRecord, field, dataDir, env = process.env, provider = createVisitProvider({ env }) }) {
+  canAccessDossierRecord, field, dataDir, env = process.env, provider, background = true, retryDelayMs = 30_000, applyResult = async () => {} }) {
   const store = new VisitStore(path.join(dataDir, 'visit-assistant'));
-  const processor = new VisitProcessor({ store, provider, loadStyle: async author => {
+  provider ??= createVisitProvider({env,onUsage:async entry=>{
+    await fs.mkdir(dataDir,{recursive:true,mode:0o700});
+    await fs.appendFile(path.join(dataDir,'visit-assistant-usage.jsonl'),JSON.stringify(entry)+'\n',{mode:0o600});
+  }});
+  const processor = new VisitProcessor({ store, provider, applyResult, retryDelayMs, loadStyle: async author => {
     // Profiles are server-controlled and versioned. Only a corpus whose author
     // was checked in the source documents may personalize a draft.
     if (!env.VISIT_STYLE_PROFILES_PATH) return null;
@@ -16,9 +21,16 @@ export function registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRe
       [key, ...(value.aliases ?? [])].some(name => normalize(name) === normalize(author)))?.[1];
     return profile?.sourceReview?.authorVerified === true ? profile : null;
   } });
+  const queue = background ? new VisitQueue({store,processor,retryDelayMs,
+    onError:()=>console.warn('[visit-assistant] Background processing paused; sources retained.')}) : null;
+  if (env.VISIT_ASSISTANT_ENABLED === 'true') void queue?.resume().catch(()=>{});
+  const enqueue = job => { void queue?.enqueue(job.dossierId,job.id)?.catch(()=>{}); };
   const publicJob = job => ({ id: job.id, createdAt: job.createdAt, status: job.status,
     transcript: job.transcript, handwrittenText: job.handwrittenText ?? [], result: job.result,
-    error: job.error ?? null, styleVersion: job.styleVersion ?? null });
+    error: job.error ?? null, chunkCount: job.chunkCount ?? job.chunks?.length ?? 0,
+    transcribedChunks: job.transcript?.length ?? 0,
+    audioDurationSeconds: job.chunks?.reduce((sum,c)=>sum+c.duration,0) ?? 0,
+    notesAppliedAt: job.notesAppliedAt ?? null, styleVersion: job.styleVersion ?? null });
   const authorize = async req => {
     if (env.VISIT_ASSISTANT_ENABLED !== 'true') throw visitError(503, 'Assistant de visite non activé sur ce serveur.');
     const dossier = await ensureDossierRecord(req.params.dossierId);
@@ -100,12 +112,30 @@ export function registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRe
       }
       return job;
     });
+    enqueue(job);
     res.json({ success: true, data: publicJob(job) });
   }));
   app.post(`${root}/:id/process`, requireAuth, route(async (req, res) => {
     const { dossierId } = await authorize(req);
-    await owned(req, dossierId);
-    res.json({ success: true, data: publicJob(await processor.step(dossierId, req.params.id)) });
+    const job=await owned(req, dossierId);
+    let current=job;
+    if(queue) enqueue(job);
+    else current=await processor.step(dossierId,req.params.id);
+    const data=publicJob(current);
+    // Builds <=106 append result.sections locally. Once the server inserted
+    // them, polling must not invite an old iPad to append the same text again.
+    if(current.notesAppliedAt && data.result) data.result={...data.result,sections:{}};
+    res.json({success:true,data});
+  }));
+  app.post(`${root}/:id/retry`, requireAuth, route(async (req,res)=>{
+    const {dossierId}=await authorize(req);
+    const job=await store.locked(dossierId,req.params.id,async()=>{
+      const job=await owned(req,dossierId);
+      if(job.status!=='failed'&&!job.error)throw visitError(409,'Aucun échec à reprendre.');
+      job.processingFailures=0;delete job.retryAfter;job.error=null;
+      job.status=job.result?'applying':'transcribing';await store.write(job);return job;
+    });
+    enqueue(job);res.json({success:true,data:publicJob(job)});
   }));
   const chatActive = new Set();
   app.post(`${root}/:id/chat`, requireAuth, route(async (req, res) => {
@@ -120,5 +150,5 @@ export function registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRe
     try { res.json({ success: true, data: await provider.ask(job, question) }); }
     finally { chatActive.delete(key); }
   }));
-  return { store, processor };
+  return { store, processor, queue };
 }
