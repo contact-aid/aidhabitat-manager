@@ -161,6 +161,35 @@ void main() {
         matching: find.byType(TextField),
       );
       expect(keyboardFields, findsNWidgets(2));
+      final splitter = find
+          .byKey(const ValueKey('context-notes-splitter'))
+          .first;
+      final initialTextHeight = tester.getSize(keyboardFields.first).height;
+      final manuscript = find
+          .byKey(ValueKey('$patient::$medicalDrawingTabKey'))
+          .first;
+      final initialDrawingHeight = tester.getSize(manuscript).height;
+      await tester.drag(splitter, const Offset(0, 120));
+      await tester.pump();
+      final resizedTextHeight = tester.getSize(keyboardFields.first).height;
+      expect(resizedTextHeight, greaterThan(initialTextHeight + 80));
+      expect(
+        tester.getSize(manuscript).height,
+        lessThan(initialDrawingHeight - 80),
+      );
+      await tester.drag(splitter, const Offset(0, -60));
+      await tester.pump();
+      expect(
+        tester.getSize(keyboardFields.first).height,
+        lessThan(resizedTextHeight - 30),
+      );
+      await tester.drag(splitter, const Offset(0, 1500));
+      await tester.pump();
+      expect(tester.getSize(manuscript).height, greaterThanOrEqualTo(144));
+      await tester.drag(splitter, const Offset(0, -1500));
+      await tester.pump();
+      expect(tester.getSize(keyboardFields.first).height, greaterThan(0));
+      expect(tester.takeException(), isNull);
       await tester.enterText(
         keyboardFields.first,
         'Observation commune corrigée',
