@@ -28,8 +28,10 @@ export function contextNotesForReport(pages = []) {
       return { ...p, textContent, pageNumber: i };
     }));
   };
+  const legacyEnvironment = text('Contexte de vie-Médical', ['Contexte de vie-Médical']);
   return {
-    environnement: text(environmentKey, [environmentKey, 'Contexte de vie-Médical']),
+    environnement: text(environmentKey, legacyEnvironment
+      ? ['Contexte de vie-Médical'] : [environmentKey]),
     habitudes: text(habitsKey, ['Contexte de vie-Autonomie']),
   };
 }

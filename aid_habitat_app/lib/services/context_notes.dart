@@ -21,7 +21,11 @@ String projectContextText(
       : jsonDecode(raw) as Map<String, dynamic>;
   if (base[contextTextInitializedKey] == true) return jsonEncode(base);
   final sources = tabKey == environmentTextTabKey
-      ? [environmentTextTabKey, medicalDrawingTabKey]
+      ? (pages.any(
+              (p) => p['tabKey'] == medicalDrawingTabKey && _hasContextText(p),
+            )
+            ? [medicalDrawingTabKey]
+            : [environmentTextTabKey])
       : [autonomyDrawingTabKey];
   final texts = <String>[];
   final seen = <String>{};
@@ -56,4 +60,19 @@ String projectContextText(
     'text': texts.join('\n\n'),
     'noteTextInitialized': true,
   });
+}
+
+bool _hasContextText(Map<String, dynamic> page) {
+  final drawing =
+      jsonDecode(page['drawingJson'] as String? ?? '{}')
+          as Map<String, dynamic>;
+  if (drawing['deleted'] == true) return false;
+  final text =
+      drawing['noteTextInitialized'] == true && drawing['text'] is String
+      ? drawing['text'] as String
+      : (drawing['text'] is String &&
+                (drawing['text'] as String).trim().isNotEmpty
+            ? drawing['text'] as String
+            : page['textContent'] as String? ?? '');
+  return text.trim().isNotEmpty;
 }
