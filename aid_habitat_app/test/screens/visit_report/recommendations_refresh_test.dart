@@ -97,6 +97,8 @@ void main() {
     refresh.value++;
     await tester.pump();
     for (var i = 0; i < 4; i++) {
+      await tester.ensureVisible(find.text('Ajouter une\npréconisation'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Ajouter une\npréconisation'));
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Addition $i').last);

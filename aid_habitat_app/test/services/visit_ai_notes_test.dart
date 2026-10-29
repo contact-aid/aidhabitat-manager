@@ -4,7 +4,6 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/services/local_database.dart';
 import 'package:aid_habitat_app/services/note_repository.dart';
-import 'package:aid_habitat_app/services/visit_ai_notes.dart';
 import 'package:aid_habitat_app/services/visit_assistant_store.dart';
 
 void main() {
