@@ -19,7 +19,7 @@ try {
     'La personne ne rapporte aucune chute. Le seuil de la douche mesure douze centimètres. Elle souhaite rester dans son logement.']);
   await run('afconvert', ['-f', 'm4af', '-d', 'aac', path.join(dir, 'visit.aiff'), path.join(dir, 'visit.m4a')]);
   const provider = createVisitProvider();
-  const text = await provider.transcribe(await fs.readFile(path.join(dir, 'visit.m4a')));
+  const {text} = await provider.transcribe(await fs.readFile(path.join(dir, 'visit.m4a')));
   assert.match(text, /aucune chute|pas.*chute/i);
   assert.match(text, /douze|12/i);
   const image = await sharp(Buffer.from('<svg width="900" height="240"><rect width="100%" height="100%" fill="white"/><text x="30" y="90" font-size="32">Seuil de douche : 12 cm.</text></svg>')).png().toBuffer();
@@ -31,7 +31,7 @@ try {
   job.facts = await provider.extractFacts(job);
   assert.ok(job.facts.facts.length > 0);
   const result = await provider.draft(job, null);
-  assert.match(result.sections['Contexte de vie-Autonomie'] ?? '', /aucune chute|pas.*chute/i);
+  assert.match(result.sections['Contexte de vie-Habitudes'] ?? '', /aucune chute|pas.*chute/i);
   assert.match(result.sections['Sanitaires-Notes'] ?? '', /douze|12/i);
   assert.ok(!Object.values(result.sections).some(value => value.includes('Texte clavier existant.')));
   const answer = await provider.ask(job, 'Quelle est la hauteur du seuil de douche ?');

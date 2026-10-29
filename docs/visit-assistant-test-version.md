@@ -202,3 +202,32 @@ Les frais de rédaction, manuscrits, change et taxes sont distincts. Tarifs à
 revérifier sur https://openrouter.ai/google/gemini-3.1-flash-lite/.
 Les fichiers audio existants restent conservés ; cette modification n'ajoute
 aucune purge automatique et ne relance aucun dossier terminé.
+
+## Espace transcription et questions (29 octobre 2026)
+
+- Deux panneaux indépendants : transcription à gauche, conversation à droite.
+  Sous 700 points de largeur, les panneaux passent l'un au-dessus de l'autre.
+- Les réponses conservent des références cliquables horodatées. À réception,
+  le premier extrait cité défile dans le panneau transcription. Les citations
+  exactes reçoivent un fond gris clair ; une réponse sans source ne déplace pas
+  la transcription. Une réponse d'un ancien serveur sans citations précises
+  peut encore mettre en évidence l'extrait complet.
+- Le serveur vérifie que chaque citation est copiée à l'identique d'un extrait
+  effectivement référencé. Une citation inventée est rejetée.
+- Les nouveaux extraits audio comportent des tours de parole avec avatars.
+  Le rôle d'ergothérapeute et la présentation vocale sont des propositions,
+  signalées dans les infobulles, indépendantes entre extraits. En cas de doute,
+  l'icône reste neutre. Aucun rôle n'est déduit du simple fait de poser une
+  question dans les anciens transcripts. Les paroles existantes sont conservées.
+- Les points à vérifier restent accessibles dans un bouton avec compteur.
+  Les conversations sont propres à l'enregistrement sélectionné.
+
+Recette : cinq tests Flutter (défilement, citation exacte, référence cliquable,
+absence de source, échec réseau, écran étroit et anciens labels), analyse sans
+alerte, et 550 tests serveur réussis. Un essai OpenRouter fictif à deux voix
+produit six tours dont trois d'ergothérapeute et une citation vérifiée.
+Cette proposition de voix n'est pas une identification certaine des personnes.
+Le format structuré coûte un peu plus que le texte brut : 0,00129775 USD pour
+50,3 secondes dans cet essai, soit environ 8,4 centimes d'euro par heure par
+extrapolation, hors questions et autres traitements. Aucun dossier terminé
+n'est retranscrit automatiquement pour ajouter les avatars.
