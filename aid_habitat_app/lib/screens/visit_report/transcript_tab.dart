@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../services/visit_assistant_service.dart';
+import '../../components/visit_transcript_workspace.dart';
 
 class VisitTranscriptTab extends StatefulWidget {
   const VisitTranscriptTab({super.key, required this.dossierId});
@@ -10,27 +11,33 @@ class VisitTranscriptTab extends StatefulWidget {
 }
 
 class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
-  final _question = TextEditingController();
-  List<Map<String, dynamic>> _jobs = [];
-  String? _selected;
-  String? _error;
-  bool _loading = true;
-  bool _asking = false;
-  bool _refreshing = false;
-  Timer? _refreshTimer;
-  final List<Map<String, dynamic>> _messages = [];
   final _service = VisitAssistantService.instance;
-  String? _lastProgress;
+  List<Map<String, dynamic>> _jobs = [];
+  String? _selected, _error, _lastProgress;
+  bool _loading = true, _refreshing = false;
+  Timer? _refreshTimer;
+
   @override
   void initState() {
     super.initState();
     _service.addListener(_progress);
-    _load();
+    unawaited(_load());
     _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_jobs.any((j) => !['complete', 'failed'].contains(j['status']))) {
         unawaited(_load());
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant VisitTranscriptTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.dossierId != widget.dossierId) {
+      _jobs = [];
+      _selected = null;
+      _loading = true;
+      unawaited(_load());
+    }
   }
 
   void _progress() {
@@ -41,35 +48,36 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
               '${j['id']}:${j['status']}:${(j['remote'] as Map?)?['status']}:${((j['remote'] as Map?)?['transcript'] as List?)?.length}',
         )
         .join();
-    if (_lastProgress == progress) return;
+    if (progress == _lastProgress) return;
     _lastProgress = progress;
-    _load();
+    unawaited(_load());
   }
 
   Future<void> _load() async {
     if (_refreshing) return;
     _refreshing = true;
+    final dossier = widget.dossierId;
     try {
-      final jobs = await _service.loadTranscripts(widget.dossierId);
-      if (!mounted) return;
+      final jobs = await _service.loadTranscripts(dossier);
+      if (!mounted || dossier != widget.dossierId) return;
       setState(() {
         _jobs = jobs;
-        if (!_jobs.any((j) => j['id'] == _selected)) {
-          _selected = jobs.isEmpty ? null : jobs.first['id'] as String;
+        if (!jobs.any((j) => j['id'] == _selected)) {
+          _selected = jobs.firstOrNull?['id'] as String?;
         }
         _loading = false;
         _error = null;
       });
     } catch (_) {
-      if (mounted) {
+      if (mounted && dossier == widget.dossierId) {
         setState(() {
           _loading = false;
-          _error =
-              'La transcription sera disponible après synchronisation et traitement.';
+          _error = 'Connexion indisponible. Réessaie dans un instant.';
         });
       }
     } finally {
       _refreshing = false;
+      if (mounted && dossier != widget.dossierId) unawaited(_load());
     }
   }
 
@@ -77,104 +85,83 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
   void dispose() {
     _service.removeListener(_progress);
     _refreshTimer?.cancel();
-    _question.dispose();
     super.dispose();
   }
 
-  Future<void> _ask(Map<String, dynamic> job) async {
-    final question = _question.text.trim();
-    if (question.isEmpty || _asking) return;
-    setState(() {
-      _asking = true;
-      _error = null;
-    });
-    try {
-      final answer = await _service.ask(
-        widget.dossierId,
-        job['id'] as String,
-        question,
-      );
-      if (!mounted) return;
-      setState(() {
-        _messages.add({'question': question, ...answer});
-        _question.clear();
-      });
-    } catch (_) {
-      if (mounted) {
-        setState(
-          () => _error =
-              'Réponse indisponible. Vérifie la connexion et réessaie.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _asking = false);
-    }
+  String _visitLabel(Map<String, dynamic> job) {
+    final date = DateTime.tryParse('${job['createdAt']}')?.toLocal();
+    final day = date == null
+        ? 'Visite'
+        : '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')} à ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+    final minutes = ((job['audioDurationSeconds'] as num? ?? 0) / 60).ceil();
+    return '$day · $minutes min';
   }
 
   @override
   Widget build(BuildContext context) {
     final job = _jobs.where((j) => j['id'] == _selected).firstOrNull;
-    final transcript = (job?['transcript'] as List? ?? [])
-        .whereType<Map>()
-        .toList();
-    final warnings = (job?['result'] as Map?)?['warnings'] as List? ?? [];
+    final failed = job?['status'] == 'failed' || job?['error'] != null;
     final stage = switch (job?['status']) {
       'transcribing' =>
-        'Transcription : ${job?['transcribedChunks'] ?? transcript.length}/${job?['chunkCount'] ?? '?'} extraits',
-      'reading_notes' => 'Lecture des notes manuscrites',
-      'organizing' => 'Classement des informations',
-      'drafting' => 'Rédaction des textes',
-      'applying' => 'Enregistrement des textes dans les rubriques',
-      'complete' => 'Traitement terminé',
-      'failed' =>
-        'Traitement arrêté après échecs. Les sources sont conservées.',
-      _ => 'Envoi de l’enregistrement',
+        'Transcription ${job?['transcribedChunks'] ?? 0}/${job?['chunkCount'] ?? '?'}',
+      'reading_notes' => 'Lecture des manuscrits…',
+      'organizing' => 'Classement…',
+      'drafting' => 'Rédaction…',
+      'applying' => 'Enregistrement…',
+      'complete' => null,
+      'failed' => 'Traitement interrompu',
+      _ => job == null ? null : 'Envoi en cours…',
     };
+    final warnings = ((job?['result'] as Map?)?['warnings'] as List? ?? [])
+        .whereType<String>()
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
           children: [
-            const Expanded(
-              child: Text(
-                'Transcription et assistant de visite',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            if (_jobs.length > 1)
+              DropdownButton<String>(
+                value: _selected,
+                underline: const SizedBox.shrink(),
+                items: _jobs
+                    .map(
+                      (j) => DropdownMenuItem(
+                        value: j['id'] as String,
+                        child: Text(_visitLabel(j)),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (id) => setState(() => _selected = id),
+              )
+            else
+              Text(
+                job == null ? 'Transcription et questions' : _visitLabel(job),
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-            ),
-            IconButton(
-              tooltip: 'Actualiser la transcription',
-              onPressed: _load,
-              icon: const Icon(Icons.refresh),
-            ),
-          ],
-        ),
-        ListenableBuilder(
-          listenable: _service,
-          builder: (_, _) => Text(
-            _service.error ??
-                (_service.isRecording
-                    ? 'Enregistrement en cours. L’audio est sauvegardé sur l’iPad.'
-                    : 'Les textes sont ajoutés à la suite de tes notes. Relis-les dans chaque rubrique.'),
-            style: TextStyle(
-              color: _service.error == null
-                  ? Colors.grey.shade700
-                  : Colors.orange.shade900,
-            ),
-          ),
-        ),
-        if (job != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Row(
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
               children: [
-                Expanded(child: Text(stage)),
-                if (job['status'] == 'failed' || job['error'] != null)
+                if (stage != null)
+                  Text(
+                    stage,
+                    style: TextStyle(
+                      color: failed
+                          ? Colors.orange.shade900
+                          : Colors.grey.shade700,
+                    ),
+                  ),
+                if (failed)
                   TextButton(
                     onPressed: () async {
                       try {
                         await _service.retry(
                           widget.dossierId,
-                          job['id'] as String,
+                          job!['id'] as String,
                         );
                         await _load();
                       } catch (_) {
@@ -185,149 +172,66 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
                         }
                       }
                     },
-                    child: const Text('Reprendre le traitement'),
+                    child: const Text('Reprendre'),
                   ),
-              ],
-            ),
-          ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text(_error!),
-          ),
-        if (_jobs.length > 1)
-          DropdownButton<String>(
-            value: _selected,
-            isExpanded: true,
-            items: _jobs
-                .map(
-                  (j) => DropdownMenuItem(
-                    value: j['id'] as String,
-                    child: Text(
-                      'Visite ${j['createdAt'] ?? ''} · ${((j['audioDurationSeconds'] as num? ?? 0) / 60).ceil()} min',
+                if (warnings.isNotEmpty)
+                  TextButton.icon(
+                    icon: const Icon(Icons.info_outline, size: 18),
+                    label: Text('${warnings.length} points à vérifier'),
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Points à vérifier'),
+                        content: SizedBox(
+                          width: 480,
+                          child: SingleChildScrollView(
+                            child: Text(
+                              warnings.map((w) => '• $w').join('\n\n'),
+                            ),
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Fermer'),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                )
-                .toList(),
-            onChanged: (value) => setState(() {
-              _selected = value;
-              _messages.clear();
-            }),
+                IconButton(
+                  tooltip: 'Actualiser',
+                  onPressed: _load,
+                  icon: const Icon(Icons.refresh, size: 20),
+                ),
+              ],
+            ),
+          ],
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
-              : transcript.isEmpty
-              ? const Center(
-                  child: Text(
-                    'La transcription apparaîtra ici après le traitement de l’enregistrement.',
+              : VisitTranscriptWorkspace(
+                  key: ValueKey('${widget.dossierId}:$_selected'),
+                  transcript: (job?['transcript'] as List? ?? [])
+                      .whereType<Map>()
+                      .map((s) => Map<String, dynamic>.from(s))
+                      .toList(),
+                  onAsk: (question) => _service.ask(
+                    widget.dossierId,
+                    job!['id'] as String,
+                    question,
                   ),
-                )
-              : ListView(
-                  children: [
-                    if (warnings.isNotEmpty)
-                      Card(
-                        color: Colors.amber.shade50,
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Text(
-                            'Points à vérifier\n${warnings.join('\n')}',
-                          ),
-                        ),
-                      ),
-                    ...transcript.map((segment) {
-                      final seconds = (segment['startSeconds'] as num? ?? 0)
-                          .toInt();
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        child: SelectableText(
-                          '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}\n${segment['text']}',
-                        ),
-                      );
-                    }),
-                    const Divider(),
-                    ..._messages.map(
-                      (message) => Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(14),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                message['question'] as String,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              SelectableText(message['answer'] as String),
-                              ...((message['sources'] as List?) ?? []).map((
-                                index,
-                              ) {
-                                final source = transcript
-                                    .where((s) => s['index'] == index)
-                                    .firstOrNull;
-                                if (source == null) {
-                                  return const SizedBox.shrink();
-                                }
-                                final seconds = (source['startSeconds'] as num)
-                                    .toInt();
-                                return ExpansionTile(
-                                  title: Text(
-                                    'Source à ${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}',
-                                  ),
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: SelectableText(
-                                        source['text'] as String,
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              }),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _question,
-                minLines: 1,
-                maxLines: 4,
-                maxLength: 2000,
-                enabled: transcript.isNotEmpty && !_asking,
-                decoration: const InputDecoration(
-                  hintText: 'Que s’est-il dit sur l’accès à la douche ?',
-                  border: OutlineInputBorder(),
-                  counterText: '',
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Poser la question',
-              onPressed: job == null || transcript.isEmpty || _asking
-                  ? null
-                  : () => _ask(job),
-              icon: _asking
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.arrow_upward),
-            ),
-          ],
         ),
       ],
     );

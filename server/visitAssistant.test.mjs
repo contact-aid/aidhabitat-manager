@@ -165,7 +165,7 @@ test('audio and images retain compatible models while every text call uses V4 Fl
   const calls = [];
   const provider = createVisitProvider({env:{OPENROUTER_API_KEY:'synthetic-key',
     VISIT_AI_MODEL:'expensive-old-model',VISIT_TRANSCRIPTION_MODEL:'audio-model',VISIT_VISION_MODEL:'vision-model'},
-    fetchImpl:async (_,options)=>{calls.push(JSON.parse(options.body));return Response.json({choices:[{message:{content:'Texte'},finish_reason:'stop'}]});}});
+    fetchImpl:async (_,options)=>{const body=JSON.parse(options.body);calls.push(body);return Response.json({choices:[{message:{content:body.model==='audio-model'?JSON.stringify({turns:[{text:'Texte',role:'unknown',voice:'unknown'}]}):'Texte'},finish_reason:'stop'}]});}});
   await provider.rewrite([{role:'user',content:'Texte synthétique'}]);
   await provider.transcribe(Buffer.from('synthetic audio'));
   await provider.readHandwriting('data:image/png;base64,eA==');
@@ -181,9 +181,9 @@ test('unconfigured audio model uses an audio-compatible low-cost default, never 
   const provider=createVisitProvider({env:{OPENROUTER_API_KEY:'synthetic-key',VISIT_AI_MODEL:'old-model'},
     onUsage:entry=>audit.push(entry),fetchImpl:async (_,options)=>{
       body=JSON.parse(options.body);
-      return Response.json({usage:{cost:0.0006},choices:[{message:{content:'Aucune chute rapportée.'},finish_reason:'stop'}]});
+      return Response.json({usage:{cost:0.0006},choices:[{message:{content:JSON.stringify({turns:[{text:'Aucune chute rapportée.',role:'unknown',voice:'unknown'}]})},finish_reason:'stop'}]});
     }});
-  assert.equal(await provider.transcribe(Buffer.from('synthetic audio')),'Aucune chute rapportée.');
+  assert.equal((await provider.transcribe(Buffer.from('synthetic audio'))).text,'Aucune chute rapportée.');
   assert.equal(body.model,'google/gemini-3.1-flash-lite');
   assert.deepEqual(body.reasoning,{enabled:false});
   assert.equal(body.max_tokens,4096);
@@ -222,4 +222,28 @@ test('long visit extraction has enough output budget and audits costs without so
   assert.deepEqual(body.response_format.json_schema.schema.required,['facts','warnings']);
   assert.equal(audit.length,1);assert.equal(audit[0].task,'facts');assert.equal(audit[0].cost,0.001);
   assert.equal(audit[0].completionTokens,14000);assert.ok(!JSON.stringify(audit).includes('PRIVATE SYNTHETIC SOURCE'));
+});
+
+
+test('question quotes are exact transcript substrings, never invented or linked to another excerpt', async () => {
+  const job={transcript:[{index:5,text:'Le seuil mesure 12 cm. Aucune chute.'}]};
+  let answer={answer:'Le seuil mesure 12 cm.',sources:[5],citations:[{index:5,quote:'Le seuil mesure 12 cm.'}]};
+  const provider=createVisitProvider({env:{OPENROUTER_API_KEY:'synthetic-key'},fetchImpl:async()=>Response.json({choices:[{message:{content:JSON.stringify(answer)},finish_reason:'stop'}]})});
+  assert.deepEqual((await provider.ask(job,'Quel seuil ?')).citations,answer.citations);
+  answer={...answer,citations:[{index:5,quote:'Le seuil mesure 20 cm.'}]};
+  await assert.rejects(provider.ask(job,'Quel seuil ?'),{statusCode:502});
+  answer={...answer,citations:[{index:0,quote:'Aucune chute.'}]};
+  await assert.rejects(provider.ask(job,'Chute ?'),{statusCode:502});
+  answer={answer:'Non renseigné.',sources:[],citations:[]};
+  assert.deepEqual((await provider.ask(job,'Âge ?')).sources,[]);
+});
+
+test('structured speaker turns survive a restart alongside backward-compatible text', async t => {
+  const turns=[{text:'Je suis ergothérapeute.',role:'therapist',voice:'woman'},{text:'Aucune chute.',role:'other',voice:'man'}];
+  const f=await fixture(t,{transcribe:async()=>({text:turns.map(t=>t.text).join('\n'),turns})});
+  await f.create();await f.upload();await f.request(`/${id}/finish`,{method:'POST',body:{chunkCount:1}});
+  await f.processor.step('dossier-a',id);
+  const recovered=await new VisitStore(f.store.root).read('dossier-a',id);
+  assert.deepEqual(recovered.transcript[0].turns,turns);
+  assert.equal(recovered.transcript[0].text,'Je suis ergothérapeute.\nAucune chute.');
 });
