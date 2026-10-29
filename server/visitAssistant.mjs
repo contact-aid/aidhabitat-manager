@@ -34,6 +34,13 @@ const factsSchema = {name:'visit_facts',strict:true,schema:{type:'object',additi
       }}},warnings:{type:'array',items:{type:'string'}},
   }}};
 
+const draftSchema = {name:'visit_draft',strict:true,schema:{type:'object',additionalProperties:false,
+  required:['sections','warnings'],properties:{
+    sections:{type:'object',additionalProperties:false,required:Object.keys(VISIT_SECTIONS),
+      properties:Object.fromEntries(Object.keys(VISIT_SECTIONS).map(key=>[key,{type:'string'}]))},
+    warnings:{type:'array',items:{type:'string'}},
+  }}};
+
 export const visitError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 export const validVisitId = id => /^[a-f0-9]{32}$/.test(String(id));
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -165,7 +172,7 @@ export function createVisitProvider({ env = process.env, fetchImpl = fetch, onUs
         { role: 'user', content: JSON.stringify({ transcript: job.transcript,
           context: { ...job.context, handwritten: undefined }, handwrittenNotes: job.handwrittenText ?? [],
           extractedFacts: job.facts ?? null }) },
-      ], { json: true, task: 'draft', maxTokens: 16384, timeoutMs: 300_000 }));
+      ], { json: true, jsonSchema: draftSchema, task: 'draft', maxTokens: 16384, timeoutMs: 300_000 }));
       if (!result.sections || typeof result.sections !== 'object') throw visitError(502, 'Rubriques IA manquantes.');
       const sections = {};
       for (const [key, tabKey] of Object.entries(VISIT_SECTIONS)) {
@@ -246,10 +253,11 @@ export class VisitProcessor {
           return job;
         });
       } catch (error) {
+        const failureStage = job.status;
         job.processingFailures = (job.processingFailures || 0) + 1;
         job.retryAfter = new Date(Date.now() + this.retryDelayMs).toISOString();
         if (job.processingFailures >= 2) job.status = 'failed';
-        job.failure = {stage:job.status, code:error.statusCode || 503, reason:error.statusCode ? error.message : 'Erreur interne', at:new Date().toISOString()};
+        job.failure = {stage:failureStage, code:error.statusCode || 503, reason:error.statusCode ? error.message : 'Erreur interne', at:new Date().toISOString()};
         job.error = 'Le traitement a échoué. Les sources sont conservées ; une reprise est possible.';
         await this.store.write(job);
         throw error;
