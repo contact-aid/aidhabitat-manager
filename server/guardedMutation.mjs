@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
+import { createDatabaseValueComparator, isDefaultFormValue } from './nocodbScalarValues.mjs';
 import { validateConditionalPatch } from './nocodbConditionalWrite.mjs';
 
 export const SYNC_REVISION_FIELD = 'app_sync_revision';
@@ -42,9 +42,13 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
   for (const [key, value] of Object.entries(fields)) {
     if (!Object.hasOwn(observed, key)) conflicts.push(key);
     else if (equals(key, observed[key], value)) continue;
+    else if (Object.hasOwn(baseFields, key) && equals(key, baseFields[key], observed[key])) patch[key] = value;
+    // A real answer takes precedence over an empty/default server value,
+    // including when an old local baseline is absent or already edited.
+    else if (isDefaultFormValue(key, observed[key]) && !isDefaultFormValue(key, value)) patch[key] = value;
+    else if (isDefaultFormValue(key, value) && !isDefaultFormValue(key, observed[key])) retainedFields.push(key);
     else if (!Object.hasOwn(baseFields, key)) conflicts.push(key);
     else if (equals(key, baseFields[key], value)) retainedFields.push(key);
-    else if (equals(key, baseFields[key], observed[key])) patch[key] = value;
     else conflicts.push(key);
   }
   return { patch, conflicts, retainedFields };
@@ -102,10 +106,15 @@ export function createGuardedMutation({ readRecord, writer, readColumns, preferL
         throw new SyncMutationError(409, 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW', observed,
           { conflicts: unreadable, retainedFields: [], writeId });
       }
+      const retainEnteredRemote = (key, value) =>
+        Object.hasOwn(comparisonObserved, key) && isDefaultFormValue(key, value)
+        && !isDefaultFormValue(key, comparisonObserved[key])
+        && !(Object.hasOwn(baseline, key) && equals(key, baseline[key], comparisonObserved[key]));
       const plan = preferLocal
         ? { patch: Object.fromEntries(Object.entries(desired).filter(([key, value]) =>
-            !Object.hasOwn(comparisonObserved, key) || !equals(key, comparisonObserved[key], value))),
-          conflicts: [], retainedFields: [] }
+            (!Object.hasOwn(comparisonObserved, key) || !equals(key, comparisonObserved[key], value))
+            && !retainEnteredRemote(key, value))),
+          conflicts: [], retainedFields: Object.keys(desired).filter(key => retainEnteredRemote(key, desired[key])) }
         : planDatabaseMutation({ fields: desired, baseFields: baseline,
           observed: comparisonObserved, equals });
       if (plan.conflicts.length) {

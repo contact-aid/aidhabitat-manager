@@ -511,17 +511,17 @@ try {
       assert.equal(JSON.parse(mock.row(entity).occupants_json)[0].apa, true);
     });
 
-    await check('synthetic APA edit survives sync, reload, and another edit', async () => {
+    await check('a stale default cannot replace an entered server checkbox', async () => {
       const baseline = await read(clientA);
       mock.row(entity).beneficiaire_apa = true;
       mock.row(entity).app_sync_revision = randomUUID();
-      expectStatus(await patch(clientA, mutation({ apa: false }, { apa: baseline.apa })), 200);
-      assert.equal(mock.row(entity).beneficiaire_apa, false);
+      expectStatus(await patch(clientA, mutation({ apa: false }, { apa: baseline.apa })), 409);
+      assert.equal(mock.row(entity).beneficiaire_apa, true);
       const reloaded = await read(clientB);
-      assert.equal(reloaded.apa, false);
+      assert.equal(reloaded.apa, true);
       expectStatus(await patch(clientB, mutation({ apa: true }, { apa: reloaded.apa })), 200);
       assert.equal((await read(clientA)).apa, true);
-      assert.equal(mock.patches().length, 2);
+      assert.equal(mock.patches().length, 0);
     });
 
     await check('legacy scalar occupants accept a birth date and persist scalar plus JSON', async () => {
@@ -563,6 +563,16 @@ try {
   }
 
   if (entity === 'logement') {
+    await check('entered accessibility answer wins over an unanswered server field with an edited baseline', async () => {
+      mock.row(entity).acces_facile_rue = null;
+      const body = mutation({ easyAccess: true }, { easyAccess: true });
+      body.concurrency.housingPolicy = 'housing-visit-v1';
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal((await read(clientA)).easyAccess, true);
+      const count = mock.patches().length;
+      expectStatus(await patch(clientA, body), 200);
+      assert.equal(mock.patches().length, count);
+    });
     await check('new visit upload then web correction cannot be undone by an old retry', async () => {
       const initial = await read(clientA);
       const ipad = mutation({ comments: 'Visite iPad' }, { comments: initial.comments });

@@ -11,7 +11,8 @@ function fixture({ loseResponse = false, preferLocal = false } = {}) {
     if (path.includes('/meta/')) return { id: 'table1', base_id: 'base1', columns: [
       { title: 'Id', pk: true, uidt: 'ID' },
       { title: 'rooms_breakdown_json', uidt: 'LongText' },
-      ...['app_sync_revision', 'first', 'second'].map(title => ({ title, uidt: 'SingleLineText' })),
+      ...['app_sync_revision', 'first', 'second', 'acces_facile_rue', 'garage', 'observation_accessibilite']
+        .map(title => ({ title, uidt: 'SingleLineText' })),
     ] };
     if (method === 'GET') return { list: [structuredClone(row)] };
     patches++;
@@ -101,6 +102,63 @@ test('missing baseline is unknown, never treated as null', async () => {
   await f.apply({ ...f.mutation, baseFields: { first: null } });
   assert.equal(f.row.first, 'local');
 });
+
+test('entered accessibility answers replace an unanswered server value despite a stale baseline', async () => {
+  for (const answer of ['true', 'false']) {
+    for (const baseFields of [{}, { acces_facile_rue: answer }, { acces_facile_rue: answer === 'true' ? 'false' : 'true' }]) {
+      const f = fixture();
+      f.row.acces_facile_rue = null;
+      const mutation = { ...f.mutation, fields: { acces_facile_rue: answer }, baseFields };
+      await f.apply(mutation);
+      assert.equal(f.row.acces_facile_rue, answer);
+      assert.equal(f.patches(), 1);
+      assert.equal((await f.apply(mutation)).replay, true);
+      assert.equal(f.patches(), 1);
+    }
+  }
+});
+
+test('entered checkbox and text values replace defaults without replacing another field', async () => {
+  const f = fixture();
+  f.row.garage = false;
+  f.row.observation_accessibilite = '';
+  f.row.second = 'remote information';
+  await f.apply({ ...f.mutation,
+    fields: { garage: 'true', observation_accessibilite: 'Information de visite' }, baseFields: {} });
+  assert.equal(f.row.garage, 'true');
+  assert.equal(f.row.observation_accessibilite, 'Information de visite');
+  assert.equal(f.row.second, 'remote information');
+});
+
+test('two different entered accessibility answers still conflict', async () => {
+  const f = fixture();
+  f.row.acces_facile_rue = 'true';
+  await assert.rejects(f.apply({ ...f.mutation,
+    fields: { acces_facile_rue: 'false' }, baseFields: { acces_facile_rue: null } }),
+  e => e.code === 'SYNC_FIELD_CONFLICT');
+  assert.equal(f.patches(), 0);
+  assert.equal(f.row.acces_facile_rue, 'true');
+});
+
+test('a deliberate clear based on the current answer remains possible', async () => {
+  const f = fixture();
+  f.row.acces_facile_rue = 'true';
+  await f.apply({ ...f.mutation, fields: { acces_facile_rue: null },
+    baseFields: { acces_facile_rue: 'true' } });
+  assert.equal(f.row.acces_facile_rue, null);
+});
+
+for (const preferLocal of [false, true]) {
+  test(`a stale empty answer preserves an entered remote answer (preferLocal=${preferLocal})`, async () => {
+    const f = fixture({ preferLocal });
+    f.row.acces_facile_rue = 'false';
+    await assert.rejects(f.apply({ ...f.mutation,
+      fields: { acces_facile_rue: null }, baseFields: { acces_facile_rue: null } }),
+    e => e.code === 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW');
+    assert.equal(f.row.acces_facile_rue, 'false');
+    assert.equal(f.patches(), 0);
+  });
+}
 
 test('lost response retries with the same write id and sends no second PATCH', async () => {
   const f = fixture({ loseResponse: true });
