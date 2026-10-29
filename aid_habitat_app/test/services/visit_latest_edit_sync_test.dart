@@ -211,13 +211,40 @@ void main() {
             expect(body['initializeOnly'], false);
             expect(body['mutationId'], isNotEmpty);
             writes++;
-            return http.Response('{"success":true,"data":{}}', 200);
+            return http.Response(
+              '{"success":true,"data":{"order":{"revision":5}}}',
+              200,
+            );
           }),
         ),
       );
       expect((await service.pushPendingChanges()).pushedOperations, 1);
       expect(writes, 1);
       expect((await db.query('sync_operations')).single['status'], 'completed');
+      // This GET started before the drag was acknowledged. Its older order
+      // must not undo the visible result after the pending marker disappears.
+      await documents.mergeRemoteDocuments('patient-1', [
+        for (final entry in ['a', 'b'].asMap().entries)
+          {
+            'id': 'server-${entry.value}',
+            'clientDocumentId': 'local-${entry.value}',
+            'fileName': '${entry.value}.jpg',
+            'mimeType': 'image/jpeg',
+            'tags': ['Visite - Accessibilité'],
+            'createdAt': baseline,
+            'updatedAt': baseline,
+            'remotePath': '/api/mobile-documents/server-${entry.value}/content',
+            'categoryOrder': entry.key,
+            'photoOrderShared': true,
+            'photoOrderRevision': 4,
+          },
+      ]);
+      expect(
+        (await documents.fetchVisitReportPhotoOrder('patient-1'))
+            .where((entry) => entry.localId.startsWith('local-'))
+            .map((entry) => entry.localId),
+        ['local-b', 'local-a'],
+      );
       expect(
         await queue.countPendingReportPrerequisites(
           dossierId: 'dossier-1',

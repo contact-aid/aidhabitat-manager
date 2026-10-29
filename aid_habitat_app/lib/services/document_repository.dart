@@ -148,7 +148,7 @@ class DocumentRepository {
         where:
             "patient_local_id = ? AND pending_delete = 0 AND (mime_type LIKE 'image/%' OR LOWER(file_ext) IN ('jpg','jpeg','png','gif','webp','heic'))",
         whereArgs: [patientId],
-        orderBy: 'updated_at DESC, created_at DESC, local_id ASC',
+        orderBy: 'created_at DESC, local_id ASC',
       );
       final initialPositions = {
         for (var i = 0; i < rows.length; i++) rows[i]['local_id']: i,
@@ -1312,7 +1312,21 @@ class DocumentRepository {
   }) async {
     if (orderedDocumentIds.isEmpty) return;
     final db = await _database.database;
+    String? patientId;
     await db.transaction((txn) async {
+      final rows = await txn.query(
+        'documents',
+        where: 'local_id = ?',
+        whereArgs: [orderedDocumentIds.first],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+      final tags =
+          (jsonDecode(rows.first['tags_json'] as String? ?? '[]') as List)
+              .cast<String>();
+      final tag = tags.where((t) => t.startsWith('Visite - ')).firstOrNull;
+      if (tag == null) return;
+      patientId = rows.first['patient_local_id'] as String;
       for (var i = 0; i < orderedDocumentIds.length; i++) {
         await txn.update(
           'documents',
@@ -1321,25 +1335,19 @@ class DocumentRepository {
           whereArgs: [orderedDocumentIds[i]],
         );
       }
+      // Publish the local ranks and their pending sync together. A background
+      // pull must never see a new local order without its protection marker.
+      await _enqueueVisitPhotoOrder(
+        patientId!,
+        tag,
+        orderedDocumentIds,
+        initializeOnly: false,
+        executor: txn,
+      );
     });
-    final rows = await db.query(
-      'documents',
-      where: 'local_id = ?',
-      whereArgs: [orderedDocumentIds.first],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    final tags =
-        (jsonDecode(rows.first['tags_json'] as String? ?? '[]') as List)
-            .cast<String>();
-    final tag = tags.where((t) => t.startsWith('Visite - ')).firstOrNull;
-    if (tag == null) return;
-    await _enqueueVisitPhotoOrder(
-      rows.first['patient_local_id'] as String,
-      tag,
-      orderedDocumentIds,
-      initializeOnly: false,
-    );
+    if (patientId == null) return;
+    SyncEngine().notify();
+    _notifyChanged(patientId: patientId!, reason: 'visit_photo_order');
   }
 
   Future<void> _enqueueVisitPhotoOrder(
@@ -1347,8 +1355,9 @@ class DocumentRepository {
     String tag,
     List<String> ids, {
     required bool initializeOnly,
+    DatabaseExecutor? executor,
   }) async {
-    final db = await _database.database;
+    final db = executor ?? await _database.database;
     final operationId =
         'visit_photo_order_${patientId}_${base64Url.encode(utf8.encode(tag))}';
     if (initializeOnly) {
@@ -1383,8 +1392,10 @@ class DocumentRepository {
       'created_at': now,
       'updated_at': now,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
-    SyncEngine().notify();
-    _notifyChanged(patientId: patientId, reason: 'visit_photo_order');
+    if (executor == null) {
+      SyncEngine().notify();
+      _notifyChanged(patientId: patientId, reason: 'visit_photo_order');
+    }
   }
 
   Future<void> _initializeSharedPhotoOrder(

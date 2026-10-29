@@ -241,4 +241,17 @@ void main() {
       expect(await order(), ['a', 'b', 'c']);
     },
   );
+
+  test('failed queue persistence rolls back the visible photo order', () async {
+    await repository().fetchDocuments('patient');
+    await db.execute(
+      "CREATE TRIGGER reject_photo_order BEFORE INSERT ON sync_operations "
+      "WHEN NEW.entity_type = 'visit_photo_order' BEGIN SELECT RAISE(ABORT, 'synthetic disk failure'); END",
+    );
+    await expectLater(
+      repository().reorderVisitCategory(orderedDocumentIds: ['c', 'b', 'a']),
+      throwsA(anything),
+    );
+    expect(await order(), ['a', 'b', 'c']);
+  });
 }

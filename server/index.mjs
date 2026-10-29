@@ -7186,12 +7186,12 @@ app.post(
 
     // 3) Merge inline + remote. Inline gagne en cas de doublon (state
     // local plus récent que NocoDB pendant la fenêtre intermittente).
-    const documents = await visitPhotoOrderStore.apply(patientId, mergeInlineDocuments(
-      remoteDocuments,
+    const documents = mergeInlineDocuments(
+      await visitPhotoOrderStore.apply(patientId, remoteDocuments),
       inlineAssets.documents,
       inlineAssets.documentOrder,
       patientId,
-    ));
+    );
     const notePages = mergeInlineNotePages(remoteNotePages, inlineAssets.plans);
 
     // Inline assets are partial: missing local bytes do not imply deletion.
