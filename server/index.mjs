@@ -14,6 +14,7 @@ import { isDeepStrictEqual } from 'node:util';
 import express from 'express';
 import aiRouter from './routes/ai.mjs';
 import { registerVisitAssistantRoutes } from './visitAssistantRoutes.mjs';
+import {appendVisitResultNotes} from './visitResultNotes.mjs';
 import dataRetentionRouter from './routes/dataRetention.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import dotenv from 'dotenv';
@@ -9542,7 +9543,10 @@ app.put('/api/visit-recommendations/:dossierId', requireAuth, async (req, res, n
 });
 
 registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRecord,
-  canAccessDossierRecord, field, dataDir: DATA_DIR_PATH });
+  canAccessDossierRecord, field, dataDir: DATA_DIR_PATH,
+  applyResult: async job => appendVisitResultNotes({store:mobileSyncStore,job,
+    metadata:await buildVisitRecommendationMetadata(await ensureDossierRecord(job.dossierId))}),
+});
 
 app.use(aiRouter);
 app.use(dataRetentionRouter);

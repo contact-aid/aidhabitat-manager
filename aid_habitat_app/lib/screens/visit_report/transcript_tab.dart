@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../services/visit_assistant_service.dart';
 
@@ -15,6 +16,8 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
   String? _error;
   bool _loading = true;
   bool _asking = false;
+  bool _refreshing = false;
+  Timer? _refreshTimer;
   final List<Map<String, dynamic>> _messages = [];
   final _service = VisitAssistantService.instance;
   String? _lastProgress;
@@ -23,6 +26,11 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
     super.initState();
     _service.addListener(_progress);
     _load();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_jobs.any((j) => !['complete', 'failed'].contains(j['status']))) {
+        unawaited(_load());
+      }
+    });
   }
 
   void _progress() {
@@ -39,6 +47,8 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
   }
 
   Future<void> _load() async {
+    if (_refreshing) return;
+    _refreshing = true;
     try {
       final jobs = await _service.loadTranscripts(widget.dossierId);
       if (!mounted) return;
@@ -58,12 +68,15 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
               'La transcription sera disponible après synchronisation et traitement.';
         });
       }
+    } finally {
+      _refreshing = false;
     }
   }
 
   @override
   void dispose() {
     _service.removeListener(_progress);
+    _refreshTimer?.cancel();
     _question.dispose();
     super.dispose();
   }
@@ -105,6 +118,18 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
         .whereType<Map>()
         .toList();
     final warnings = (job?['result'] as Map?)?['warnings'] as List? ?? [];
+    final stage = switch (job?['status']) {
+      'transcribing' =>
+        'Transcription : ${job?['transcribedChunks'] ?? transcript.length}/${job?['chunkCount'] ?? '?'} extraits',
+      'reading_notes' => 'Lecture des notes manuscrites',
+      'organizing' => 'Classement des informations',
+      'drafting' => 'Rédaction des textes',
+      'applying' => 'Enregistrement des textes dans les rubriques',
+      'complete' => 'Traitement terminé',
+      'failed' =>
+        'Traitement arrêté après échecs. Les sources sont conservées.',
+      _ => 'Envoi de l’enregistrement',
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -137,6 +162,34 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
             ),
           ),
         ),
+        if (job != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                Expanded(child: Text(stage)),
+                if (job['status'] == 'failed' || job['error'] != null)
+                  TextButton(
+                    onPressed: () async {
+                      try {
+                        await _service.retry(
+                          widget.dossierId,
+                          job['id'] as String,
+                        );
+                        await _load();
+                      } catch (_) {
+                        if (mounted) {
+                          setState(
+                            () => _error = 'La reprise n’a pas pu démarrer.',
+                          );
+                        }
+                      }
+                    },
+                    child: const Text('Reprendre le traitement'),
+                  ),
+              ],
+            ),
+          ),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
@@ -150,7 +203,9 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
                 .map(
                   (j) => DropdownMenuItem(
                     value: j['id'] as String,
-                    child: Text('Visite ${j['createdAt'] ?? ''}'),
+                    child: Text(
+                      'Visite ${j['createdAt'] ?? ''} · ${((j['audioDurationSeconds'] as num? ?? 0) / 60).ceil()} min',
+                    ),
                   ),
                 )
                 .toList(),

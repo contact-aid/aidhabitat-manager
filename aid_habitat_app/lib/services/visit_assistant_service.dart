@@ -345,15 +345,21 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
         if (remote['status'] == 'complete') {
           final result = Map<String, dynamic>.from(remote['result'] as Map);
           final sections = Map<String, dynamic>.from(result['sections'] as Map);
-          for (final section in sections.entries) {
-            _checkSession(epoch);
-            await _notes.appendVisitText(
-              patientId: job['patientId'] as String,
-              dossierId: job['dossierId'] as String,
-              tabKey: section.key,
-              recordingId: job['id'] as String,
-              text: section.value.toString(),
+          if (remote['notesAppliedAt'] != null) {
+            await DataService().refreshAllNotePagesForPatient(
+              job['patientId'] as String,
             );
+          } else {
+            for (final section in sections.entries) {
+              _checkSession(epoch);
+              await _notes.appendVisitText(
+                patientId: job['patientId'] as String,
+                dossierId: job['dossierId'] as String,
+                tabKey: section.key,
+                recordingId: job['id'] as String,
+                text: section.value.toString(),
+              );
+            }
           }
           job['status'] = 'complete';
         }
@@ -543,6 +549,11 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
             as List)
         .map((j) => Map<String, dynamic>.from(j as Map))
         .toList();
+  }
+
+  Future<void> retry(String dossierId, String id) async {
+    await _request('POST', '${Uri.encodeComponent(dossierId)}/$id/retry');
+    unawaited(pump());
   }
 
   Future<Map<String, dynamic>> ask(

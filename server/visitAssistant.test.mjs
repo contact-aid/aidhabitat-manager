@@ -10,13 +10,13 @@ import { createVisitProvider, VisitStore, VisitProcessor, visitDigest } from './
 
 const id = 'a'.repeat(32);
 const audio = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypM4A '), Buffer.alloc(40)]);
-async function fixture(t, overrides = {}) {
+async function fixture(t, overrides = {}, options = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'visit-assistant-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   const app = express(); app.use(express.json());
   const calls = [];
-  const { store, processor } = registerVisitAssistantRoutes(app, {
-    dataDir, env: { VISIT_ASSISTANT_ENABLED: 'true' },
+  const { store, processor, queue } = registerVisitAssistantRoutes(app, {
+    dataDir, background:options.background ?? false, retryDelayMs:0, env: { VISIT_ASSISTANT_ENABLED: 'true' },
     requireAuth: (req, res, next) => {
       if (!req.headers['x-user']) return res.sendStatus(401);
       req.appUser = { email: req.headers['x-user'] }; next();
@@ -33,6 +33,7 @@ async function fixture(t, overrides = {}) {
       ...overrides,
     },
   });
+  t.after(() => queue?.close());
   const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise(resolve => server.close(resolve)));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -43,7 +44,7 @@ async function fixture(t, overrides = {}) {
   const create = (extra = {}) => request(`/${id}`, { method: 'PUT', body: { context: { existingText: {}, handwritten: [], ...extra } } });
   const upload = (index = 0, bytes = audio) => request(`/${id}/chunks/${index}`, { method: 'PUT', raw: bytes,
     headers: { 'x-audio-sha256': visitDigest(bytes), 'x-audio-duration': '60' } });
-  return { request, create, upload, store, processor, calls };
+  return { request, create, upload, store, processor, queue, calls };
 }
 
 test('authentication, dossier access, ownership and traversal cannot leak a transcript', async t => {
@@ -88,6 +89,8 @@ test('a restart resumes after the last transcribed segment, reads handwriting an
   assert.equal(job.status, 'reading_notes');
   job = (await (await process()).json()).data;
   assert.equal(job.status, 'organizing');
+  job = (await (await process()).json()).data;
+  assert.equal(job.status, 'applying');
   job = (await (await process()).json()).data;
   assert.equal(job.status, 'complete');
   await process();
@@ -170,4 +173,18 @@ test('audio and images retain compatible models while every text call uses V4 Fl
   assert.ok(calls.every(c=>c.provider.sort==='price' && c.provider.zdr===true));
   assert.equal(calls[1].messages[0].content[1].type,'input_audio');
   assert.equal(calls[2].messages[0].content[1].type,'image_url');
+});
+
+
+test('finish starts server processing without client process requests and exposes durable progress', async t => {
+  const f=await fixture(t,{}, {background:true});
+  await f.create();await f.upload();
+  assert.equal((await f.request(`/${id}/finish`,{method:'POST',body:{chunkCount:1}})).status,200);
+  await f.queue.enqueue('dossier-a',id);
+  const jobs=(await (await f.request()).json()).data;
+  assert.equal(jobs[0].status,'complete');assert.equal(jobs[0].transcribedChunks,1);assert.equal(jobs[0].chunkCount,1);assert.ok(jobs[0].notesAppliedAt);
+  assert.deepEqual(f.calls,['transcribe','facts','draft']);
+  const poll=(await (await f.request(`/${id}/process`,{method:'POST'})).json()).data;
+  assert.deepEqual(poll.result.sections,{});
+  assert.deepEqual(jobs[0].result.sections,{'Accessibilité-Notes':'Seuil mesuré à 12 cm.'});
 });
