@@ -11,6 +11,7 @@ import 'app_config.dart';
 import 'connectivity_service.dart';
 import 'document_file_naming.dart';
 import 'document_repository.dart';
+import 'offline_vault.dart';
 import 'document_upload_identity.dart';
 import 'dossier_repository.dart';
 import 'local_database.dart';
@@ -541,6 +542,7 @@ class NocodbSyncService {
           await _processOperation(operation);
           SyncSessionScope.current?.check();
           final ownsChildVersion = const {
+            'visit_photo_order',
             'mesures_anthropometriques',
             'observations_synthese',
             'diagnostic_sanitaires',
@@ -918,7 +920,7 @@ class NocodbSyncService {
         await _processHousingOperation(operation, payload);
         return;
       case 'visit_photo_order':
-        await _processVisitPhotoOrder(payload);
+        await _processVisitPhotoOrder(operation, payload);
         return;
       case 'document':
         await _processDocumentOperation(operation, payload);
@@ -1651,7 +1653,10 @@ class NocodbSyncService {
     );
   }
 
-  Future<void> _processVisitPhotoOrder(Map<String, dynamic> payload) async {
+  Future<void> _processVisitPhotoOrder(
+    SyncOperation operation,
+    Map<String, dynamic> payload,
+  ) async {
     final patientId = payload['patientLocalId'] as String;
     final db = await _database.database;
     final ids = <String>[];
@@ -1666,9 +1671,42 @@ class NocodbSyncService {
       final remoteId = _extractRemoteDocumentIdFromRow(rows.firstOrNull);
       ids.add(remoteId.isNotEmpty ? remoteId : id);
     }
-    await _apiClient.saveVisitPhotoOrder(patientId, {
+    final revision = await _apiClient.saveVisitPhotoOrder(patientId, {
       ...payload,
       'orderedDocumentIds': ids,
+    });
+    SyncSessionScope.current?.check();
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_operations',
+        columns: ['status', 'payload_json'],
+        where: 'id = ?',
+        whereArgs: [operation.id],
+        limit: 1,
+      );
+      if (rows.isEmpty || rows.single['status'] != 'running') return;
+      final current = await OfflineVault.instance.openString(
+        rows.single['payload_json'] as String,
+      );
+      SyncSessionScope.current?.check();
+      if (current != operation.payloadJson) return;
+      final key =
+          'visit_photo_order_revision:${jsonEncode([patientId, payload['categoryTag']])}';
+      final stored = await txn.query(
+        'kv_store',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: [key],
+        limit: 1,
+      );
+      final previous =
+          int.tryParse(stored.firstOrNull?['value'] as String? ?? '') ?? 0;
+      if (revision <= previous) return;
+      await txn.insert('kv_store', {
+        'key': key,
+        'value': '$revision',
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
   }
 

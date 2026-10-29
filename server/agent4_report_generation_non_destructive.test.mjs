@@ -90,6 +90,7 @@ async function runReportRoute() {
     documentRow(501, 'remote-photo-a', 'local-photo-a', ['Visite - Logement'], png),
     documentRow(502, 'remote-photo-b', 'local-photo-b', ['Visite - Sanitaires'], png),
     documentRow(503, 'remote-contract', 'local-contract', ['Mandat'], Buffer.from('synthetic text')),
+    documentRow(504, 'remote-photo-c', 'local-photo-c', ['Visite - Sanitaires'], png),
   ];
   const deletes = [];
   const contentReads = [];
@@ -213,6 +214,13 @@ async function runReportRoute() {
     });
     assert.equal(login.status, 200);
     const token = (await login.json()).data.token;
+    const savedOrder = await fetch(`${apiOrigin}/api/visit-photo-order/nocodb-beneficiaire-201`, {
+      method: 'PUT', headers: { 'x-app-session': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ categoryTag: 'Visite - Sanitaires',
+        orderedDocumentIds: ['remote-photo-b', 'remote-photo-c'], mutationId: 'old-browser-order',
+        modifiedAt: '2026-10-01T10:00:00Z' }),
+    });
+    assert.equal(savedOrder.status, 200);
 
     const form = new FormData();
     form.append('inline_doc_local-photo-a', new Blob([png], { type: 'image/png' }), 'photo-a.png');
@@ -228,7 +236,8 @@ async function runReportRoute() {
     );
     form.append(
       'inline_doc_order',
-      JSON.stringify([{ id: 'local-photo-a', categoryOrder: 0 }]),
+      JSON.stringify([{ id: 'local-photo-a', categoryOrder: 0 },
+        { id: 'local-photo-c', categoryOrder: 0 }, { id: 'local-photo-b', categoryOrder: 1 }]),
     );
     const response = await fetch(`${apiOrigin}/api/reports/visit/${dossierId}`, {
       method: 'POST',
@@ -258,6 +267,8 @@ async function runReportRoute() {
     // The inline copy is preferred, while the other remote visit photo is fetched.
     assert(!contentReads.includes('remote-photo-a'));
     assert(contentReads.includes('remote-photo-b'));
+    assert(contentReads.indexOf('remote-photo-c') < contentReads.indexOf('remote-photo-b'),
+      'the real PDF must fetch photos in the current browser order, ahead of the old shared order');
     assert(!contentReads.includes('remote-contract'));
     await setImmediate();
     await setImmediate();

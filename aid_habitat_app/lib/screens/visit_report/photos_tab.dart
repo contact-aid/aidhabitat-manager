@@ -77,7 +77,8 @@ class _PhotosTabState extends State<PhotosTab>
   int _refreshGeneration = 0;
   String? _activePhotoDragId;
   String? _lastPhotoReorderTargetKey;
-  bool _photoOrderSaving = false;
+  int _photoOrderSaveCount = 0;
+  bool get _photoOrderSaving => _photoOrderSaveCount > 0;
   bool _photoOrderChanged = false;
   List<DocItem>? _photoDragSnapshot;
 
@@ -701,7 +702,6 @@ class _PhotosTabState extends State<PhotosTab>
   }
 
   Future<void> _commitPhotoOrder(String tag) async {
-    if (_photoOrderSaving) return;
     _photoDragSnapshot = null;
     if (!_photoOrderChanged) {
       _activePhotoDragId = null;
@@ -711,7 +711,7 @@ class _PhotosTabState extends State<PhotosTab>
     }
     _photoOrderChanged = false;
     final current = _photosForCategory(tag);
-    _photoOrderSaving = true;
+    _photoOrderSaveCount++;
     _refreshGeneration++;
     _activePhotoDragId = null;
     _lastPhotoReorderTargetKey = null;
@@ -724,7 +724,7 @@ class _PhotosTabState extends State<PhotosTab>
         _showError('L’ordre des photos n’a pas pu être enregistré. Réessayez.');
       }
     } finally {
-      _photoOrderSaving = false;
+      _photoOrderSaveCount--;
     }
     if (mounted) await _refresh();
   }

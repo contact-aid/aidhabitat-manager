@@ -1530,7 +1530,7 @@ class NocodbApiClient {
     return true;
   }
 
-  Future<void> saveVisitPhotoOrder(
+  Future<int> saveVisitPhotoOrder(
     String patientId,
     Map<String, dynamic> order,
   ) async {
@@ -1551,6 +1551,12 @@ class NocodbApiClient {
         'Enregistrement ordre des photos (${response.statusCode})',
       );
     }
+    final decoded = jsonDecode(response.body) as Map;
+    final revision = decoded['data']?['order']?['revision'];
+    if (decoded['success'] != true || revision is! int || revision < 1) {
+      throw TransientRemoteException('Photo order was not confirmed by server');
+    }
+    return revision;
   }
 
   Future<Map<String, dynamic>> updateDocumentMetadata({

@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mergeInlineDocuments, reportDocumentAliases } from './reports/inlineReportDocuments.mjs';
 import { photosForVisitTag } from './reports/generateVisitReport.mjs';
+import { createVisitPhotoOrderStore } from './visitPhotoOrderStore.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 const patient = 'nocodb-beneficiaire-69';
 const tag = 'Visite - Accessibilité';
 const docs = ['a', 'b', 'c'].map(id => ({ id, clientDocumentId: `doc_${id}`, tags: [tag] }));
@@ -18,4 +22,21 @@ test('uploaded, legacy and client identities still override remote ranks, includ
     const merged = mergeInlineDocuments(docs.map(d=>({...d,categoryOrder:8})), new Map(), new Map([[identity,0]]),patient);
     assert.equal(photosForVisitTag(merged,tag)[0].id,'b');
   }
+});
+
+test('report preserves the current browser order over a previously saved shared order', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'report-photo-order-'));
+  try {
+    const store = createVisitPhotoOrderStore(directory);
+    await store.save(patient, { categoryTag: tag, orderedDocumentIds: ['a', 'b', 'c'],
+      mutationId: 'old-order', modifiedAt: '2026-10-01T10:00:00Z' });
+    const shared = await store.apply(patient, docs);
+    const local = new Map([['c', 0], ['a', 1], ['b', 2]]);
+    const merged = mergeInlineDocuments(shared, new Map(), local, patient);
+    assert.deepEqual(photosForVisitTag(merged, tag).map(doc => doc.id), ['c', 'a', 'b']);
+    const inline = new Map([['doc_b', { ...docs[1], id: 'doc_b', clientDocumentId: 'doc_b', categoryOrder: 0 }]]);
+    const withInline = mergeInlineDocuments(shared, inline, new Map(), patient);
+    assert.equal(withInline.find(doc => doc.id === 'doc_b').categoryOrder, 0);
+    assert(!withInline.some(doc => doc.id === 'b'));
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
