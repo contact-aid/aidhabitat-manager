@@ -34,3 +34,11 @@ Sur un iPad de test, depuis Documents en paysage : ouvrir Scanner, vérifier le 
 Aucun upload TestFlight ni déploiement de production n’est effectué pour ce correctif avant cette recette.
 
 Références : [orientations prises en charge](https://developer.apple.com/documentation/uikit/uiviewcontroller/supportedinterfaceorientations), [demande de géométrie](https://developer.apple.com/documentation/uikit/uiwindowscene/requestgeometryupdate(_:errorhandler:)), [verrouillage de l’orientation](https://developer.apple.com/documentation/uikit/uiviewcontroller/prefersinterfaceorientationlocked).
+
+## Application physique de recette
+
+Une application indépendante **Scan Test** (`com.aidhabitat.scannertest`, version 1.0, build 1) a été compilée, signée, installée et lancée sur l’iPad de test connecté sous iPadOS 26.6.1. App’Ergo (`com.aidhabitat.manager`, build 106) reste installée à côté.
+
+Cette application exécute le même `DocumentScannerPlugin.swift`, avec un écran d’accueil paysage, deux boutons scan/photo, l’aperçu local du PDF ou de l’image et un export système facultatif. Elle n’initialise pas le moteur Flutter et n’appelle aucun serveur. Elle sert à valider la caméra et les transitions natives ; elle ne valide pas l’import ou la synchronisation des dossiers dans App’Ergo. L’installation et le lancement sont confirmés, la recette manuelle reste à effectuer.
+
+Construction : `ruby aid_habitat_app/tool/scanner_device_test/build.rb DEVICE_UDID`, depuis la racine du dépôt. Les sources et le lanceur sont dans `aid_habitat_app/tool/scanner_device_test/` ; le bundle signé est produit dans `aid_habitat_app/build/scanner-device-test/DerivedData/Build/Products/Release-iphoneos/ScanTest.app`.
