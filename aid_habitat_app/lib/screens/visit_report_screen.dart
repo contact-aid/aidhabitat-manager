@@ -2906,9 +2906,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
         // Plans déplacé juste après WC (demande utilisateur 2026-05-04) —
         // doit rester aligné avec l'ordre déclaré dans `_tabs`.
         _wrapTabWithNotes('Plans', PlansTab(dossier: _dossier)),
-        // Onglet Photos — pleine largeur (pas de notes latérales).
+        // Onglet Photos : pleine largeur, sans panneau blanc autour des cartes.
         // Voir `lib/screens/visit_report/photos_tab.dart`.
-        _wrapTabWithNotes('Photos', PhotosTab(dossier: _dossier)),
+        PhotosTab(dossier: _dossier),
         // Onglet Résumé — dessin pleine page par défaut, puis switch
         // vers les notes écrites Projet / Préconisations. Le canvas
         // reste agrandissable dans une 2e fenêtre browser (mode
