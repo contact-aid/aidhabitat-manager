@@ -1,4 +1,4 @@
-import { normalizeHousingAccessBaseline } from './housingNullableAccess.mjs';
+import { normalizeHousingAccessBaseline, sameHousingSourceVersion } from './housingNullableAccess.mjs';
 import { createJournaledHousingWriter } from './housingWriteJournal.mjs';
 import { joinReportNotePagesText } from './reports/noteText.mjs';
 import { retirementFundLabelsForReport } from './reports/retirementFundNames.mjs';
@@ -551,7 +551,7 @@ const changesCollection = (tableId, body) => {
 };
 
 async function applyConditionalSync(req, res, { tableId, record, fields, mapBaseline,
-  normalizeObserved, normalizeBaseline }) {
+  normalizeObserved, normalizeBaseline, canPromoteDefault }) {
   if (!guardedMutation) return false;
   try {
     const guard = req.body?.concurrency;
@@ -565,7 +565,7 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
       : changesCollection(tableId, req.body) ? strictCollectionMutation : guardedMutation;
     await mutate({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
-      normalizeObserved, normalizeBaseline,
+      normalizeObserved, normalizeBaseline, canPromoteDefault,
       authorizeObserved: tableId === TABLES.dossiers
         ? (row) => canAccessDossierRecord(req.appUser, { id: String(record.id), fields: row })
         : undefined,
@@ -7912,6 +7912,11 @@ app.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async (re
         if (await applyConditionalSync(req, res, {
           tableId: TABLES.logements, record: existingHousing, fields,
           mapBaseline: mapHousingFields,
+          // A known nullable baseline already merges normally. Do not infer
+          // that a later clear is an old default when the legacy reference
+          // was projected to false; the timestamp-bound repair handles it.
+          canPromoteDefault: (key, observed) => key !== 'acces_facile_rue' || sameHousingSourceVersion(
+            updates.concurrency?.expectedUpdatedAt, getRecordUpdatedAt({fields:observed})),
           normalizeBaseline: (baseline, observed) => normalizeHousingAccessBaseline({
             baseline, observed,
             expectedUpdatedAt: updates.concurrency?.expectedUpdatedAt,

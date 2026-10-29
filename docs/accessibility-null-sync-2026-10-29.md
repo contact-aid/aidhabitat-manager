@@ -29,3 +29,12 @@ multiple offline edits, equipment-only updates, recovery, ownership and genuine
 web conflicts. The server tests cover the complete levels/equipment/exterior
 patch and a web edit racing the conditional write. No live patient data is
 rewritten by a migration or forced replay.
+
+Integrated with PR #99's general preference for entered values over defaults.
+For the street-access field specifically, promotion from an unknown/incorrect
+reference is allowed only when its original source version is still current.
+A correct null baseline continues to merge through the normal three-way path,
+even when an unrelated server field has changed. The automatic client resolver
+also retains ambiguous legacy false references after a newer server version.
+Post-integration validation: 563 server tests and 114 focused Flutter tests pass,
+with targeted analysis clean.

@@ -364,6 +364,90 @@ class SyncMergePlan {
   bool get canApplyAutomatically => conflictingFields.isEmpty;
 }
 
+bool isDefaultSyncFormValue(String key, Object? value) {
+  const checkboxes = {
+    'apa',
+    'invalidity',
+    'homeHelp',
+    'prepare',
+    'basement',
+    'rdc',
+    'floor',
+    'secondFloor',
+    'thirdFloor',
+    'garage',
+    'veranda',
+    'balcon',
+    'terrasse',
+    'jardin',
+    'heatingMain',
+    'voletsRoulantsManuelsEntier',
+    'voletsRoulantsElectriquesEntier',
+    'voletsPersiennesEntier',
+    'cheminementEscalierExterieur',
+    'cheminementEscalierInterieur',
+    'cheminementPenteDouce',
+    'cheminementPlat',
+    'cheminementQuelquesMarches',
+    'cheminementParArriere',
+    'cheminementSeuilPorte',
+    'difficultesCirculationInterieure',
+  };
+  const emptyValues = {
+    'firstName',
+    'lastName',
+    'occupant2FirstName',
+    'occupant2LastName',
+    'email',
+    'phone',
+    'address',
+    'city',
+    'postalCode',
+    'invalidityTxt',
+    'homeHelpTxt',
+    'dependenceTxt',
+    'personneConfiance',
+    'telephonePersonneConfiance',
+    'mailPersonneConfiance',
+    'numeroSecuriteSocialeMonsieur',
+    'numeroSecuriteSocialeMadame',
+    'compteAnah',
+    'natureAccompagnement',
+    'envoiRapport',
+    'personnesPresentesVisite',
+    'yearConstruction',
+    'yearHabitation',
+    'surface',
+    'basementDesc',
+    'rdcDesc',
+    'floorDesc',
+    'voletsRoulantsManuelsLocalisation',
+    'voletsRoulantsElectriquesLocalisation',
+    'voletsPersiennesLocalisation',
+    'comments',
+    'accessObservation',
+    'observations',
+    'observationEquipements',
+    'projetSouhaitUsage',
+    'resumePreconisations',
+    'observationEquipementsUtilisation',
+    'easyAccess',
+    'porteSdbLargeurSuffisante',
+    'porteSdbSensAdapte',
+    'porteWcLargeurSuffisante',
+    'porteWcSensAdapte',
+  };
+  final empty = value == null || (value is String && value.trim().isEmpty);
+  if (checkboxes.contains(key)) {
+    return empty ||
+        value == false ||
+        value == 'false' ||
+        value == 0 ||
+        value == '0';
+  }
+  return emptyValues.contains(key) && empty;
+}
+
 /// Three-way comparison of canonical API fields. Structured fields are atomic:
 /// arrays must never be merged by position (occupants can be reordered).
 /// The caller must apply NOTHING if [SyncMergePlan.canApplyAutomatically] is
@@ -382,13 +466,23 @@ SyncMergePlan planSyncMerge({
     } else if (equivalentSyncField(key, remoteValues[key], entry.value)) {
       // Already applied (e.g. a successful request whose response was lost).
       continue;
+    } else if (baseValues.containsKey(key) &&
+        equivalentSyncField(key, baseValues[key], remoteValues[key])) {
+      // A deliberate edit of the current value also permits clearing it.
+      patch[key] = entry.value;
+    } else if (isDefaultSyncFormValue(key, remoteValues[key]) &&
+        !isDefaultSyncFormValue(key, entry.value)) {
+      patch[key] = entry.value;
+    } else if (isDefaultSyncFormValue(key, entry.value) &&
+        !isDefaultSyncFormValue(key, remoteValues[key])) {
+      // Retain the entered server value and let selective reconciliation
+      // restore it locally instead of sending a default back to the server.
+      continue;
     } else if (!baseValues.containsKey(key)) {
       conflicts.add(key);
     } else if (equivalentSyncField(key, baseValues[key], entry.value)) {
       // The local edit was undone; retain the remote change.
       continue;
-    } else if (equivalentSyncField(key, baseValues[key], remoteValues[key])) {
-      patch[key] = entry.value;
     } else {
       conflicts.add(key);
     }
@@ -410,6 +504,29 @@ bool canAutomaticallyResumeConflict(Map<String, dynamic> payload) {
   }
   final remote = conflict['remote'];
   final code = (remote is Map ? remote['error'] : null) ?? conflict['code'];
+  // A legacy false reference may actually mean unanswered. A newer null
+  // could be an intentional web clear; only the server's unchanged-version
+  // repair may authorize automatically retrying this ambiguous reference.
+  final updates = payload['updates'] as Map;
+  final base = guard['baseValues'] as Map;
+  final conflicting = remote is Map ? remote['conflictFields'] : null;
+  if (base['easyAccess'] == false &&
+      updates['easyAccess'] is bool &&
+      conflicting is List &&
+      conflicting.contains('acces_facile_rue')) {
+    final expected = guard['expectedUpdatedAt'] is String
+        ? DateTime.tryParse(guard['expectedUpdatedAt'])
+        : null;
+    final current = remote is Map && remote['remoteUpdatedAt'] is String
+        ? DateTime.tryParse(remote['remoteUpdatedAt'])
+        : null;
+    if (expected == null ||
+        current == null ||
+        !expected.isAtSameMomentAs(current)) {
+      return false;
+    }
+  }
+
   if (guard['writeId'] is! String ||
       !(payload['updates'] as Map).keys.every(
         (guard['baseValues'] as Map).containsKey,

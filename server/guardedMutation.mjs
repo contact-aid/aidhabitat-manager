@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { createDatabaseValueComparator } from './nocodbScalarValues.mjs';
+import { createDatabaseValueComparator, isDefaultFormValue } from './nocodbScalarValues.mjs';
 import { validateConditionalPatch } from './nocodbConditionalWrite.mjs';
 
 export const SYNC_REVISION_FIELD = 'app_sync_revision';
@@ -35,16 +35,20 @@ export class SyncMutationError extends Error {
  * A missing baseline is unknown, never null. Derived/structured columns are
  * compared atomically. This planner alone grants no permission to write.
  */
-export function planDatabaseMutation({ fields, baseFields, observed, equals = (_key, a, b) => isDeepStrictEqual(a, b) }) {
+export function planDatabaseMutation({ fields, baseFields, observed, equals = (_key, a, b) => isDeepStrictEqual(a, b), canPromoteDefault = () => true }) {
   const patch = {};
   const conflicts = [];
   const retainedFields = [];
   for (const [key, value] of Object.entries(fields)) {
     if (!Object.hasOwn(observed, key)) conflicts.push(key);
     else if (equals(key, observed[key], value)) continue;
+    else if (Object.hasOwn(baseFields, key) && equals(key, baseFields[key], observed[key])) patch[key] = value;
+    // A real answer takes precedence over an empty/default server value,
+    // including when an old local baseline is absent or already edited.
+    else if (canPromoteDefault(key) && isDefaultFormValue(key, observed[key]) && !isDefaultFormValue(key, value)) patch[key] = value;
+    else if (isDefaultFormValue(key, value) && !isDefaultFormValue(key, observed[key])) retainedFields.push(key);
     else if (!Object.hasOwn(baseFields, key)) conflicts.push(key);
     else if (equals(key, baseFields[key], value)) retainedFields.push(key);
-    else if (equals(key, baseFields[key], observed[key])) patch[key] = value;
     else conflicts.push(key);
   }
   return { patch, conflicts, retainedFields };
@@ -56,7 +60,7 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
  */
 export function createGuardedMutation({ readRecord, writer, readColumns, preferLocal = false }) {
   return async ({ tableId, recordId, fields, baseFields, writeId, authorizeObserved,
-    normalizeObserved, normalizeBaseline }) => {
+    normalizeObserved, normalizeBaseline, canPromoteDefault }) => {
     if (!uuid.test(writeId ?? '') || typeof writeId !== 'string') {
       throw new SyncMutationError(428, 'SYNC_MUTATION_ID_REQUIRED');
     }
@@ -90,7 +94,8 @@ export function createGuardedMutation({ readRecord, writer, readColumns, preferL
       }
       if (revision === writeId) {
         const replayPlan = planDatabaseMutation({ fields: desired, baseFields: comparisonBaseline,
-          observed: comparisonObserved, equals });
+          observed: comparisonObserved, equals,
+          canPromoteDefault: key => !canPromoteDefault || canPromoteDefault(key, structuredClone(observed)) });
         if (!replayPlan.conflicts.length && !replayPlan.retainedFields.length && !Object.keys(replayPlan.patch).length) {
           return { applied: true, replay: true };
         }
@@ -105,12 +110,18 @@ export function createGuardedMutation({ readRecord, writer, readColumns, preferL
         throw new SyncMutationError(409, 'SYNC_REMOTE_VALUES_REQUIRE_REVIEW', observed,
           { conflicts: unreadable, retainedFields: [], writeId });
       }
+      const retainEnteredRemote = (key, value) =>
+        Object.hasOwn(comparisonObserved, key) && isDefaultFormValue(key, value)
+        && !isDefaultFormValue(key, comparisonObserved[key])
+        && !(Object.hasOwn(baseline, key) && equals(key, baseline[key], comparisonObserved[key]));
       const plan = preferLocal
         ? { patch: Object.fromEntries(Object.entries(desired).filter(([key, value]) =>
-            !Object.hasOwn(comparisonObserved, key) || !equals(key, comparisonObserved[key], value))),
-          conflicts: [], retainedFields: [] }
+            (!Object.hasOwn(comparisonObserved, key) || !equals(key, comparisonObserved[key], value))
+            && !retainEnteredRemote(key, value))),
+          conflicts: [], retainedFields: Object.keys(desired).filter(key => retainEnteredRemote(key, desired[key])) }
         : planDatabaseMutation({ fields: desired, baseFields: comparisonBaseline,
-          observed: comparisonObserved, equals });
+          observed: comparisonObserved, equals,
+          canPromoteDefault: key => !canPromoteDefault || canPromoteDefault(key, structuredClone(observed)) });
       if (plan.conflicts.length) {
         throw new SyncMutationError(409, 'SYNC_FIELD_CONFLICT', observed, {
           conflicts: plan.conflicts, retainedFields: plan.retainedFields, writeId,
