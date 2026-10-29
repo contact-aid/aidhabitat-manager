@@ -40,6 +40,8 @@ import 'visit_report/context_tab.dart';
 import 'visit_report/mesures_tab.dart';
 import 'visit_report/accessibility_tab.dart';
 import '../services/sanitary_notes.dart';
+import '../services/context_notes.dart';
+import 'visit_report/context_notes_panel.dart';
 import 'visit_report/sanitary_notes_panel.dart';
 import 'visit_report/bathroom_tab.dart';
 import 'visit_report/wc_tab.dart';
@@ -236,10 +238,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// clés possibles, écriture sur la nouvelle).
   static const String _kSharedSanitairesNotesTabKey = sanitaryTextTabKey;
 
-  /// TabKey unique pour la note partagée entre les 4 sous-sections de
-  /// l'onglet « Bénéficiaire » (Profil, Foyer, Santé, Admin). Même pattern
-  /// que `Accessibilité-Notes` : une seule note écrite + dessin, conservée
-  /// quand l'ergo change de sous-section.
+  /// Environment prose lives alongside the beneficiary forms. Keep its
+  /// historical identity so existing project descriptions remain available.
   static const String _kSharedBeneficiaireNotesTabKey = 'Bénéficiaire-Notes';
 
   /// TabKey unique pour la note partagée entre les 4 sous-sections de
@@ -297,8 +297,8 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   ///
   ///   tabKey                       → champ PDF
   ///   ──────────────────────────────────────────────────────────
-  ///   Contexte de vie-Médical      → Environnement (page 4)
-  ///   Contexte de vie-Autonomie    → Habitudes de vie (page 4)
+  ///   Bénéficiaire-Notes           → Environnement (page 4)
+  ///   Contexte de vie-Habitudes    → Habitudes de vie (page 4)
   ///   Accessibilité-Notes          → Observations sur l'accessibilité
   ///                                  (page 5, champ `Observations1`)
   ///   Sanitaires-Notes             → Observations sur les équipements
@@ -314,8 +314,10 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       return "Observations sur l'accessibilité";
     }
     switch (tabKey) {
-      case 'Contexte de vie-Médical':
+      case environmentTextTabKey:
         return 'Environnement';
+      case medicalDrawingTabKey:
+      case habitsTextTabKey:
       case 'Contexte de vie-Autonomie':
         return 'Habitudes de vie';
       case 'Préconisations-Projet':
@@ -1040,6 +1042,23 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// éviter le doublon avec les pills Profil/Foyer/Santé/Admin dans le
   /// formulaire lui-même.
   Widget _buildNotesPanel(String activeTab, List<String> subsections) {
+    if (activeTab == 'Contexte de vie') {
+      final liveKey = '${_dossier.patient.id}::$habitsTextTabKey';
+      return ContextNotesPanel(
+        dossierId: _dossier.id,
+        patientId: _dossier.patient.id,
+        isMedical: (_activeSubsectionByTab[activeTab] ?? 0) == 0,
+        liveText: _liveText[liveKey],
+        externalRefreshToken: _notesBulkPullToken,
+        onTextDraft: (draft) =>
+            _pushDraftToOpenWindow(habitsTextTabKey, draft.text),
+        onExpandText: () => _openNoteInSeparateWindow(habitsTextTabKey),
+        medicalFlags: _currentMedicalFlagNumbers,
+        medicalFlagsScopeKey: 'occupant_$_medicalOccupantIndex',
+        medicalFlagsUserEditRevision: _medicalFlagsUserEditRevision,
+        onMedicalFlagsChanged: _handleMedicalFlagsFromNotes,
+      );
+    }
     if (activeTab == 'Salle de bain' || activeTab == 'WC') {
       final liveKey = '${_dossier.patient.id}::$sanitaryTextTabKey';
       return SanitaryNotesPanel(
@@ -1104,6 +1123,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   final liveKey = '${_dossier.patient.id}::$tabKey';
                   final isMedical = tabKey == 'Contexte de vie-Médical';
                   final hasSharedWrittenText =
+                      tabKey == environmentTextTabKey ||
                       isMedical ||
                       tabKey == 'Contexte de vie-Autonomie' ||
                       tabKey == _kSharedAccessibiliteNotesTabKey;
@@ -1119,7 +1139,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                   final bannerTitle =
                       activeTab == 'Bénéficiaire' &&
                           tabKey == _kSharedBeneficiaireNotesTabKey
-                      ? 'Bénéficiaire'
+                      ? 'Environnement'
                       : (pdfPlaceholder ?? section);
                   return _NotesPanelLayer(
                     isActive: isActive,
@@ -1134,6 +1154,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                           child: NotesWidget(
                             key: ValueKey(liveKey),
                             patientId: _dossier.patient.id,
+                            dossierId: tabKey == environmentTextTabKey
+                                ? _dossier.id
+                                : null,
                             tabKey: tabKey,
                             title: section,
                             placeholder: '',
@@ -2389,23 +2412,21 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   }
 
   Future<void> _checkNotesEcrites(List<_MissingField> missing) async {
-    // 1) Contexte de vie — Médical (subSection 0) → PDF Environnement
-    if (!await _hasNoteText('Contexte de vie-Médical')) {
+    if (!await _hasNoteText(environmentTextTabKey)) {
       missing.add(
         _MissingField(
-          label: 'Note Contexte de vie — Médical',
-          tabIndex: _tabs.indexOf('Contexte de vie'),
+          label: 'Note Environnement',
+          tabIndex: _tabs.indexOf('Bénéficiaire'),
           subSectionIndex: 0,
         ),
       );
     }
-    // 2) Contexte de vie — Autonomie (subSection 1) → PDF Habitudes
-    if (!await _hasNoteText('Contexte de vie-Autonomie')) {
+    if (!await _hasNoteText(habitsTextTabKey)) {
       missing.add(
         _MissingField(
-          label: 'Note Contexte de vie — Autonomie',
+          label: 'Note Habitudes de vie',
           tabIndex: _tabs.indexOf('Contexte de vie'),
-          subSectionIndex: 1,
+          subSectionIndex: 0,
         ),
       );
     }
@@ -2906,9 +2927,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
         // Plans déplacé juste après WC (demande utilisateur 2026-05-04) —
         // doit rester aligné avec l'ordre déclaré dans `_tabs`.
         _wrapTabWithNotes('Plans', PlansTab(dossier: _dossier)),
-        // Onglet Photos — pleine largeur (pas de notes latérales).
+        // Onglet Photos : pleine largeur, sans panneau blanc autour des cartes.
         // Voir `lib/screens/visit_report/photos_tab.dart`.
-        _wrapTabWithNotes('Photos', PhotosTab(dossier: _dossier)),
+        PhotosTab(dossier: _dossier),
         // Onglet Résumé — dessin pleine page par défaut, puis switch
         // vers les notes écrites Projet / Préconisations. Le canvas
         // reste agrandissable dans une 2e fenêtre browser (mode
@@ -2940,15 +2961,12 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 _pushDraftToOpenWindow(tabKey, text),
           ),
         ),
-        _wrapTabWithNotes(
-          'Préconisations',
-          RecommendationsTab(
-            dossier: _dossier,
-            repository: _repository,
-            controller: _recommendationsController,
-            externalRefreshToken:
-                _dossierDetailPullToken + widget.conflictRefreshToken,
-          ),
+        RecommendationsTab(
+          dossier: _dossier,
+          repository: _repository,
+          controller: _recommendationsController,
+          externalRefreshToken:
+              _dossierDetailPullToken + widget.conflictRefreshToken,
         ),
         if (VisitAssistantConfig.enabled)
           VisitTranscriptTab(dossierId: _dossier.id),

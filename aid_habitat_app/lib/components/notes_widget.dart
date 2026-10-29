@@ -13,6 +13,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/types.dart';
 import '../services/data_service.dart';
+import '../services/context_notes.dart';
 import '../services/ai_rewrite_service.dart';
 import '../services/pencil_interaction_service.dart';
 import '../services/sync_engine.dart';
@@ -228,6 +229,7 @@ class NotesWidget extends StatefulWidget {
     this.stackedTextFraction,
     this.attachedToTitleBanner = false,
     this.borderlessTextEditor = false,
+    this.borderlessCanvas = false,
     this.focusOnTapAnywhere = true,
     this.canvasSlideIndex,
     this.showCanvasTopDivider = true,
@@ -419,6 +421,9 @@ class NotesWidget extends StatefulWidget {
   /// parent fournit déjà le cadre visuel complet autour de la note.
   final bool borderlessTextEditor;
 
+  /// The parent supplies the continuous frame around the header and canvas.
+  final bool borderlessCanvas;
+
   /// Rend toute la surface de l'éditeur texte focalisable, y compris ses
   /// marges vides. Utile pour les grandes pages de notes écrites où
   /// l'utilisateur doit pouvoir commencer à saisir depuis n'importe où.
@@ -529,7 +534,8 @@ class _NotesWidgetState extends State<NotesWidget> {
       widget.sharedText &&
       (widget.tabKey == 'notes_rapides' ||
           widget.tabKey == 'Accessibilité-Notes' ||
-          widget.tabKey == 'Sanitaires-Notes');
+          widget.tabKey == 'Sanitaires-Notes' ||
+          isContextTextTab(widget.tabKey));
   bool _sharedTextInitialized = false;
   // Flags médicaux par page (1 = Pathologie, 2 = Suivi, 3 = Sensoriel).
   // Sérialisés dans `drawing_json['medicalFlags']`. Utilisé uniquement
@@ -2809,8 +2815,12 @@ class _NotesWidgetState extends State<NotesWidget> {
       decoration: BoxDecoration(
         color: Colors.white,
         // Charte "Équilibrée" — 16 px (idem carte texte).
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kStackedBorder, width: 1),
+        borderRadius: widget.borderlessCanvas
+            ? BorderRadius.zero
+            : BorderRadius.circular(16),
+        border: widget.borderlessCanvas
+            ? null
+            : Border.all(color: _kStackedBorder, width: 1),
       ),
       // Clip.antiAlias sur le conteneur externe → le contenu (fond du
       // canvas, strokes, overlays) est rogné au rayon 16 px pour que
@@ -4271,24 +4281,9 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
         barrierDismissible: false,
         builder: (dialogContext) => AiRewritePreviewDialog(
           originalText: originalText,
-          phase: () => AiRewriteService.instance.preparationPhase,
-          onCancel: AiRewriteService.instance.cancelPreparation,
+          phase: () => 'Reformulation en cours…',
+          onCancel: () {},
           generate: (previewContext) async {
-            if (await AiRewriteService.instance.needsPreparation()) {
-              if (!previewContext.mounted) {
-                throw Exception('Reformulation annulée.');
-              }
-              final prepared = await showSoftDialog<bool>(
-                context: previewContext,
-                barrierDismissible: false,
-                builder: (_) => const _LocalAiSetupDialog(),
-              );
-              if (prepared != true) {
-                throw Exception(
-                  'Installation annulée. La note originale est conservée.',
-                );
-              }
-            }
             if (!previewContext.mounted) {
               throw Exception('Reformulation annulée.');
             }
@@ -4350,102 +4345,6 @@ class _AiRewriteButtonState extends State<_AiRewriteButton>
       ),
     );
   }
-}
-
-class _LocalAiSetupDialog extends StatefulWidget {
-  const _LocalAiSetupDialog();
-
-  @override
-  State<_LocalAiSetupDialog> createState() => _LocalAiSetupDialogState();
-}
-
-class _LocalAiSetupDialogState extends State<_LocalAiSetupDialog> {
-  bool _busy = false;
-  double _progress = 0;
-  String _phase = 'Démarrage du téléchargement…';
-  String? _error;
-  Timer? _timer;
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    if (_busy) AiRewriteService.instance.cancelPreparation();
-    super.dispose();
-  }
-
-  Future<void> _prepare() async {
-    if (_busy) return;
-    setState(() {
-      _busy = true;
-      _progress = 0;
-      _error = null;
-    });
-    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (mounted) {
-        setState(() {
-          _progress = AiRewriteService.instance.preparationProgress;
-          _phase = AiRewriteService.instance.preparationPhase;
-        });
-      }
-    });
-    try {
-      await AiRewriteService.instance.prepareLocalModel();
-      if (mounted) {
-        _busy = false;
-        Navigator.pop(context, true);
-      }
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
-        });
-      }
-    } finally {
-      _timer?.cancel();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Reformulation locale'),
-    content: SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Télécharger le modèle dans ce navigateur (environ 1 Go). '
-            'Prévoyez au moins 1,3 Go libre. Les notes ne sont pas envoyées à un serveur. '
-            'Le téléchargement provient de Hugging Face.',
-          ),
-          if (_busy) ...[
-            const SizedBox(height: 16),
-            LinearProgressIndicator(
-              value: _progress > 0 && _progress < 1 ? _progress : null,
-            ),
-            const SizedBox(height: 8),
-            Text(_phase.isEmpty ? 'Préparation du modèle…' : _phase),
-          ],
-          if (_error != null) ...[const SizedBox(height: 12), Text(_error!)],
-        ],
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () {
-          AiRewriteService.instance.cancelPreparation();
-          Navigator.pop(context, false);
-        },
-        child: const Text('Annuler'),
-      ),
-      FilledButton.icon(
-        onPressed: _busy ? null : _prepare,
-        icon: const Icon(LucideIcons.download, size: 16),
-        label: const Text('Télécharger'),
-      ),
-    ],
-  );
 }
 
 class _FloatingTextModal extends StatefulWidget {

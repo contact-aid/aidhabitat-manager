@@ -9,6 +9,7 @@ import '../models/visit_report_categories.dart';
 import 'local_database.dart';
 import 'independent_notes.dart';
 import 'sanitary_notes.dart';
+import 'context_notes.dart';
 import 'offline_vault.dart';
 import 'sync_engine.dart';
 import 'sync_mutation.dart';
@@ -266,6 +267,20 @@ class NoteRepository {
       ],
       limit: 1,
     );
+    if (pageNumber == 0 && isContextTextTab(tabKey)) {
+      final raw = rows.isEmpty
+          ? null
+          : await OfflineVault.instance.openNullableString(
+              rows.first['drawing_json'] as String?,
+            );
+      return _contextTextDrawing(
+        db,
+        patientId: patientId,
+        tabKey: tabKey,
+        dossierId: dossierId,
+        raw: raw,
+      );
+    }
     if (rows.isEmpty) {
       if (!isSanitaryDrawingTab(tabKey)) return null;
       return sanitaryLegacyDrawing(
@@ -280,6 +295,46 @@ class NoteRepository {
     return OfflineVault.instance.openNullableString(
       rows.first['drawing_json'] as String?,
     );
+  }
+
+  Future<String?> _contextTextDrawing(
+    DatabaseExecutor db, {
+    required String patientId,
+    required String tabKey,
+    String? dossierId,
+    String? raw,
+  }) async {
+    final rows = await db.query(
+      'note_pages',
+      where:
+          'patient_local_id = ? AND tab_key IN (?, ?, ?)'
+          '${dossierId == null ? '' : ' AND (dossier_local_id = ? OR dossier_local_id IS NULL)'}',
+      whereArgs: [
+        patientId,
+        environmentTextTabKey,
+        medicalDrawingTabKey,
+        autonomyDrawingTabKey,
+        if (dossierId != null) dossierId,
+      ],
+    );
+    final pages = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      pages.add({
+        'tabKey': row['tab_key'],
+        'pageNumber': row['page_number'],
+        'drawingJson': await OfflineVault.instance.openNullableString(
+          row['drawing_json'] as String?,
+        ),
+        'textContent': await OfflineVault.instance.openNullableString(
+          row['text_content'] as String?,
+        ),
+      });
+    }
+    try {
+      return projectContextText(tabKey, raw, pages);
+    } catch (_) {
+      return raw;
+    } // Never reinterpret an unreadable historical drawing.
   }
 
   /// Charge les bytes PNG des plans VAD (onglet Plans, phase non-null)
@@ -443,9 +498,18 @@ class NoteRepository {
         if (existingDossier != null && existingDossier != dossierId) {
           throw StateError('La note appartient à un autre dossier.');
         }
-        final drawing = storedDrawing == null || storedDrawing.isEmpty
+        final insertionBase = pageNumber == 0 && isContextTextTab(tabKey)
+            ? await _contextTextDrawing(
+                txn,
+                patientId: patientId,
+                tabKey: tabKey,
+                dossierId: dossierId,
+                raw: storedDrawing,
+              )
+            : storedDrawing;
+        final drawing = insertionBase == null || insertionBase.isEmpty
             ? <String, dynamic>{'version': 1, 'text': '', 'strokes': []}
-            : jsonDecode(storedDrawing) as Map<String, dynamic>;
+            : jsonDecode(insertionBase) as Map<String, dynamic>;
         if (visitAiInsertions(drawing).containsKey(receipt)) {
           // The note may already have arrived through normal cross-device
           // synchronization before this device created its local receipt.

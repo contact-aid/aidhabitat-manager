@@ -88,7 +88,7 @@ void main() {
         expect(find.text('${surname.toUpperCase()} $second'), findsOneWidget);
         expect(
           find.text(
-            fullNames ? 'Daniel et Heike Lecuyer' : 'René et Madeleine Exemple',
+            fullNames ? 'LECUYER Daniel et Heike' : 'EXEMPLE René et Madeleine',
           ),
           findsOneWidget,
         );

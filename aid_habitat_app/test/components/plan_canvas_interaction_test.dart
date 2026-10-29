@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:aid_habitat_app/components/plan_canvas.dart';
 import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/services/data_service.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -183,8 +184,17 @@ void main() {
         find.byType(InteractiveViewer),
       );
       final canvas = viewport.child! as SizedBox;
-      expect(canvas.width, greaterThanOrEqualTo(2700));
-      expect(canvas.height, greaterThanOrEqualTo(2000));
+      if (kIsWeb) {
+        final visible = MatrixUtils.transformRect(
+          viewport.transformationController!.value,
+          const Rect.fromLTRB(2500, 1800, 2600, 1900),
+        );
+        expect(visible.left, greaterThanOrEqualTo(0));
+        expect(visible.right, lessThanOrEqualTo(canvas.width!));
+      } else {
+        expect(canvas.width, greaterThanOrEqualTo(2700));
+        expect(canvas.height, greaterThanOrEqualTo(2000));
+      }
       expect(service.writes, 0);
       await tester.dragFrom(const Offset(400, 300), const Offset(70, 40));
       await tester.pump(const Duration(seconds: 1));
@@ -301,7 +311,7 @@ void main() {
       await tester.tapAt(const Offset(750, 390));
       await tester.pump();
       expect(find.byTooltip('Supprimer'), findsOneWidget);
-      final qaDir = Platform.environment['APP_ERGO_UI_QA_DIR'];
+      final qaDir = kIsWeb ? null : Platform.environment['APP_ERGO_UI_QA_DIR'];
       if (qaDir != null) {
         await tester.pump();
         final boundary = tester.renderObject<RenderRepaintBoundary>(
@@ -343,6 +353,9 @@ void main() {
     final transform = viewport.transformationController!;
     final canvas = viewport.child! as SizedBox;
     void expectGridCoversViewport() {
+      // Web grid coverage far beyond the sheet is verified by pixel assertions
+      // in plan_web_viewport_test; native still constrains its finite sheet.
+      if (kIsWeb) return;
       final scale = transform.value.getMaxScaleOnAxis();
       final offset = transform.value.getTranslation();
       expect(offset.x, lessThanOrEqualTo(0.1));
@@ -351,17 +364,22 @@ void main() {
       expect(offset.y + canvas.height! * scale, greaterThanOrEqualTo(799.9));
     }
 
-    expect(viewport.boundaryMargin, EdgeInsets.zero);
+    expect(
+      viewport.boundaryMargin,
+      kIsWeb ? const EdgeInsets.all(double.infinity) : EdgeInsets.zero,
+    );
     expectGridCoversViewport();
     final initialOffset = transform.value.getTranslation();
-    expect(
-      -initialOffset.x,
-      closeTo(canvas.width! - 1200 + initialOffset.x, 0.1),
-    );
-    expect(
-      -initialOffset.y,
-      closeTo(canvas.height! - 800 + initialOffset.y, 0.1),
-    );
+    if (!kIsWeb) {
+      expect(
+        -initialOffset.x,
+        closeTo(canvas.width! - 1200 + initialOffset.x, 0.1),
+      );
+      expect(
+        -initialOffset.y,
+        closeTo(canvas.height! - 800 + initialOffset.y, 0.1),
+      );
+    }
 
     await tester.tap(find.byIcon(LucideIcons.hand));
     await tester.pump();

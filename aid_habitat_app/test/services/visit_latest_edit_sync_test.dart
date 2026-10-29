@@ -108,7 +108,7 @@ void main() {
                 HousingVisitHandoff.protocol,
               );
               patches++;
-              if (patches == 1)
+              if (patches == 1) {
                 return http.Response(
                   jsonEncode({
                     'error': errorCode,
@@ -117,6 +117,7 @@ void main() {
                   }),
                   409,
                 );
+              }
               expect(body['concurrency']['baseValues']['surface'], 100);
               expect(body['surface'], 90);
               return http.Response(

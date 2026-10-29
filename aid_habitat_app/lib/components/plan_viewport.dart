@@ -25,8 +25,10 @@ Matrix4 fitPlanViewport({
   final scale = math.min(
     4.0,
     math.min(
-      (viewport.width - horizontal * 2) / math.max(1.0, contentBounds.width),
-      (viewport.height - vertical * 2) / math.max(1.0, contentBounds.height),
+      math.min(viewport.width * .6, viewport.width - horizontal * 2) /
+          math.max(1.0, contentBounds.width),
+      math.min(viewport.height * .6, viewport.height - vertical * 2) /
+          math.max(1.0, contentBounds.height),
     ),
   );
   return Matrix4.identity()

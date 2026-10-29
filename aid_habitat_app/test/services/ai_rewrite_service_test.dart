@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:aid_habitat_app/services/ai_rewrite_service.dart';
 import 'package:aid_habitat_app/services/ai_rewrite_context.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -11,27 +10,17 @@ import 'package:http/testing.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const nativeChannel = MethodChannel(
-    'aidhabitat/apple_intelligence_rewrite_test',
-  );
-
-  setUp(() {
-    debugDefaultTargetPlatformOverride = null;
-  });
-
-  tearDown(() async {
-    debugDefaultTargetPlatformOverride = null;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, null);
-  });
-
   test(
     'note tabs select report context without sending an arbitrary heading',
     () {
-      expect(aiRewriteContextForTab('Bénéficiaire-Notes'), 'beneficiary');
+      expect(aiRewriteContextForTab('Bénéficiaire-Notes'), 'living_context');
       expect(aiRewriteContextForTab('Contexte de vie-Médical'), 'medical');
       expect(aiRewriteContextForTab('Contexte de vie-Autonomie'), 'autonomy');
       expect(aiRewriteContextForTab('Contexte de vie'), 'living_context');
+      expect(
+        aiRewriteContextForTab('Contexte de vie-Habitudes'),
+        'living_context',
+      );
       expect(aiRewriteContextForTab('Autre titre'), 'general');
     },
   );
@@ -59,7 +48,7 @@ void main() {
     );
   });
 
-  test('server inference requires opt-in and shares status probes', () async {
+  test('OpenRouter availability shares authenticated status probes', () async {
     var requests = 0;
     final service = AiRewriteService(
       client: MockClient((request) async {
@@ -67,7 +56,11 @@ void main() {
         expect(request.headers['X-App-Session'], 'session-test');
         return http.Response(
           jsonEncode({
-            'data': {'ready': true, 'webEnabled': true},
+            'data': {
+              'ready': true,
+              'webEnabled': true,
+              'provider': 'openrouter',
+            },
           }),
           200,
         );
@@ -127,6 +120,7 @@ void main() {
             'data': {
               'ready': request.headers['X-App-Session'] == 'first',
               'webEnabled': true,
+              'provider': 'openrouter',
             },
           }),
           200,
@@ -220,220 +214,68 @@ void main() {
     );
   });
 
-  test('hides on-device rewriting outside iOS', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    final service = AiRewriteService(nativeChannel: nativeChannel);
-
-    expect(await service.isAvailable(), isFalse);
-  });
-
-  test('iOS hides rewriting when the API model is unavailable', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (_) async => false);
-    final service = AiRewriteService(
-      nativeChannel: nativeChannel,
-      client: MockClient((request) async {
-        expect(request.url.toString(), 'https://example.org/api/ai/status');
-        expect(request.headers['X-App-Session'], 'test');
-        return http.Response(
-          jsonEncode({
-            'success': true,
-            'data': {'ready': false},
-          }),
-          200,
-        );
-      }),
-    );
-
-    expect(
-      await service.isAvailable(
-        apiBaseUrl: 'https://example.org',
-        sessionToken: 'test',
-      ),
-      isFalse,
-    );
-  });
-
-  test('iOS shows rewriting when the API model is ready', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (_) async => false);
-    final service = AiRewriteService(
-      nativeChannel: nativeChannel,
-      client: MockClient(
-        (_) async => http.Response(
-          jsonEncode({
-            'success': true,
-            'data': {'ready': true},
-          }),
-          200,
-        ),
-      ),
-    );
-
-    expect(
-      await service.isAvailable(
-        apiBaseUrl: 'https://example.org',
-        sessionToken: 'test',
-      ),
-      isTrue,
-    );
-  });
-
-  test('rewrites on device and restores protected note data', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    late String protectedText;
-
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (call) async {
-          if (call.method == 'isAvailable') return true;
-          if (call.method == 'rewrite') {
-            final arguments = call.arguments as Map<Object?, Object?>;
-            protectedText = arguments['text']! as String;
-            return protectedText.replaceFirst(
-              'a du mal à entrer',
-              'rencontre des difficultés pour entrer',
+  for (final platform in [
+    TargetPlatform.iOS,
+    TargetPlatform.macOS,
+    TargetPlatform.android,
+  ]) {
+    test(
+      '$platform always uses OpenRouter through the authenticated server',
+      () async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        var calls = 0;
+        final service = AiRewriteService(
+          client: MockClient((request) async {
+            calls++;
+            if (request.method == 'GET') {
+              return http.Response(
+                jsonEncode({
+                  'data': {'ready': true, 'provider': 'openrouter'},
+                }),
+                200,
+              );
+            }
+            expect(request.url.path, '/api/ai/rewrite');
+            return http.Response(
+              jsonEncode({
+                'data': {'text': 'Proposition modifiable.'},
+              }),
+              200,
             );
-          }
-          return null;
-        });
-
-    final service = AiRewriteService(nativeChannel: nativeChannel);
-    final result = await service.rewrite(
-      text:
-          'Mme Jeanne Dupont a du mal à entrer dans la douche de 72 cm. '
-          'Elle est classée GIR 3.',
+          }),
+        );
+        expect(
+          await service.isAvailable(
+            apiBaseUrl: 'https://private.test',
+            sessionToken: 'synthetic',
+          ),
+          true,
+        );
+        expect(
+          await service.rewrite(
+            text: 'Note fictive.',
+            apiBaseUrl: 'https://private.test',
+            sessionToken: 'synthetic',
+          ),
+          'Proposition modifiable.',
+        );
+        expect(calls, 2);
+      },
     );
+  }
 
-    expect(protectedText, isNot(contains('Mme Jeanne Dupont')));
-    expect(protectedText, isNot(contains('72 cm')));
-    expect(protectedText, isNot(contains('GIR 3')));
-    expect(protectedText, contains('AIDHABITAT_DATA_000'));
-    expect(
-      result,
-      'Mme Jeanne Dupont rencontre des difficultés pour entrer dans la '
-      'douche de 72 cm. Elle est classée GIR 3.',
-    );
-  });
-
-  test('rejects an on-device response that drops protected data', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (call) async {
-          if (call.method == 'isAvailable') return true;
-          if (call.method == 'rewrite') {
-            return 'La personne rencontre des difficultés.';
-          }
-          return null;
-        });
-
-    final service = AiRewriteService(nativeChannel: nativeChannel);
-
-    expect(
-      () => service.rewrite(
-        text: 'Mme Jeanne Dupont rencontre des difficultés depuis 2 ans.',
-      ),
-      throwsA(
-        isA<Exception>().having(
-          (error) => error.toString(),
-          'message',
-          contains("n'était pas assez fidèle"),
-        ),
-      ),
-    );
-  });
-
-  test(
-    'iOS uses the authenticated API when the Apple model is unavailable',
-    () async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      var requests = 0;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(nativeChannel, (_) async => false);
-      final service = AiRewriteService(
-        nativeChannel: nativeChannel,
-        client: MockClient((request) async {
-          requests++;
-          expect(request.url.toString(), 'https://example.org/api/ai/rewrite');
-          expect(request.headers['X-App-Session'], 'test');
-          return http.Response(
-            jsonEncode({
-              'data': {'text': 'La note est reformulée.'},
-            }),
-            200,
-          );
-        }),
-      );
-      expect(
-        await service.rewrite(
-          text: 'Une note privée.',
-          apiBaseUrl: 'https://example.org',
-          sessionToken: 'test',
-        ),
-        'La note est reformulée.',
-      );
-      expect(requests, 1);
-    },
-  );
-
-  test('iOS keeps Apple processing when it is available', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    var requests = 0;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (call) async {
-          if (call.method == 'isAvailable') return true;
-          return (call.arguments as Map)['text'] as String;
-        });
+  test('rejects invalid note lengths before contacting the server', () async {
+    var calls = 0;
     final service = AiRewriteService(
-      nativeChannel: nativeChannel,
       client: MockClient((_) async {
-        requests++;
+        calls++;
         return http.Response('{}', 200);
       }),
     );
-    expect(
-      await service.rewrite(
-        text: 'Le seuil mesure 15 cm.',
-        apiBaseUrl: 'https://example.org',
-        sessionToken: 'test',
-      ),
-      'Le seuil mesure 15 cm.',
-    );
-    expect(requests, 0);
-  });
-
-  test('rejects duplicated protected facts', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (call) async {
-          if (call.method == 'isAvailable') return true;
-          final text = (call.arguments as Map)['text'] as String;
-          return '$text $text';
-        });
-    await expectLater(
-      AiRewriteService(
-        nativeChannel: nativeChannel,
-      ).rewrite(text: 'Le seuil mesure 15 cm.'),
-      throwsException,
-    );
-  });
-  test('rejects a protected identifier with an appended digit', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(nativeChannel, (call) async {
-          if (call.method == 'isAvailable') return true;
-          return ((call.arguments as Map)['text'] as String).replaceAll(
-            'AIDHABITAT_DATA_000',
-            'AIDHABITAT_DATA_0001',
-          );
-        });
-    await expectLater(
-      AiRewriteService(
-        nativeChannel: nativeChannel,
-      ).rewrite(text: 'Le seuil mesure 15 cm.'),
-      throwsException,
-    );
+    for (final text in ['', 'ab', 'a' * 8001]) {
+      expect(() => service.rewrite(text: text), throwsException);
+    }
+    expect(calls, 0);
   });
 }

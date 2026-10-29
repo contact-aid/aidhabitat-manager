@@ -782,39 +782,30 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (_pendingSyncCount > 0 && (_lastSyncError?.isNotEmpty ?? false)) {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         color: needsReview ? const Color(0xFF946200) : const Color(0xFFDC2626),
         child: Row(
           children: [
             const Icon(Icons.error_outline, size: 18, color: Colors.white),
             const SizedBox(width: 10),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    needsReview
-                        ? 'Des informations sont à vérifier'
-                        : 'Synchronisation en attente',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
+              child: Tooltip(
+                message: needsReview
+                    ? 'Choisissez les versions à garder. Vos saisies sont conservées.'
+                    : (_lastSyncError ?? ''),
+                child: Text(
+                  needsReview
+                      ? 'Des informations sont à vérifier'
+                      : 'Synchronisation en attente',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
-                  const SizedBox(height: 2),
-                  SelectableText(
-                    needsReview
-                        ? 'Choisissez les versions à garder. Vos saisies sont conservées.'
-                        : (_lastSyncError ?? ''),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w400,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
             const SizedBox(width: 12),
@@ -822,6 +813,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               onPressed: _showFailingOpDetails,
               style: TextButton.styleFrom(
                 foregroundColor: Colors.white,
+                minimumSize: const Size(0, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
                   vertical: 2,
@@ -833,6 +826,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               onPressed: _retrySyncOrReview,
               style: TextButton.styleFrom(
                 foregroundColor: Colors.white,
+                minimumSize: const Size(0, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
                   vertical: 2,

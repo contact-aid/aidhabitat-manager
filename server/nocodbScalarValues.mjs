@@ -57,6 +57,10 @@ function sameRoomBreakdown(a, b) {
     const right = JSON.parse(b);
     if (!left || !right || Array.isArray(left) || Array.isArray(right)
         || typeof left !== 'object' || typeof right !== 'object') return false;
+    // Modern room lists include the nested _roomIds object. A read/remap can
+    // reorder object keys without changing any room or identity. Compare the
+    // parsed values before the legacy label-only, order-insensitive fallback.
+    if (isDeepStrictEqual(left, right)) return true;
     if (!isDeepStrictEqual(Object.keys(left).sort(), Object.keys(right).sort())) return false;
     return Object.keys(left).every((level) => Array.isArray(left[level]) && Array.isArray(right[level])
       && left[level].every((room) => typeof room === 'string')

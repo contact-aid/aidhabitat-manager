@@ -1,5 +1,6 @@
 String aiRewriteContextForTab(String tabKey) {
   final key = tabKey.toLowerCase();
+  if (key == 'bénéficiaire-notes') return 'living_context';
   if (key.contains('médical') || key.contains('medical')) {
     return 'medical';
   }

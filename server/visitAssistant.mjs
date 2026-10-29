@@ -4,8 +4,8 @@ import crypto from 'node:crypto';
 
 export const VISIT_SECTIONS = Object.freeze({
   beneficiary: 'Bénéficiaire-Notes',
-  environment: 'Contexte de vie-Médical',
-  autonomy: 'Contexte de vie-Autonomie',
+  environment: 'Bénéficiaire-Notes',
+  autonomy: 'Contexte de vie-Habitudes',
   access: 'Accessibilité-Notes',
   sanitary: 'Sanitaires-Notes',
   project: 'Préconisations-Projet',
@@ -135,10 +135,10 @@ export function createVisitProvider({ env = process.env, fetchImpl = fetch } = {
         const value = result.sections[key];
         if (typeof value !== 'string' || value.length > 20000) throw visitError(502, 'Rubrique IA invalide.');
         const normalized = text => String(text).normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
-        const previous = (job.context.existingText?.[tabKey] ?? []).map(normalized);
+        const previous = [...(job.context.existingText?.[tabKey] ?? []), sections[tabKey]].filter(Boolean).map(normalized);
         const addition = value.split(/\n\s*\n/).filter(paragraph =>
           paragraph.trim() && !previous.some(existing => existing.includes(normalized(paragraph)))).join('\n\n').trim();
-        if (addition) sections[tabKey] = addition;
+        if (addition) sections[tabKey] = [sections[tabKey], addition].filter(Boolean).join('\n\n');
       }
       return { sections, warnings: [...new Set([...(job.facts?.warnings ?? []),
         ...(Array.isArray(result.warnings) ? result.warnings.filter(x => typeof x === 'string') : [])])].slice(0, 30) };

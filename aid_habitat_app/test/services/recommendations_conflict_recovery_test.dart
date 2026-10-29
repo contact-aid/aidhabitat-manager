@@ -112,8 +112,8 @@ void main() {
       expect(find.textContaining('Local'), findsOneWidget);
       expect(find.textContaining('Brouillon'), findsOneWidget);
       expect(find.textContaining('wiki-1'), findsNothing);
-      await tester.ensureVisible(find.text('Conserver mes changements'));
-      await tester.tap(find.text('Conserver mes changements'));
+      await tester.ensureVisible(find.text('Garder ma version'));
+      await tester.tap(find.text('Garder ma version'));
       await tester.pumpAndSettle();
       expect(resolved, isTrue);
       expect(choices, [true]);

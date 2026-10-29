@@ -265,3 +265,25 @@ test('first rooms edit on a null legacy column is conditional and genuine remote
   await assert.rejects(other.apply({ ...other.mutation, fields, baseFields }), error => error.status === 409);
   assert.equal(other.patches(), 0);
 });
+
+test('an iPad room edit and scalar edit apply together after a room identity JSON round trip', async () => {
+  const f = fixture();
+  const stored = { rdc: ['WC'], basement: [], _roomIds: { rdc: ['wc-1'] } };
+  f.row.rooms_breakdown_json = JSON.stringify(stored);
+  const baseline = JSON.stringify({ basement: [], rdc: ['WC'], _roomIds: { rdc: ['wc-1'] } });
+  const changed = JSON.stringify({ basement: [], rdc: ['WC', 'Cuisine'], _roomIds: { rdc: ['wc-1', 'kitchen-1'] } });
+  await f.apply({ ...f.mutation, fields: { first: 'ipad information', rooms_breakdown_json: changed },
+    baseFields: { first: 'old', rooms_breakdown_json: baseline } });
+  assert.equal(f.row.first, 'ipad information');
+  assert.equal(f.row.rooms_breakdown_json, changed);
+  assert.equal(f.patches(), 1);
+  assert.equal((await f.apply({ ...f.mutation, fields: { first: 'ipad information', rooms_breakdown_json: changed },
+    baseFields: { first: 'old', rooms_breakdown_json: baseline } })).replay, true);
+
+  const competing = fixture();
+  competing.row.rooms_breakdown_json = JSON.stringify({ ...stored, rdc: ['Chambre'] });
+  await assert.rejects(competing.apply({ ...competing.mutation,
+    fields: { first: 'ipad information', rooms_breakdown_json: changed },
+    baseFields: { first: 'old', rooms_breakdown_json: baseline } }), e => e.code === 'SYNC_FIELD_CONFLICT');
+  assert.equal(competing.patches(), 0);
+});

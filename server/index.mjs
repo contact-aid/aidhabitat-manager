@@ -6370,23 +6370,15 @@ const fetchPlanNotePagesForPatient = async (patientId, dossierId) => {
   }
 };
 
-/**
- * Liste les notes de la section « Contexte de vie » (sous-onglets
- * Médical + Autonomie) pour ce patient/dossier. Le générateur de
- * rapport utilise leur `textContent` pour remplir « Environnement »
- * (Médical) et « Habitudes de vie » (Autonomie) du PDF — on
- * privilégie la note manuscrite/saisie de l'ergo plutôt que les
- * données structurées du formulaire (demande utilisateur, plus
- * proche du libellé attendu dans le rapport).
- *
- * Le tabKey côté Flutter est `"Contexte de vie-Médical"` ou
- * `"Contexte de vie-Autonomie"` (cf. `notesWidget` qui concatène
- * `$tab-$section`). On retourne donc toutes les notes commençant par
- * `Contexte de vie` ; le caller filtre ensuite par sous-section.
+/** Written report sources, including historical prose for read-only migration.
+ * Environment reuses beneficiary notes; medical/autonomy handwriting keeps its
+ * own identity. Canonical text wins after the first edit, including a clear.
  */
 const fetchContexteNotePagesForPatient = async (patientId, dossierId) => {
   try {
     const allTabs = await Promise.all([
+      mobileSyncStore.listNotePagesByPatient(patientId, { tabKey: 'Bénéficiaire-Notes' }),
+      mobileSyncStore.listNotePagesByPatient(patientId, { tabKey: 'Contexte de vie-Habitudes' }),
       mobileSyncStore.listNotePagesByPatient(patientId, {
         tabKey: 'Contexte de vie-Médical',
       }),
@@ -6394,8 +6386,7 @@ const fetchContexteNotePagesForPatient = async (patientId, dossierId) => {
         tabKey: 'Contexte de vie-Autonomie',
       }),
     ]);
-    return allTabs
-      .flat()
+    return selectCanonicalNotePages(allTabs.flat(), { patientId, dossierId })
       .filter((pg) => !!pg)
       // Filtre scope tolérant : dossierId match OU patientId match OU
       // scopeId vide (cf. fetchVadOverlayNotesForReport pour le rationale).
