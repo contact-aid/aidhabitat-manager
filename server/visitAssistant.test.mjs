@@ -175,6 +175,24 @@ test('audio and images retain compatible models while every text call uses V4 Fl
   assert.equal(calls[2].messages[0].content[1].type,'image_url');
 });
 
+test('unconfigured audio model uses an audio-compatible low-cost default, never the text model', async () => {
+  let body;
+  const audit=[];
+  const provider=createVisitProvider({env:{OPENROUTER_API_KEY:'synthetic-key',VISIT_AI_MODEL:'old-model'},
+    onUsage:entry=>audit.push(entry),fetchImpl:async (_,options)=>{
+      body=JSON.parse(options.body);
+      return Response.json({usage:{cost:0.0006},choices:[{message:{content:'Aucune chute rapportée.'},finish_reason:'stop'}]});
+    }});
+  assert.equal(await provider.transcribe(Buffer.from('synthetic audio')),'Aucune chute rapportée.');
+  assert.equal(body.model,'google/gemini-3.1-flash-lite');
+  assert.deepEqual(body.reasoning,{enabled:false});
+  assert.equal(body.max_tokens,4096);
+  assert.equal(body.provider.zdr,true);
+  assert.equal(body.provider.allow_fallbacks,false);
+  assert.equal(audit[0].task,'transcription');
+  assert.equal(audit[0].model,body.model);
+});
+
 
 test('finish starts server processing without client process requests and exposes durable progress', async t => {
   const f=await fixture(t,{}, {background:true});

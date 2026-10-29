@@ -178,3 +178,27 @@ Le style partagé des boutons reste utilisé par les autres commandes.
 Les anciens signalements stockés et leur gestion de conservation ne sont pas
 supprimés par cette modification. Les documents d’audit datés décrivent l’état
 historique du système. Ce changement attend la prochaine diffusion iPad/API.
+
+## Audio économique via OpenRouter (29 octobre 2026)
+
+La configuration cible utilise `google/gemini-3.1-flash-lite` pour la
+transcription, `deepseek/deepseek-v4-flash` pour les tâches textuelles et conserve
+`deepseek/deepseek-v4.1-flash-1017` pour la lecture des manuscrits. Aucun accès
+Mistral séparé n'est nécessaire. Les appels restent sans raisonnement, avec les
+critères de confidentialité OpenRouter existants et sans repli automatique.
+
+Deux essais fictifs en français ont conservé les négations, personnes
+concernées, mesures, corrections orales et souhaits vérifiés : 9 points sur
+29,8 secondes puis 11 points dans un dialogue synthétique à deux voix de
+50,3 secondes. Coûts mesurés : 0,00059975 USD et 0,00099175 USD. Cette recette
+vérifie le transport et des informations ciblées ; elle ne constitue pas une
+évaluation de terrain sur des conversations bruitées ou plusieurs locuteurs.
+Les labels de voix et les rôles ne sont pas garantis. Les extraits d'une minute
+restent indépendants : un numéro de voix ne prouve pas l'identité entre extraits.
+
+Estimation indicative pour une heure : environ 0,08 USD, soit 7 à 8 centimes
+d'euro au taux du 28 octobre, avec 115 200 jetons audio et 15 000 jetons texte.
+Les frais de rédaction, manuscrits, change et taxes sont distincts. Tarifs à
+revérifier sur https://openrouter.ai/google/gemini-3.1-flash-lite/.
+Les fichiers audio existants restent conservés ; cette modification n'ajoute
+aucune purge automatique et ne relance aucun dossier terminé.
