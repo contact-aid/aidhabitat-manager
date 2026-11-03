@@ -25,6 +25,8 @@ class _Repository extends Fake implements DossierRepository {
   Future<List<VisitRecommendationItem>>? nextRead;
   Completer<void>? saveGate;
   int readCalls = 0;
+  bool failSave = false;
+  int forcedSaves = 0;
 
   @override
   Future<List<VisitRecommendationItem>> fetchVisitRecommendations(String id) {
@@ -40,6 +42,8 @@ class _Repository extends Fake implements DossierRepository {
     List<VisitRecommendationItem> value, {
     bool forceSync = false,
   }) async {
+    if (forceSync) forcedSaves++;
+    if (failSave) throw StateError("Synthetic save failure");
     final copy = List<VisitRecommendationItem>.of(value);
     if (saveGate != null) await saveGate!.future;
     items = copy;
@@ -170,5 +174,83 @@ void main() {
     expect(readsWhileSavePending, 1);
     expect(repository.items.first.note, 'Personalized seat description');
     expect(find.text('Personalized seat description'), findsOneWidget);
+  });
+
+  testWidgets('generation flush waits for edits made during an older save', (
+    tester,
+  ) async {
+    final repository = _Repository();
+    final controller = RecommendationsTabController();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RecommendationsTab(
+            dossier: _Dossier(),
+            repository: repository,
+            wikiRepository: _WikiRepository(),
+            controller: controller,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final descriptions = find.byWidgetPredicate(
+      (w) => w is TextField && w.maxLines == null && w.minLines == 2,
+    );
+    repository.saveGate = Completer<void>();
+    await tester.enterText(descriptions.first, 'First edit');
+    var firstFlushDone = false;
+    final firstFlush = controller.flushPendingSave().then(
+      (_) => firstFlushDone = true,
+    );
+    await tester.pump();
+    await tester.enterText(descriptions.first, 'Final edit before generation');
+    var reportReady = false;
+    final reportFlush = controller.flushPendingSave().then(
+      (_) => reportReady = true,
+    );
+    await tester.pump();
+    expect(reportReady, isFalse);
+    expect(firstFlushDone, isFalse);
+    repository.saveGate!.complete();
+    await tester.pumpAndSettle();
+    await firstFlush;
+    await reportFlush;
+    expect(reportReady, isTrue);
+    expect(repository.items, hasLength(3));
+    expect(repository.items.first.note, 'Final edit before generation');
+    expect(repository.forcedSaves, 0);
+  });
+
+  testWidgets('failed generation flush keeps edits for a successful retry', (
+    tester,
+  ) async {
+    final repository = _Repository();
+    final controller = RecommendationsTabController();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RecommendationsTab(
+            dossier: _Dossier(),
+            repository: repository,
+            wikiRepository: _WikiRepository(),
+            controller: controller,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final descriptions = find.byWidgetPredicate(
+      (w) => w is TextField && w.maxLines == null && w.minLines == 2,
+    );
+    await tester.enterText(descriptions.first, 'Keep this correction');
+    repository.failSave = true;
+    await expectLater(controller.flushPendingSave(), throwsStateError);
+    expect(repository.items.first.note, 'Original description 0');
+    expect(find.text('Keep this correction'), findsOneWidget);
+    repository.failSave = false;
+    await controller.flushPendingSave();
+    expect(repository.items.first.note, 'Keep this correction');
+    expect(repository.items, hasLength(3));
   });
 }
