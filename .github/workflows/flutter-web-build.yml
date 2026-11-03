@@ -57,12 +57,21 @@ jobs:
         run: |
           git diff --exit-code 136c727a17056bfe92318ce195d5ca113a1ffa49 HEAD -- . ':!.github/workflows/flutter-web-build.yml'
           gh api repos/contact-aid/aidhabitat-manager/actions/runs/41687479916 > /tmp/verified-native-run.json
+          git show 136c727a17056bfe92318ce195d5ca113a1ffa49:.github/workflows/sync-integrity.yml > /tmp/verified-native-workflow.yml
+          gh api repos/contact-aid/aidhabitat-manager/actions/runs/41687479916/jobs > /tmp/verified-native-jobs.json
           node --input-type=module -e '
             import fs from "node:fs";
             const run = JSON.parse(fs.readFileSync("/tmp/verified-native-run.json"));
             if (run.head_sha !== "136c727a17056bfe92318ce195d5ca113a1ffa49" ||
                 run.name !== "Sync Integrity" || run.status !== "completed" ||
                 run.conclusion !== "success") throw Error("Matching native test evidence required");
+            const workflow = fs.readFileSync("/tmp/verified-native-workflow.yml", "utf8");
+            if (!workflow.includes("run: bash aid_habitat_app/tool/test_sync_critical.sh"))
+              throw Error("Critical native suite must be part of the tested workflow");
+            const jobs = JSON.parse(fs.readFileSync("/tmp/verified-native-jobs.json")).jobs;
+            if (!jobs.some(job => job.conclusion === "success" && job.steps.some(step =>
+                step.name === "Verify critical synchronization scenarios" && step.conclusion === "success")))
+              throw Error("Successful critical native test step required");
             console.log("Native test evidence verified for identical application source:", run.html_url);
           '
 
