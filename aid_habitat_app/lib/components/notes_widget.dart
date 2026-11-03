@@ -2372,10 +2372,17 @@ class _NotesWidgetState extends State<NotesWidget> {
 
   Future<void> _persistSharedTextAcrossPages() async {
     final text = _textController.text;
-    for (var page = 0; page < _totalPages; page++) {
+    // The panel can close during the first SQLite write. Capture and enqueue
+    // the active drawing first, before updating text on the other pages.
+    final currentPage = _currentPage;
+    for (final page in [
+      currentPage,
+      for (var page = 0; page < _totalPages; page++)
+        if (page != currentPage) page,
+    ]) {
       if (!mounted) return;
       _pageTexts[page] = text;
-      if (page == _currentPage) {
+      if (page == currentPage) {
         await _saveNoteDrawingJson(
           patientId: widget.patientId,
           tabKey: widget.tabKey,

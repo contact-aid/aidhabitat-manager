@@ -38,8 +38,13 @@ void main() {
       AppConfig.setAppSessionToken(previousSession);
     });
     final savedStrokes = <String, int>{};
-    for (final tab in ['Sanitaires-Notes', 'Sanitaires-WC-Manuscrit']) {
-      final patient = 'fiction-$tab';
+    for (final (tab, closeImmediately) in [
+      ('Sanitaires-Notes', false),
+      ('Sanitaires-WC-Manuscrit', false),
+      ('Sanitaires-Notes', true),
+      ('Sanitaires-WC-Manuscrit', true),
+    ]) {
+      final patient = 'fiction-$tab-$closeImmediately';
       await tester.runAsync(() async {
         for (var page = 0; page < 4; page++) {
           await notes.mergeRemoteNotePage(
@@ -110,13 +115,13 @@ void main() {
           (w) => w is Semantics && w.properties.label == 'Page suivante',
         ),
       );
-      for (var i = 0; i < 25; i++) {
+      for (var i = 0; i < (closeImmediately ? 0 : 25); i++) {
         await tester.pump(const Duration(milliseconds: 1));
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
         );
       }
-      expect(find.text('3/4'), findsOneWidget);
+      if (!closeImmediately) expect(find.text('3/4'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 50));
@@ -145,9 +150,15 @@ void main() {
           reason: 'Neighbor page ${neighbor + 1} must remain intact',
         );
       }
-      savedStrokes[tab] = (jsonDecode(json!)['strokes'] as List).length;
+      savedStrokes['$tab:$closeImmediately'] =
+          (jsonDecode(json!)['strokes'] as List).length;
     }
     debugDefaultTargetPlatformOverride = previousPlatform;
-    expect(savedStrokes, {'Sanitaires-Notes': 1, 'Sanitaires-WC-Manuscrit': 1});
+    expect(savedStrokes, {
+      'Sanitaires-Notes:false': 1,
+      'Sanitaires-WC-Manuscrit:false': 1,
+      'Sanitaires-Notes:true': 1,
+      'Sanitaires-WC-Manuscrit:true': 1,
+    });
   });
 }
