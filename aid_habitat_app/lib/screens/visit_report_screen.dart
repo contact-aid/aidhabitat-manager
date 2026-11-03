@@ -172,6 +172,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// 2026-05-11 : « Quand je quitte le relevé de visite et que je retourne
   /// dessus, je n'ai plus le load qui indique la generation en cours ».
   bool _isGeneratingReport = false;
+  bool _isPreparingReport = false;
   bool _openingDocuments = false;
 
   /// Subscription au stream du `ReportGenerationService` pour synchroniser
@@ -1345,11 +1346,11 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       initialData: ConnectivityService().isOffline,
       builder: (context, snapshot) {
         final offline = snapshot.data ?? true;
-        final disabled = offline || _isGeneratingReport;
+        final disabled = offline || _isPreparingReport || _isGeneratingReport;
         return Tooltip(
           message: offline
               ? 'Connexion Internet requise'
-              : _isGeneratingReport
+              : _isPreparingReport || _isGeneratingReport
               ? 'Génération en cours…'
               : 'Générer le rapport',
           child: Material(
@@ -1373,7 +1374,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (_isGeneratingReport && !offline)
+                    if ((_isPreparingReport || _isGeneratingReport) && !offline)
                       const SizedBox(
                         width: 14,
                         height: 14,
@@ -1411,6 +1412,22 @@ class _VisitReportScreenState extends State<VisitReportScreen>
   /// dossier, accessible depuis l'écran Documents pour preview /
   /// téléchargement / suppression.
   Future<void> _generateReport() async {
+    if (_isPreparingReport ||
+        _isGeneratingReport ||
+        ConnectivityService().isOffline) {
+      return;
+    }
+    // Lock before the first save/dialog await so a quick second tap cannot
+    // start another preparation against a different local snapshot.
+    setState(() => _isPreparingReport = true);
+    try {
+      await _prepareAndGenerateReport();
+    } finally {
+      if (mounted) setState(() => _isPreparingReport = false);
+    }
+  }
+
+  Future<void> _prepareAndGenerateReport() async {
     if (_isGeneratingReport || ConnectivityService().isOffline) return;
     // Bloque aussi si une autre génération tourne (même autre dossier)
     // pour éviter de saturer Vercel avec 2-3 PDFs en parallèle (~30 s
@@ -1446,15 +1463,20 @@ class _VisitReportScreenState extends State<VisitReportScreen>
     // re-fetch pour aligner le modèle in-memory avec le disque.
     try {
       await _beneficiaryController.flushPendingSave();
+      await _accessibilityController.flushPendingSave();
+      await _bathroomController.flushPendingSave();
+      await _wcController.flushPendingSave();
+      await _recommendationsController.flushPendingSave();
+      await _refreshDossier();
     } catch (error) {
-      _showReportError('Enregistrement du bénéficiaire impossible : $error');
+      if (mounted) {
+        _showReportError(
+          'Enregistrement des saisies impossible. Réessayez avant de générer le rapport : $error',
+        );
+      }
       return;
     }
-    await _accessibilityController.flushPendingSave();
-    await _bathroomController.flushPendingSave();
-    await _wcController.flushPendingSave();
-    await _recommendationsController.flushPendingSave();
-    await _refreshDossier();
+    if (!mounted) return;
     final missing = await _collectMissingFields();
     if (missing.isNotEmpty) {
       final shouldContinue = await _showMissingFieldsDialog(missing);
@@ -1508,37 +1530,13 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       // puis recréer un état "en attente" ou produire un doublon.
       await _dataService.cancelQueuedReportGeneration(_dossier.id);
 
-      // Note : plus de settle delay ici depuis que `kSaveDebounceText`
-      // est à 0 ms. Chaque keystroke a déjà écrit en SQLite + enqueued
-      // sa sync_op, donc `runSync()` plus bas verra TOUTES les modifs
-      // en attente, même celles tapées la milliseconde précédente.
+      // Generating a report is not an edit to the recommendation list.
+      // The controllers above already saved actual changes into the durable
+      // queue. Re-reading SQLite and force-saving that snapshot here could
+      // replace newer additions with a partial/older list, including remotely.
+      // The normal sync below publishes only the recorded editing intentions.
 
-      // 1. Force-push de la liste de préconisations LOCALE vers
-      //    NocoDB. Le PUT côté serveur fait un "wipe and replace"
-      //    (cf. /api/visit-recommendations/:dossierId), donc si l'ergo
-      //    a supprimé une reco en local sans déclencher de save (ex:
-      //    cache local nettoyé, ou bug de debounce), NocoDB peut
-      //    encore avoir des recos fantômes — qui finissent dans le
-      //    rapport PDF (symptôme reporté : "barre de redressement lit
-      //    visible sur le rapport alors qu'il n'y en a aucune sur
-      //    l'app"). On force ici un PUT du contenu local courant
-      //    (potentiellement vide) pour aligner NocoDB sur la vérité
-      //    locale avant que le serveur ne lise les recos.
-      try {
-        final localRecos = await _repository.fetchVisitRecommendations(
-          _dossier.id,
-        );
-        await _repository.saveVisitRecommendations(
-          _dossier.id,
-          localRecos,
-          forceSync: true,
-        );
-      } catch (_) {
-        // Pas bloquant : si la fetch/save échoue, on tombe sur
-        // l'ancienne sémantique (NocoDB tel quel).
-      }
-
-      // 2. Pousse les changements locaux EN ATTENTE vers NocoDB AVANT
+      // Pousse les changements locaux EN ATTENTE vers NocoDB AVANT
       // d'appeler le serveur de génération PDF — sinon le serveur lit
       // `getDossiersForApp` (NocoDB direct) et reçoit l'ancienne valeur
       // pour les champs récemment modifiés.
