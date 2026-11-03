@@ -2187,8 +2187,20 @@ class _NotesWidgetState extends State<NotesWidget> {
   // Pagination
   // ---------------------------------------------------------------------------
 
-  void _switchPage(int page) {
+  Future<void> _switchPage(int page) async {
     if (page < 0 || page >= _totalPages || page == _currentPage) return;
+    if (_isSaving) return;
+    // A Pencil stroke is normally flushed after 300 ms. Persist the departing
+    // page before clearing its dirty flag or changing the active page; otherwise
+    // a quick navigation followed by closing the panel loses that draft.
+    if (_activeStroke != null) _commitActiveStroke();
+    if (_isDirty && (widget.autoSaveToService || widget.onSave != null)) {
+      _autoSaveDebounce?.cancel();
+      _drawingDirtyFlushTimer?.cancel();
+      await _handleSavePressed();
+      if (!mounted || _isDirty) return;
+    }
+    if (!mounted || page >= _totalPages) return;
     setState(() {
       _isVoiceDictating = false;
       _currentPage = page;
@@ -2248,7 +2260,7 @@ class _NotesWidgetState extends State<NotesWidget> {
     // Persiste la nouvelle page côté serveur (JSON vide) — SyncEngine déclenche
     // la sync remote si le réseau est disponible.
     await _persistPage(newPageIndex);
-    _switchPage(newPageIndex);
+    await _switchPage(newPageIndex);
   }
 
   Future<void> _deletePage() async {
