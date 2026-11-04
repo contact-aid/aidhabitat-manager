@@ -67,7 +67,8 @@ class _PhotosTabState extends State<PhotosTab>
 
   /// Compression cible pour les photos VAD : assez net pour le rapport,
   /// mais volontairement plus léger pour que l'import multi reste fluide.
-  static const double _kCompressMaxWidth = 1280;
+  static const int _kCompressLongEdge = 480;
+  static const int _kCompressShortEdge = 360;
   static const int _kCompressQuality = 74;
 
   late final DataService _dataService = widget.dataService ?? DataService();
@@ -385,10 +386,11 @@ class _PhotosTabState extends State<PhotosTab>
       }
       final XFile? picked = await _imagePicker.pickImage(
         source: source,
-        // image_picker compresse côté natif : on demande JPEG ≤1600px
-        // de large, qualité 80. Cible ~150-300 Ko par photo.
-        maxWidth: _kCompressMaxWidth,
-        imageQuality: _kCompressQuality,
+        // Limit native decoding work and request JPEG conversion (HEIC).
+        // The common path then enforces the 480/360 bounds for both platforms.
+        maxWidth: _kCompressLongEdge.toDouble(),
+        maxHeight: _kCompressLongEdge.toDouble(),
+        imageQuality: 100,
       );
       if (picked == null) return;
       await _persistPicked(picked, categoryTag);
@@ -488,7 +490,8 @@ class _PhotosTabState extends State<PhotosTab>
           final compressed = await compressImageForUpload(
             bytes: f.bytes,
             fileName: f.name,
-            maxWidthPx: _kCompressMaxWidth.round(),
+            maxLongEdgePx: _kCompressLongEdge,
+            maxShortEdgePx: _kCompressShortEdge,
             jpegQuality: _kCompressQuality,
             fastResize: true,
           );
@@ -536,43 +539,13 @@ class _PhotosTabState extends State<PhotosTab>
   }
 
   Future<void> _persistPicked(XFile xfile, String categoryTag) async {
-    final order = _nextOrderInCategory(categoryTag);
-    final simpleTitle = _buildSimplePhotoTitle(categoryTag, order);
-    final fileName = _buildPhotoFileName(categoryTag, xfile.name, simpleTitle);
-    if (kIsWeb) {
-      final bytes = await xfile.readAsBytes();
-      final inserted = await _dataService.importDocumentBytes(
-        patientId: widget.dossier.patient.id,
-        bytes: bytes,
-        fileName: fileName,
-        title: simpleTitle,
-        tags: [categoryTag],
-        categoryOrder: order,
-      );
-      // Prime le cache mémoire des vignettes avec les bytes qu'on
-      // vient de capturer → la vignette s'affiche INSTANTANÉMENT au
-      // prochain `_refresh` sans attendre un re-decode base64.
-      _photoBytesCache[inserted.id] = Uint8List.fromList(bytes);
-    } else {
-      final inserted = await _dataService.importDocument(
-        patientId: widget.dossier.patient.id,
-        filePath: xfile.path,
-        title: simpleTitle,
-        tags: [categoryTag],
-        categoryOrder: order,
-      );
-      // Native : on lit le fichier qu'on vient d'écrire pour primer
-      // la cache. Coût ~quelques Mo en RAM mais l'image était déjà
-      // chargée par image_picker, on évite un round-trip filesystem.
-      try {
-        final bytes = await xfile.readAsBytes();
-        _photoBytesCache[inserted.id] = bytes;
-      } catch (_) {
-        // Pas critique : si la lecture échoue, le cache se remplira
-        // au 1er rendu de la vignette via _resolvePhotoBytes.
-      }
-    }
-    await _refresh();
+    await _persistPickedFilesOptimistic([
+      DroppedFile(
+        name: xfile.name,
+        bytes: await xfile.readAsBytes(),
+        mimeType: xfile.mimeType ?? 'image/*',
+      ),
+    ], categoryTag);
   }
 
   /// Titre humain simple par défaut, type « Logement 1 », « Sanitaires 2 ».

@@ -67,6 +67,9 @@ Future<CompressedImage> compressImageForUpload({
   required String fileName,
   String? sourceMimeType,
   int maxWidthPx = _kMaxWidthPx,
+  // Optional orientation-independent bounds, used by report photo imports.
+  int? maxLongEdgePx,
+  int? maxShortEdgePx,
   int jpegQuality = _kJpegQuality,
   int skipThresholdBytes = _kSkipThresholdBytes,
   bool fastResize = false,
@@ -105,7 +108,7 @@ Future<CompressedImage> compressImageForUpload({
 
   // Skip si déjà petit (sauf PNG : la recompression JPEG d'un PNG de
   // 100KB peut quand même diviser par 2 la taille, donc on tente).
-  if (!isPng && bytes.length < skipThresholdBytes) {
+  if (maxLongEdgePx == null && !isPng && bytes.length < skipThresholdBytes) {
     return CompressedImage(
       bytes: bytes,
       mimeType: originalMime.isNotEmpty ? originalMime : 'image/jpeg',
@@ -120,6 +123,8 @@ Future<CompressedImage> compressImageForUpload({
       ImageCompressionWorkerRequest(
         bytes: bytes,
         maxWidthPx: maxWidthPx,
+        maxLongEdgePx: maxLongEdgePx,
+        maxShortEdgePx: maxShortEdgePx,
         jpegQuality: jpegQuality,
         fastResize: fastResize,
       ),
@@ -143,7 +148,9 @@ Future<CompressedImage> compressImageForUpload({
     // PLUS GROS (rare, peut arriver sur des PNG très simples genre QR
     // codes), on retourne l'original. Sinon on perdrait de la qualité
     // pour rien.
-    if (result.length >= bytes.length) {
+    // Explicit report-photo dimensions take precedence even for a very
+    // compact original that would otherwise bypass resizing.
+    if (result.length >= bytes.length && !workerResult.resized) {
       return CompressedImage(
         bytes: bytes,
         mimeType: originalMime.isNotEmpty ? originalMime : 'image/jpeg',

@@ -19,6 +19,53 @@ void main() {
     );
   });
 
+  for (final dimensions in <List<int>>[
+    [1600, 1200, 480, 360],
+    [1200, 1600, 360, 480],
+    [1200, 1200, 360, 360],
+    [1600, 800, 480, 240],
+    [240, 180, 240, 180],
+  ]) {
+    test('report import bounds preserve proportions: $dimensions', () async {
+      // Solid-color files are far below the usual 200 KB skip threshold.
+      final bytes = Uint8List.fromList(
+        img.encodePng(img.Image(width: dimensions[0], height: dimensions[1])),
+      );
+      expect(bytes.length, lessThan(200 * 1024));
+      final result = await compressImageForUpload(
+        bytes: bytes,
+        fileName: 'report-photo.png',
+        maxLongEdgePx: 480,
+        maxShortEdgePx: 360,
+        jpegQuality: 74,
+        fastResize: true,
+      );
+      final decoded = img.decodeImage(result.bytes)!;
+      expect(decoded.width, dimensions[2]);
+      expect(decoded.height, dimensions[3]);
+    });
+  }
+
+  test(
+    'report bounds apply even to a small JPEG and respect EXIF orientation',
+    () async {
+      final image = img.Image(width: 1200, height: 800);
+      image.exif.imageIfd.orientation = 6;
+      final bytes = Uint8List.fromList(img.encodeJpg(image));
+      expect(bytes.length, lessThan(200 * 1024));
+      final result = await compressImageForUpload(
+        bytes: bytes,
+        fileName: 'portrait.jpg',
+        maxLongEdgePx: 480,
+        maxShortEdgePx: 360,
+        jpegQuality: 74,
+      );
+      final decoded = img.decodeImage(result.bytes)!;
+      expect(decoded.width, 320);
+      expect(decoded.height, 480);
+    },
+  );
+
   test('preserves a JPEG below the skip threshold', () async {
     final bytes = Uint8List.fromList(<int>[0xff, 0xd8, 0xff, 0xd9]);
 
