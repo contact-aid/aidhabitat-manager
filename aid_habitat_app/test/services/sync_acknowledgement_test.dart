@@ -154,6 +154,26 @@ void main() {
     },
   );
 
+  test(
+    'a contexte_de_vie conflict resolves to the dossier',
+    () async {
+      // Same enqueue convention as 'housing' (cf. `_enqueueChildUpdate`,
+      // which uses the dossier's own local_id as entity_local_id) — this
+      // entity_type was missing from conflictDossierId's switch entirely,
+      // so it fell to the `_ => null` case and every context/autonomy
+      // conflict always returned null, no matter what. Regression covered
+      // here after it shipped broken (reported 2026-09-22).
+      await db.insert('dossiers', {'local_id': 'd1'});
+      await insertOperation(
+        'ctx',
+        status: 'conflict',
+        entityType: 'contexte_de_vie',
+        entityId: 'd1',
+      );
+      expect(await repository.conflictDossierId('ctx'), 'd1');
+    },
+  );
+
   test('housing ACK stores remote identity and version atomically', () async {
     await db.insert('housings', {
       'local_id': 'housing-local',
