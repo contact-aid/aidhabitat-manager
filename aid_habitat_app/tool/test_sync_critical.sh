@@ -20,6 +20,9 @@ bash "$script_dir/test_safely.sh" \
   test/components/plan_web_viewport_test.dart \
   test/screens/visit_report/photo_title_performance_test.dart \
   test/services/visit_photo_order_test.dart \
+  test/services/visit_report_preparation_test.dart \
+  test/services/photo_order_confirmation_test.dart \
+  test/screens/visit_report/photos_reorder_gestures_test.dart \
   test/services/ai_rewrite_service_test.dart \
   test/components/ai_rewrite_preview_dialog_test.dart \
   test/components/notes_live_popup_test.dart \

@@ -1,3 +1,4 @@
+import '../services/visit_report_preparation.dart';
 import '../services/visit_assistant_service.dart' show VisitAssistantConfig;
 import '../services/visit_ai_notes.dart';
 import '../services/ai_rewrite_context.dart';
@@ -477,6 +478,27 @@ class _NotesWidgetState extends State<NotesWidget> {
     );
   }
 
+  final _reportNoteWrites = <Future<void>>{};
+
+  Future<void> _flushForReport() async {
+    if (_isDrawingInProgress) {
+      throw StateError('Terminez le dessin avant de générer le rapport.');
+    }
+    final needsSave = _isDirty || (_autoSaveDebounce?.isActive ?? false);
+    _autoSaveDebounce?.cancel();
+    _drawingDirtyFlushTimer?.cancel();
+    while (_reportNoteWrites.isNotEmpty) {
+      await Future.wait(List.of(_reportNoteWrites));
+    }
+    if (!needsSave && !_isDirty) return;
+    if (widget.autoSaveToService) {
+      await _autoSavePersist(throwOnError: true);
+    } else if (widget.onSave != null) {
+      await _handleSavePressed();
+      if (_isDirty) throw StateError('Une note n’a pas pu être enregistrée.');
+    }
+  }
+
   Future<void> _saveNoteDrawingJson({
     required String patientId,
     required String tabKey,
@@ -490,7 +512,7 @@ class _NotesWidgetState extends State<NotesWidget> {
       payload[visitAiMetadataKey] = {...visitAiInsertions(payload), ...known};
       drawingJson = jsonEncode(payload);
     }
-    return _dataService.saveNoteDrawingJson(
+    final write = _dataService.saveNoteDrawingJson(
       patientId: patientId,
       tabKey: tabKey,
       drawingJson: drawingJson,
@@ -501,6 +523,10 @@ class _NotesWidgetState extends State<NotesWidget> {
       scopeId: widget.scopeId,
       mutationOrigin: SyncMutationOrigin.userEdit,
     );
+    late final Future<void> tracked;
+    tracked = write.whenComplete(() => _reportNoteWrites.remove(tracked));
+    _reportNoteWrites.add(tracked);
+    return tracked;
   }
 
   Future<bool> _refreshNotePageFromRemote({
@@ -640,6 +666,7 @@ class _NotesWidgetState extends State<NotesWidget> {
   @override
   void initState() {
     super.initState();
+    VisitReportEdits.register(this, () => widget.patientId, _flushForReport);
     _currentPage = widget.currentPage;
     _totalPages = math.max(1, widget.totalPages);
     _textController = TextEditingController(text: widget.initialText);
@@ -904,6 +931,7 @@ class _NotesWidgetState extends State<NotesWidget> {
 
   @override
   void dispose() {
+    VisitReportEdits.unregister(this);
     final shouldFlushDirtyDraft =
         _isDirty && !_isSaving && widget.autoSaveToService;
     final disposePatientId = widget.patientId;
@@ -1580,7 +1608,7 @@ class _NotesWidgetState extends State<NotesWidget> {
     _autoSaveDebounce = Timer(kSaveDebounceText, _autoSavePersist);
   }
 
-  Future<void> _autoSavePersist() async {
+  Future<void> _autoSavePersist({bool throwOnError = false}) async {
     if (!mounted) return;
     if (_isDrawingInProgress) {
       _scheduleAutoSave();
@@ -1610,6 +1638,7 @@ class _NotesWidgetState extends State<NotesWidget> {
         });
       }
     } catch (_) {
+      if (throwOnError) rethrow;
       // silencieux : l'utilisateur peut quand même déclencher manuellement Save.
     }
   }

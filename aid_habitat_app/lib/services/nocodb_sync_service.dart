@@ -1041,6 +1041,20 @@ class NocodbSyncService {
     try {
       // ignore: avoid_print
       print('[sync] POST /api/reports/visit/$dossierId (generation différée)');
+      if (await _syncRepository.countPendingReportPrerequisites(
+                dossierId: dossierId,
+                patientId: patientId,
+              ) >
+              0 ||
+          await _syncRepository.countConflictingReportPrerequisites(
+                dossierId: dossierId,
+                patientId: patientId,
+              ) >
+              0) {
+        throw TransientRemoteException(
+          'Des modifications sont encore en attente avant la génération du rapport.',
+        );
+      }
       result = await _apiClient.downloadVisitReport(dossierId: dossierId);
     } catch (error) {
       // On notifie un failure (deferred=true → snackbar violet "rapport

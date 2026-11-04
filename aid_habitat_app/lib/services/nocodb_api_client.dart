@@ -1553,6 +1553,16 @@ class NocodbApiClient {
     }
     final decoded = jsonDecode(response.body) as Map;
     final revision = decoded['data']?['order']?['revision'];
+    final confirmed = decoded['data']?['order'];
+    if (order['initializeOnly'] != true &&
+        (confirmed is! Map ||
+            confirmed['mutationId'] != order['mutationId'] ||
+            jsonEncode(confirmed['orderedDocumentIds']) !=
+                jsonEncode(order['orderedDocumentIds']))) {
+      throw TransientRemoteException(
+        'Le serveur n’a pas confirmé le nouveau classement des photos.',
+      );
+    }
     if (decoded['success'] != true || revision is! int || revision < 1) {
       throw TransientRemoteException('Photo order was not confirmed by server');
     }

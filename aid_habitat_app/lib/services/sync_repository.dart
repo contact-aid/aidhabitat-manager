@@ -919,6 +919,15 @@ class SyncRepository {
   /// Compte uniquement les écritures encore en attente qui alimentent le
   /// rapport de [dossierId]. Une erreur ancienne appartenant à un autre
   /// bénéficiaire ne doit pas empêcher la génération de ce rapport.
+  Future<int> countUnconfirmedVisitPhotoOrders(String patientId) async {
+    final db = await _database.database;
+    final rows = await db.rawQuery(
+      "SELECT COUNT(*) AS cnt FROM sync_operations WHERE entity_type = 'visit_photo_order' AND entity_local_id = ? AND status != 'completed'",
+      [patientId],
+    );
+    return (rows.single['cnt'] as num).toInt();
+  }
+
   Future<int> countPendingReportPrerequisites({
     required String dossierId,
     required String patientId,

@@ -1,3 +1,4 @@
+import '../../services/visit_report_preparation.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -119,6 +120,11 @@ class _PhotosTabState extends State<PhotosTab>
   @override
   void initState() {
     super.initState();
+    VisitReportEdits.register(
+      this,
+      () => widget.dossier.patient.id,
+      _flushForReport,
+    );
     _refresh();
     // Refactor 2026-05-12 : suppression du polling 1 s + de
     // `enterActiveContext`. Les photos sont chargées au mount + à
@@ -142,6 +148,7 @@ class _PhotosTabState extends State<PhotosTab>
 
   @override
   void dispose() {
+    VisitReportEdits.unregister(this);
     _syncSubscription?.cancel();
     super.dispose();
   }
@@ -152,7 +159,11 @@ class _PhotosTabState extends State<PhotosTab>
   /// remote en arrière-plan. L'écran reste utilisable même si l'API met
   /// quelques secondes à répondre.
   Future<void> _refresh({bool silent = false}) async {
-    if (_activePhotoDragId != null || _photoOrderSaving) return;
+    if (_activePhotoDragId != null ||
+        _photoOrderSaving ||
+        _unsavedOrders.isNotEmpty) {
+      return;
+    }
     final generation = ++_refreshGeneration;
     try {
       // 1) Lecture locale immédiate (SQLite cache).
@@ -196,7 +207,8 @@ class _PhotosTabState extends State<PhotosTab>
           generation != _refreshGeneration ||
           !refreshed ||
           _activePhotoDragId != null ||
-          _photoOrderSaving) {
+          _photoOrderSaving ||
+          _unsavedOrders.isNotEmpty) {
         return;
       }
       // Re-lit la SQLite après merge — si remote a apporté du nouveau,
@@ -701,6 +713,34 @@ class _PhotosTabState extends State<PhotosTab>
     unawaited(_refresh(silent: true));
   }
 
+  final _orderWrites = <Future<void>>{};
+  final _unsavedOrders = <String, List<String>>{};
+
+  Future<void> _flushForReport() async {
+    if (_activePhotoDragId != null || _isImporting) {
+      throw StateError(
+        'Terminez le déplacement ou l’import des photos avant de générer le rapport.',
+      );
+    }
+    while (_orderWrites.isNotEmpty) {
+      await Future.wait(List.of(_orderWrites));
+    }
+    for (final tag in List.of(_unsavedOrders.keys)) {
+      await _persistPhotoOrder(tag, _unsavedOrders[tag]!);
+    }
+  }
+
+  Future<void> _persistPhotoOrder(String tag, List<String> ids) async {
+    _photoOrderSaveCount++;
+    _refreshGeneration++;
+    try {
+      await _dataService.reorderVisitCategoryDocuments(orderedDocumentIds: ids);
+      if (identical(_unsavedOrders[tag], ids)) _unsavedOrders.remove(tag);
+    } finally {
+      _photoOrderSaveCount--;
+    }
+  }
+
   Future<void> _commitPhotoOrder(String tag) async {
     _photoDragSnapshot = null;
     if (!_photoOrderChanged) {
@@ -710,23 +750,38 @@ class _PhotosTabState extends State<PhotosTab>
       return;
     }
     _photoOrderChanged = false;
-    final current = _photosForCategory(tag);
-    _photoOrderSaveCount++;
-    _refreshGeneration++;
+    final ids = _photosForCategory(tag).map((doc) => doc.id).toList();
+    _unsavedOrders[tag] = ids;
     _activePhotoDragId = null;
     _lastPhotoReorderTargetKey = null;
+    late final Future<void> write;
+    write = _persistPhotoOrder(
+      tag,
+      ids,
+    ).whenComplete(() => _orderWrites.remove(write));
+    _orderWrites.add(write);
     try {
-      await _dataService.reorderVisitCategoryDocuments(
-        orderedDocumentIds: current.map((doc) => doc.id).toList(),
-      );
+      await write;
     } catch (_) {
       if (mounted) {
-        _showError('L’ordre des photos n’a pas pu être enregistré. Réessayez.');
+        _showError(
+          'L’ordre des photos n’a pas pu être enregistré. Réessayez avant de générer le rapport.',
+        );
       }
-    } finally {
-      _photoOrderSaveCount--;
+      return;
     }
-    if (mounted) await _refresh();
+    // Publish immediately instead of relying only on the background timer.
+    // The queue remains durable if the network or server is unavailable.
+    try {
+      await _dataService.synchronizeVisitPhotoOrder(widget.dossier.patient.id);
+    } catch (_) {
+      if (mounted) {
+        _showError(
+          'Classement conservé sur cet appareil. Envoi au serveur en attente ; la génération attendra sa confirmation.',
+        );
+      }
+    }
+    if (mounted && _unsavedOrders.isEmpty) await _refresh();
   }
 
   void _showError(String message) {
@@ -1495,13 +1550,11 @@ class _PhotoDragSlotState extends State<_PhotoDragSlot> {
                 hitTestBehavior: HitTestBehavior.opaque,
                 maxSimultaneousDrags: 1,
                 onDragStarted: () => widget.onDragStarted(_doc.id),
-                onDragEnd: (details) {
-                  if (details.wasAccepted) {
-                    widget.onCommitOrder(widget.tag);
-                  } else {
-                    widget.onCancelOrder();
-                  }
-                },
+                // The preview can rebuild/dispose the source Draggable.
+                // Flutter skips onDragEnd for a disposed source, but still
+                // delivers these completion/cancellation callbacks.
+                onDragCompleted: () => widget.onCommitOrder(widget.tag),
+                onDraggableCanceled: (_, _) => widget.onCancelOrder(),
                 feedback: Material(
                   color: Colors.transparent,
                   elevation: 0,
