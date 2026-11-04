@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {findMissingProtectedFragments} from './ai/rewrite.mjs';
 const fail=message=>Object.assign(new Error(message),{statusCode:502});
-export async function cleanVisitTranscript({segments,directory,complete}) {
+export async function cleanVisitTranscript({segments,directory,complete,cacheNamespace='openai-clean'}) {
   const batches=[];
   for(let offset=0;offset<segments.length;offset+=200)batches.push({offset,source:segments.slice(offset,offset+200)});
   const results=[];let next=0;
@@ -10,7 +10,7 @@ export async function cleanVisitTranscript({segments,directory,complete}) {
     while(next<batches.length) {
       const index=next++;const {offset,source}=batches[index];
       const ids=new Set(source.map((s,i)=>i+offset));const voices=new Set(source.map(s=>s.speaker));
-      const filename=path.join(directory,`openai-clean-batch-${index}.json`);
+      const filename=path.join(directory,`${cacheNamespace}-batch-${index}.json`);
       let cleaned;
       try {cleaned=JSON.parse(await fs.readFile(filename,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
       if(!cleaned) {

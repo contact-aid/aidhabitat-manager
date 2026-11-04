@@ -5,7 +5,7 @@ test('long recordings are bounded, carry reference voices across parts, and reus
  let uploads=0;const options={directory,job:{id:'synthetic',dossierId:'synthetic',chunks:[{duration:600}]},bytes:Buffer.from('synthetic'),probeAudioDuration:async()=>600,model:'gpt-4o-transcribe-diarize',apiKey:'synthetic',
  sliceAudio:async({output})=>{const b=Buffer.from('synthetic clip');await fs.writeFile(output,b);return b;},
  fetchImpl:async(url,request)=>{
-   const index=uploads++;const names=request.body.getAll('known_speaker_names[]');
+   assert.equal(request.body.get('language'),'fr');const index=uploads++;const names=request.body.getAll('known_speaker_names[]');
    if(index===0){assert.deepEqual(names,[]);return Response.json({segments:[{speaker:'A',start:0,end:5,text:'Bonjour.'},{speaker:'B',start:7,end:12,text:'Je marche avec une canne.'}]});}
    assert.deepEqual(names,['voice_1','voice_2']);assert.equal(request.body.getAll('known_speaker_references[]').length,2);
    return Response.json({segments:[{speaker:'voice_2',start:0,end:5,text:'Je ne suis pas tombé.'}]});

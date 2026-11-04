@@ -52,13 +52,13 @@ export async function transcribeVisitParts({bytes,job,directory,model,apiKey,fet
   async function requestPart(index, referenceSnapshot) {
     const offset=index*partSeconds;
     const partDuration=Math.min(partSeconds,duration-offset);
-    const filename=path.join(directory,`openai-audio-300-part-${index}.json`);
+    const filename=path.join(directory,`openai-audio-fr-300-part-${index}.json`);
     let raw=await read(filename);
     if(!raw) {
       const audio=count===1?bytes:await sliceAudio({source,output:path.join(directory,`part-${index}.m4a`),start:offset,duration:partDuration});
       if(audio.length>24*1024*1024) throw error('Un extrait dépasse la taille de transcription autorisée. Les sources sont conservées.');
       const form=new FormData();form.append('file',new Blob([audio],{type:count===1?'audio/webm':'audio/mp4'}),count===1?'visit.webm':'visit.m4a');
-      for(const [k,v] of Object.entries({model,response_format:'diarized_json',chunking_strategy:'auto',stream:'true'}))form.append(k,v);
+      for(const [k,v] of Object.entries({model,language:'fr',response_format:'diarized_json',chunking_strategy:'auto',stream:'true'}))form.append(k,v);
       for(const [name,file] of referenceSnapshot) {
         form.append('known_speaker_names[]',name);
         form.append('known_speaker_references[]','data:audio/wav;base64,'+(await fs.readFile(file)).toString('base64'));
