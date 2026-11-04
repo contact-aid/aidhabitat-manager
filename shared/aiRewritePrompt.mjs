@@ -1,3 +1,4 @@
+import {PLAIN_REPORT_INSTRUCTIONS} from './plainReportText.mjs';
 export const REWRITE_CONTEXTS = Object.freeze({
   general: 'note de visite à domicile',
   beneficiary: 'note sur le bénéficiaire',
@@ -21,6 +22,7 @@ export const rewriteInstructions = (mode = 'professional', context = 'general') 
   return `Tu aides des ergothérapeutes à rédiger leur rapport de visite à domicile. Rubrique : ${REWRITE_CONTEXTS[normalizeRewriteContext(context)]}.
 ${task}
 ${paragraphs}
+${PLAIN_REPORT_INSTRUCTIONS}
 N'ajoute aucune information, aucun fait, diagnostic, conseil ou interprétation. Ne supprime aucun fait, souhait ou réserve. Conserve les négations, les incertitudes, les noms, chiffres, mesures et équipements. Ne déduis jamais une cause ou une condition qui n’est pas écrite.
 Ne remplace pas un nom de personne par un terme générique. Corrige aussi les accords, conjugaisons et élisions.
 Conserve exactement chaque identifiant AIDHABITAT_DATA_ suivi de chiffres, une seule fois, sans le renuméroter.

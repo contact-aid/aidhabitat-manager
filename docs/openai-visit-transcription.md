@@ -23,3 +23,5 @@ Les appels de rédaction et de questions envoient les mots originaux, les indice
 La pré-rédaction et la reformulation professionnelle séparent les thèmes par une ligne vide. La correction orthographique seule conserve les paragraphes existants. Accessibilité regroupe accès et circulation, puis équipements du logement (chauffage/poêle, combustible, volets et manipulation). Le classement indiqué sur les notes manuscrites est pris en compte ; un équipement utilisé sans difficulté reste une information utile.
 
 La pré-rédaction renvoie un objet de thèmes nommés par rubrique. Le serveur assemble les champs non vides avec une ligne vide, indépendamment du profil de style. Accessibilité sépare extérieur/entrée, circulation/niveaux, chauffage, puis ouvrants/manipulation.
+
+Les rubriques et la reformulation renvoient du texte brut compatible avec les clients. Une consigne interdit le Markdown et le HTML ; la sortie retire les marqueurs de présentation (notamment le gras) tout en conservant les mots, les mesures et les paragraphes.

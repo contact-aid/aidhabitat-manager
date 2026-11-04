@@ -38,3 +38,11 @@ test('structured themes are ordered and separated even when model fields arrive 
  const result=await provider.draft({context:{existingText:{}},facts:{facts:[],warnings:[]}},null);
  assert.equal(result.sections['Accessibilité-Notes'],'Sort à pied par la porte-fenêtre.\n\nPoêle à bois utilisant du bois compressé.\n\nLes volets sont manipulés sans difficulté.');
 });
+
+test('generated and reformulated notes remove unsupported bold labels before returning to clients',async()=>{
+ const source='WC : Rehausser à 48 cm.';
+ const provider=createVisitProvider({env,fetchImpl:async()=>completion({sections:{beneficiary:'',environment:'',autonomy:'',access:'',sanitary:'',project:'',summary:'**WC :** Rehausser à 48 cm.'},warnings:[]})});
+ assert.equal((await provider.draft({context:{existingText:{}},facts:{facts:[],warnings:[]}},null)).sections['Préconisations-Résumé'],source);
+ const result=await rewriteNote({text:source,context:'recommendations',config:getRewriteConfig(env),fetchImpl:async()=>completion('**WC :** Rehausser à 48 cm.')});
+ assert.equal(result.text,source);
+});

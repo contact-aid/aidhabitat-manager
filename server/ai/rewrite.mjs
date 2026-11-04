@@ -1,3 +1,4 @@
+import {plainReportText} from '../../shared/plainReportText.mjs';
 import { textProviderConfig, completionBody } from './provider.mjs';
 import { rewriteInstructions } from '../../shared/aiRewritePrompt.mjs';
 import { OPENROUTER_TEXT_MODEL, TEXT_PROVIDER_POLICY } from './models.mjs';
@@ -98,7 +99,8 @@ export const rewriteNote = async ({text, mode = 'professional', context = 'gener
   if (choice?.finish_reason !== 'stop' || typeof result !== 'string' || !result.trim()) {
     throw rewriteError('La proposition est vide ou incomplète. La note est conservée.', 422);
   }
-  const rewritten = result.trim();
+  const rewritten = plainReportText(result);
+  if(!rewritten)throw rewriteError('La proposition est vide. La note est conservée.',422);
   if (findMissingProtectedFragments(text, rewritten).length) {
     throw rewriteError("La proposition n'était pas assez fidèle à la note originale. La note a été conservée.", 422);
   }
