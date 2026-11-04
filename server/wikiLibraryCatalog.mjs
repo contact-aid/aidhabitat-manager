@@ -10,6 +10,7 @@ export const WIKI_FILTER_TAGS = [
   "Barres d'appui",
   'Ouvertures',
   'Equipements',
+  'Autre',
 ];
 
 export const WIKI_LIBRARY_SEED = [
