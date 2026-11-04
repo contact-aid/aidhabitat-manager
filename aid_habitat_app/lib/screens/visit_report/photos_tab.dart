@@ -1492,6 +1492,9 @@ class _PhotoDragSlotState extends State<_PhotoDragSlot> {
 
   @override
   Widget build(BuildContext context) {
+    final commitOrder = widget.onCommitOrder;
+    final cancelOrder = widget.onCancelOrder;
+    final sourceTag = widget.tag;
     return LayoutBuilder(
       builder: (context, constraints) {
         final tileWidth = constraints.maxWidth;
@@ -1553,8 +1556,8 @@ class _PhotoDragSlotState extends State<_PhotoDragSlot> {
                 // The preview can rebuild/dispose the source Draggable.
                 // Flutter skips onDragEnd for a disposed source, but still
                 // delivers these completion/cancellation callbacks.
-                onDragCompleted: () => widget.onCommitOrder(widget.tag),
-                onDraggableCanceled: (_, _) => widget.onCancelOrder(),
+                onDragCompleted: () => commitOrder(sourceTag),
+                onDraggableCanceled: (_, _) => cancelOrder(),
                 feedback: Material(
                   color: Colors.transparent,
                   elevation: 0,

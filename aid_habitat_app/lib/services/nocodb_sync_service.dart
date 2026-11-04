@@ -1,3 +1,4 @@
+import 'visit_report_preparation.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1041,6 +1042,13 @@ class NocodbSyncService {
     try {
       // ignore: avoid_print
       print('[sync] POST /api/reports/visit/$dossierId (generation différée)');
+      try {
+        await VisitReportEdits.flush(patientId);
+      } catch (_) {
+        throw TransientRemoteException(
+          'Une modification locale attend encore son enregistrement avant le rapport.',
+        );
+      }
       if (await _syncRepository.countPendingReportPrerequisites(
                 dossierId: dossierId,
                 patientId: patientId,
