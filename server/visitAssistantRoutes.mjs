@@ -25,7 +25,7 @@ export function registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRe
     onError:()=>console.warn('[visit-assistant] Background processing paused; sources retained.')}) : null;
   if (env.VISIT_ASSISTANT_ENABLED === 'true') void queue?.resume().catch(()=>{});
   const enqueue = job => { void queue?.enqueue(job.dossierId,job.id)?.catch(()=>{}); };
-  const publicJob = job => ({ id: job.id, createdAt: job.createdAt, status: job.status,
+  const publicJob = job => ({ id: job.id, author:job.author, transcriptVersion:job.transcriptVersion ?? null, createdAt: job.createdAt, status: job.status,
     transcript: job.transcript, handwrittenText: job.handwrittenText ?? [], result: job.result,
     error: job.error ?? null, chunkCount: job.chunkCount ?? job.chunks?.length ?? 0,
     transcribedChunks: job.transcript?.length ?? 0,
@@ -136,6 +136,33 @@ export function registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRe
       job.status=job.result?'applying':'transcribing';await store.write(job);return job;
     });
     enqueue(job);res.json({success:true,data:publicJob(job)});
+  }));
+  app.post(`${root}/:id/transcript/refresh`, requireAuth, route(async(req,res)=>{
+    const {dossierId}=await authorize(req);
+    if(!provider.transcribeRecording) throw visitError(503,'Le nouveau service de transcription n’est pas configuré.');
+    const job=await store.locked(dossierId,req.params.id,async()=>{
+      const job=await owned(req,dossierId);
+      if(job.status!=='complete') throw visitError(409,'Attendez la fin du traitement en cours.');
+      if(job.transcriptVersion==='openai-speakers-v1') return job;
+      job.transcriptRefresh=true;job.status='transcribing';job.error=null;job.processingFailures=0;
+      await store.write(job);return job;
+    });
+    enqueue(job);res.json({success:true,data:publicJob(job)});
+  }));
+  app.post(`${root}/:id/speakers`, requireAuth, route(async (req,res)=>{
+    const {dossierId}=await authorize(req);
+    const {speakerId,name,role}=req.body||{};
+    if(typeof speakerId!=='string'||typeof name!=='string'||!name.trim()||name.length>100||
+      !['therapist','other','unknown'].includes(role)) throw visitError(400,'Nom ou rôle d’intervenant invalide.');
+    const job=await store.locked(dossierId,req.params.id,async()=>{
+      const job=await owned(req,dossierId);let found=false;
+      for(const segment of job.transcript) for(const turn of segment.turns||[]) {
+        if(turn.speakerId===speakerId){found=true;turn.speakerName=name.trim();turn.role=role;turn.roleConfirmed=true;}
+      }
+      if(!found) throw visitError(404,'Voix introuvable.');
+      await store.write(job);return job;
+    });
+    res.json({success:true,data:publicJob(job)});
   }));
   const chatActive = new Set();
   app.post(`${root}/:id/chat`, requireAuth, route(async (req, res) => {

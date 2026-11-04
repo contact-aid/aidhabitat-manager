@@ -278,6 +278,7 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
         await _store.save(job);
       }
       if (ConnectivityService().isOffline || !AppConfig.hasRemoteConfig) return;
+      if (!kIsWeb && !ConnectivityService().isUnmetered) return;
       final epoch = AppConfig.sessionEpoch;
       for (final job in jobs.where(
         (j) => ['pending', 'uploading', 'processing'].contains(j['status']),
@@ -549,6 +550,27 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
             as List)
         .map((j) => Map<String, dynamic>.from(j as Map))
         .toList();
+  }
+
+  Future<void> refreshTranscript(String dossierId, String id) async {
+    await _request(
+      'POST',
+      '${Uri.encodeComponent(dossierId)}/$id/transcript/refresh',
+    );
+  }
+
+  Future<void> renameSpeaker(
+    String dossierId,
+    String id,
+    String speakerId,
+    String name,
+    String role,
+  ) async {
+    await _request(
+      'POST',
+      '${Uri.encodeComponent(dossierId)}/$id/speakers',
+      body: {'speakerId': speakerId, 'name': name, 'role': role},
+    );
   }
 
   Future<void> retry(String dossierId, String id) async {

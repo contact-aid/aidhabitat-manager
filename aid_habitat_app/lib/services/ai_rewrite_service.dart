@@ -65,7 +65,7 @@ class AiRewriteService {
       final data = payload is Map ? payload['data'] : null;
       return data is Map &&
           data['ready'] == true &&
-          data['provider'] == 'openrouter';
+          const {'openrouter', 'openai'}.contains(data['provider']);
     } catch (_) {
       return false;
     }

@@ -12,6 +12,7 @@ class ConnectivityService {
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _subscription;
   bool _wasOffline = false;
+  bool isUnmetered = false;
   bool _isCurrentlyOffline = true;
 
   SyncEngine? _syncEngine;
@@ -30,6 +31,9 @@ class ConnectivityService {
 
   Future<void> initialize() async {
     final results = await _connectivity.checkConnectivity();
+    isUnmetered =
+        results.contains(ConnectivityResult.wifi) ||
+        results.contains(ConnectivityResult.ethernet);
     _wasOffline = _isOffline(results);
     _isCurrentlyOffline = _wasOffline;
 
@@ -37,6 +41,9 @@ class ConnectivityService {
   }
 
   void _onChanged(List<ConnectivityResult> results) {
+    isUnmetered =
+        results.contains(ConnectivityResult.wifi) ||
+        results.contains(ConnectivityResult.ethernet);
     final offline = _isOffline(results);
     final changed = offline != _isCurrentlyOffline;
     _isCurrentlyOffline = offline;

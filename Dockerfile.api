@@ -29,6 +29,8 @@
 # Official image: https://github.com/nodejs/docker-node
 FROM node:24-alpine
 
+RUN apk add --no-cache ffmpeg
+
 WORKDIR /app
 
 # Installation des deps en couche séparée pour bénéficier du cache Docker

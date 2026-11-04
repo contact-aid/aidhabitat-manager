@@ -247,3 +247,31 @@ test('structured speaker turns survive a restart alongside backward-compatible t
   assert.deepEqual(recovered.transcript[0].turns,turns);
   assert.equal(recovered.transcript[0].text,'Je suis ergothérapeute.\nAucune chute.');
 });
+
+test('a speaker rename is owner-only and changes every turn without changing the source text',async t=>{
+  const f=await fixture(t);await f.create();
+  const job=await f.store.read('dossier-a',id);
+  job.transcript=[{index:0,text:'Texte source',turns:[{speakerId:'A',text:'Texte source'}]},
+    {index:1,text:'Autre phrase',turns:[{speakerId:'A',text:'Autre phrase'}]}];await f.store.write(job);
+  const body={speakerId:'A',name:'Christelle',role:'therapist'};
+  assert.equal((await f.request(`/${id}/speakers`,{method:'POST',body,user:'other@example.test'})).status,404);
+  const response=await f.request(`/${id}/speakers`,{method:'POST',body});assert.equal(response.status,200);
+  const updated=(await response.json()).data;
+  assert.equal(updated.transcript[0].turns[0].speakerName,'Christelle');
+  assert.equal(updated.transcript[1].turns[0].roleConfirmed,true);
+  assert.equal(updated.transcript[0].text,'Texte source');
+});
+
+test('refresh improves an old transcript without drafting or inserting clinical notes again',async t=>{
+  const f=await fixture(t,{transcribeRecording:async()=>[{index:0,startSeconds:0,text:'Texte nouveau',turns:[]}]});
+  await f.create();const job=await f.store.read('dossier-a',id);
+  job.status='complete';job.transcript=[{index:0,text:'Texte ancien'}];job.result={sections:{'Accessibilité-Notes':'Note à préserver'}};
+  job.notesAppliedAt='2026-10-29T12:00:00Z';await f.store.write(job);
+  assert.equal((await f.request(`/${id}/transcript/refresh`,{method:'POST'})).status,200);
+  const refreshed=await f.processor.step('dossier-a',id);
+  assert.equal(refreshed.transcript[0].text,'Texte nouveau');
+  assert.equal(refreshed.transcriptHistory[0].transcript[0].text,'Texte ancien');
+  assert.equal(refreshed.result.sections['Accessibilité-Notes'],'Note à préserver');
+  assert.equal(refreshed.notesAppliedAt,'2026-10-29T12:00:00Z');assert.equal(refreshed.status,'complete');
+  assert.deepEqual(f.calls,[]);
+});

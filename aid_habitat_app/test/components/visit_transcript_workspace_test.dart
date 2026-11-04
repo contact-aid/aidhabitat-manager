@@ -225,6 +225,64 @@ void main() {
     expect(find.byIcon(Icons.person_outline), findsOneWidget);
   });
 
+  testWidgets(
+    'clean view hides fillers, shows distinct speakers and keeps the original for citations',
+    (tester) async {
+      await mount(
+        tester,
+        data: [
+          {
+            'index': 0,
+            'startSeconds': 0,
+            'text': 'Euh... La porte mesure 78 cm.',
+            'turns': [
+              {
+                'text': 'Euh...',
+                'cleanText': '',
+                'speakerId': 'A',
+                'speakerName': 'Christelle · à confirmer',
+                'role': 'therapist',
+                'speakerNumber': 1,
+              },
+              {
+                'text': 'La porte mesure 78 cm.',
+                'cleanText': 'La porte mesure 78 cm.',
+                'speakerId': 'B',
+                'speakerName': 'Interlocuteur 1',
+                'role': 'other',
+                'speakerNumber': 2,
+              },
+            ],
+          },
+        ],
+        ask: (_) async => {
+          'answer': '78 cm.',
+          'sources': [0],
+          'citations': [
+            {'index': 0, 'quote': 'La porte mesure 78 cm.'},
+          ],
+        },
+      );
+      expect(find.text('Euh...'), findsNothing);
+      expect(find.text('Interlocuteur 1'), findsOneWidget);
+      await tester.tap(find.text('Transcription originale'));
+      await tester.pumpAndSettle();
+      expect(find.text('Euh...'), findsOneWidget);
+      expect(find.text('Christelle · à confirmer'), findsOneWidget);
+      await tester.tap(find.text('Version nettoyée'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('visit-question')),
+        'Quelle largeur ?',
+      );
+      await tester.tap(find.byTooltip('Envoyer la question'));
+      await tester.pumpAndSettle();
+      expect(find.text('Euh...'), findsOneWidget);
+      expect(find.text('Version nettoyée'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('workspace visual preview', (tester) async {
     await mount(
       tester,

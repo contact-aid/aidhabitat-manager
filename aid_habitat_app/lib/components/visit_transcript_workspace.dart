@@ -11,7 +11,10 @@ class VisitTranscriptWorkspace extends StatefulWidget {
     super.key,
     required this.transcript,
     required this.onAsk,
+    this.onRenameSpeaker,
   });
+  final Future<void> Function(String speakerId, String name, String role)?
+  onRenameSpeaker;
   final List<Map<String, dynamic>> transcript;
   final Future<Map<String, dynamic>> Function(String question) onAsk;
   @override
@@ -27,6 +30,7 @@ class _VisitTranscriptWorkspaceState extends State<VisitTranscriptWorkspace> {
   final _messages = <Map<String, dynamic>>[];
   final _highlights = <int, List<String>>{};
   bool _asking = false;
+  bool _showOriginal = false;
   String? _error;
 
   @override
@@ -74,6 +78,7 @@ class _VisitTranscriptWorkspaceState extends State<VisitTranscriptWorkspace> {
         .where((i) => widget.transcript.any((s) => s['index'] == i))
         .toList();
     setState(() {
+      _showOriginal = true;
       _highlights.clear();
       for (final index in indices) {
         final quotes = (message['citations'] as List? ?? [])
@@ -133,7 +138,124 @@ class _VisitTranscriptWorkspaceState extends State<VisitTranscriptWorkspace> {
     ),
   );
 
+  Future<void> _renameSpeaker(Map turn) async {
+    if (widget.onRenameSpeaker == null) return;
+    final name = TextEditingController(
+      text: turn['speakerName'] as String? ?? '',
+    );
+    var role = turn['role'] as String? ?? 'other';
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: const Text('Identifier cette voix'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: name,
+                maxLength: 100,
+                decoration: const InputDecoration(labelText: 'Nom affiché'),
+              ),
+              DropdownButton<String>(
+                value: role,
+                items: const [
+                  DropdownMenuItem(
+                    value: 'therapist',
+                    child: Text('Ergothérapeute'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'other',
+                    child: Text('Usager ou proche'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'unknown',
+                    child: Text('À identifier'),
+                  ),
+                ],
+                onChanged: (value) => setDialog(() => role = value!),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annuler'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (accepted == true && name.text.trim().isNotEmpty) {
+      try {
+        await widget.onRenameSpeaker!(
+          turn['speakerId'] as String,
+          name.text.trim(),
+          role,
+        );
+      } catch (_) {
+        if (mounted) {
+          setState(
+            () => _error = 'L’identification n’a pas pu être enregistrée.',
+          );
+        }
+      }
+    }
+    name.dispose();
+  }
+
   Widget _avatar(Map turn) {
+    if (turn['speakerId'] != null) {
+      final number = turn['speakerNumber'] as int? ?? 1;
+      final palette = [
+        const Color(0xFF76538A),
+        const Color(0xFF27787D),
+        const Color(0xFF986324),
+        const Color(0xFF476AA3),
+      ];
+      final color = palette[(number - 1).abs() % palette.length];
+      return Tooltip(
+        message:
+            '${turn['speakerName'] ?? 'Interlocuteur'} · cliquer pour identifier',
+        child: InkWell(
+          onTap: widget.onRenameSpeaker == null
+              ? null
+              : () => _renameSpeaker(turn),
+          child: CircleAvatar(
+            radius: 19,
+            backgroundColor: color.withValues(alpha: 0.12),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  turn['role'] == 'therapist'
+                      ? Icons.medical_services_outlined
+                      : Icons.person_outline,
+                  color: color,
+                  size: 22,
+                ),
+                Positioned(
+                  right: -7,
+                  bottom: -6,
+                  child: Text(
+                    '$number',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: color,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     final role = turn['role'];
     final voice = turn['voice'];
     final icon = role == 'therapist'
@@ -280,7 +402,16 @@ class _VisitTranscriptWorkspaceState extends State<VisitTranscriptWorkspace> {
                   final index = segment['index'] as int;
                   final selected = _highlights.containsKey(index);
                   final quotes = _highlights[index] ?? [];
-                  final turns = _turns(segment);
+                  final turns = _turns(segment)
+                      .where(
+                        (t) =>
+                            _showOriginal ||
+                            (t['cleanText'] ?? t['text'] ?? '')
+                                .toString()
+                                .trim()
+                                .isNotEmpty,
+                      )
+                      .toList();
                   final preciseMatch = quotes.any(
                     (quote) => turns.any(
                       (turn) => (turn['text'] as String? ?? '').contains(quote),
@@ -316,15 +447,34 @@ class _VisitTranscriptWorkspaceState extends State<VisitTranscriptWorkspace> {
                                 _avatar(turn),
                                 const SizedBox(width: 10),
                                 Expanded(
-                                  child: SelectableText.rich(
-                                    _highlighted(
-                                      turn['text'] as String? ?? '',
-                                      quotes,
-                                    ),
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      height: 1.65,
-                                    ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (turn['speakerName'] != null)
+                                        Text(
+                                          turn['speakerName'] as String,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      SelectableText.rich(
+                                        _highlighted(
+                                          (_showOriginal
+                                                      ? turn['text']
+                                                      : turn['cleanText'] ??
+                                                            turn['text'])
+                                                  as String? ??
+                                              '',
+                                          quotes,
+                                        ),
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          height: 1.65,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],
@@ -338,6 +488,12 @@ class _VisitTranscriptWorkspaceState extends State<VisitTranscriptWorkspace> {
               ),
             ),
           ),
+    trailing: TextButton(
+      onPressed: () => setState(() => _showOriginal = !_showOriginal),
+      child: Text(
+        _showOriginal ? 'Version nettoyée' : 'Transcription originale',
+      ),
+    ),
   );
 
   Widget _chat() => _panel(
