@@ -102,5 +102,5 @@ export async function transcribeVisitParts({bytes,job,directory,model,apiKey,fet
     }
     batch=end;
   }
-  return {segments:result};
+  return {segments:result,referenceVoices:[...references.keys()]};
 }
