@@ -1,3 +1,4 @@
+import { resolveWikiPrimaryTag } from './wikiLibraryTags.mjs';
 import { fitWikiImageDataUrl } from './wikiImage.mjs';
 import { normalizeHousingAccessBaseline, sameHousingSourceVersion } from './housingNullableAccess.mjs';
 import { createJournaledHousingWriter } from './housingWriteJournal.mjs';
@@ -1744,25 +1745,6 @@ const writeWikiLibraryStore = async (store) => {
     version: 1,
     items: asArray(store.items),
   });
-};
-
-const resolveWikiPrimaryTag = ({ title, description, category, tags }) => {
-  const explicitAllowed = asArray(tags).find((tag) => WIKI_FILTER_TAGS.includes(String(tag)));
-  if (explicitAllowed) return String(explicitAllowed);
-
-  const haystack = `${stringValue(title)} ${stringValue(description)} ${stringValue(category)} ${asArray(tags).join(' ')}`.toLowerCase();
-  if (haystack.includes('wc') || haystack.includes('toilette')) return 'WC';
-  if (haystack.includes('barre') || haystack.includes('main courante') || haystack.includes('accoudoir') || haystack.includes('relevage') || haystack.includes('redressement')) return "Barres d'appui";
-  if (haystack.includes('douche') || haystack.includes('baignoire') || haystack.includes('lavabo') || haystack.includes('mitigeur') || haystack.includes('salle de bain')) return 'Salle de bain';
-  if (haystack.includes('cuisine') || haystack.includes('evier') || haystack.includes('plan de travail') || haystack.includes('tiroir')) return 'Cuisine';
-  if (haystack.includes('chambre') || haystack.includes('lit')) return 'Chambre';
-  if (haystack.includes('monte') || haystack.includes('escalier') || haystack.includes('ascenseur') || haystack.includes('plateforme') || haystack.includes('reperage contrastant')) return 'Escaliers & ascenseur';
-  if (haystack.includes('seuil surbaisse') || haystack.includes('seuil plat') || haystack.includes('porte') || haystack.includes('fenetre') || haystack.includes('volet') || haystack.includes('garage') || haystack.includes('portail')) return 'Ouvertures';
-  if (haystack.includes('revetement antiderapant')) return 'Accès extérieurs';
-  if (haystack.includes('rampe') || haystack.includes('pente') || haystack.includes('acces') || haystack.includes('passerelle') || haystack.includes('exterieur')) return 'Accès extérieurs';
-  if (haystack.includes('revetement') || haystack.includes('sol ') || haystack.includes('sol-') || haystack.includes('parquet') || haystack.includes('doublage') || haystack.includes('isole')) return 'Equipements';
-  if (haystack.includes('eclairage') || haystack.includes('lumineux') || haystack.includes('detection') || haystack.includes('vmc') || haystack.includes('poele') || haystack.includes('television') || haystack.includes('penderie')) return 'Equipements';
-  return 'Equipements';
 };
 
 const MAX_WIKI_DESCRIPTIONS = 3;
