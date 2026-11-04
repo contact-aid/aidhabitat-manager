@@ -11,6 +11,12 @@ async function slice({source,output,start,duration,reference=false}) {
     '-t',String(duration),'-vn','-ac','1','-ar','16000',...(reference?['-c:a','pcm_s16le']:['-c:a','aac','-b:a','32k']),output],{timeout:180000,maxBuffer:10000});
   await fs.chmod(output,0o600);return fs.readFile(output);
 }
+async function probeDuration(source) {
+  const result=await exec('ffprobe',['-v','error','-show_entries','format=duration','-of','json',source],{timeout:30000,maxBuffer:10000});
+  const duration=Number(JSON.parse(result.stdout).format?.duration);
+  if(!Number.isFinite(duration)||duration<=0||duration>21600)throw error('Durée audio invalide. Les originaux sont conservés.');
+  return duration;
+}
 export async function readDiarizedResponse(response) {
   if(!response.headers.get('content-type')?.includes('text/event-stream'))return response.json();
   const segments=[];const decoder=new TextDecoder();let pending='';let completed=false;let hasText=false;
@@ -27,7 +33,7 @@ export async function readDiarizedResponse(response) {
       if(type==='error'||event.error)throw error('OpenAI a interrompu la transcription. Les sources sont conservées.');
       if(type==='transcript.text.segment')segments.push(event.segment||event);
       if(type==='transcript.text.done') {
-        if(Array.isArray(event.segments))return {segments:event.segments};
+        if(Array.isArray(event.segments)){if(!event.segments.length&&event.text?.trim())throw error('Les annotations de voix sont manquantes.');return {segments:event.segments};}
         completed=true;break stream;
       }
     }
@@ -36,12 +42,12 @@ export async function readDiarizedResponse(response) {
   if(!completed)throw error('Le flux de transcription est incomplet. Les sources sont conservées.');
   return {segments};
 }
-export async function transcribeVisitParts({bytes,job,directory,model,apiKey,fetchImpl=fetch,onUsage=async()=>{},sliceAudio=slice}) {
-  const duration=job.chunks.reduce((sum,c)=>sum+c.duration,0);
+export async function transcribeVisitParts({bytes,job,directory,model,apiKey,fetchImpl=fetch,onUsage=async()=>{},sliceAudio=slice,probeAudioDuration=probeDuration}) {
+  const source=path.join(directory,'diarization.webm');
+  await fs.writeFile(source,bytes,{mode:0o600});
+  const duration=await probeAudioDuration(source);
   const partSeconds=300;
   const count=Math.max(1,Math.ceil(duration/partSeconds));
-  const source=path.join(directory,'diarization.webm');
-  if(count>1) await fs.writeFile(source,bytes,{mode:0o600});
   const result=[];const references=new Map();let nextVoice=1;
   async function requestPart(index, referenceSnapshot) {
     const offset=index*partSeconds;

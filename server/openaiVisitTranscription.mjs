@@ -32,7 +32,7 @@ export async function prepareVisitAudio({job,directory}) {
     throw fail('La préparation audio a échoué. Les fichiers originaux sont conservés.');
   }
 }
-export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,onUsage=async()=>{},prepareAudio=prepareVisitAudio}) {
+export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,onUsage=async()=>{},prepareAudio=prepareVisitAudio,probeAudioDuration}) {
   return async ({job,directory}) => {
     const apiKey=textProviderConfig(env).apiKey;
     if(!apiKey) throw fail('La clé OpenAI de transcription n’est pas configurée.');
@@ -46,7 +46,7 @@ export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,o
     let raw=await readJson(rawFile);
     if(!raw) {
       const bytes=await prepareAudio({job,directory});
-      raw=await transcribeVisitParts({bytes,job,directory,model,apiKey,fetchImpl,onUsage});
+      raw=await transcribeVisitParts({bytes,job,directory,model,apiKey,fetchImpl,onUsage,probeAudioDuration});
       await checkpoint(rawFile,raw);
 
     }

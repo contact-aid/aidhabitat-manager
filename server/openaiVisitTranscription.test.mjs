@@ -37,7 +37,7 @@ test('whole-visit voice identities, cleanup guards and cached audio survive retr
     {start:61,end:65,speaker:'B',text:'Je ne suis pas tombé.'},
     {start:66,end:68,speaker:'C',text:'Je viens voir mon père.'},
   ];let uploads=0,cleanups=0;
-  const transcribe=createOpenAIRecordingTranscriber({env,prepareAudio:async()=>Buffer.from('synthetic'),
+  const transcribe=createOpenAIRecordingTranscriber({env,prepareAudio:async()=>Buffer.from('synthetic'),probeAudioDuration:async()=>120,
     fetchImpl:async(url,options)=>{
       uploads++;assert.equal(options.body.get('response_format'),'diarized_json');
       assert.equal(options.body.get('chunking_strategy'),'auto');return Response.json({segments});

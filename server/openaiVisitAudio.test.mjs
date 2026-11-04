@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 import {transcribeVisitParts,readDiarizedResponse} from './openaiVisitAudio.mjs';import {cleanVisitTranscript} from './openaiVisitCleanup.mjs';
 test('long recordings are bounded, carry reference voices across parts, and reuse paid checkpoints',async t=>{
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'long-visit-'));t.after(()=>fs.rm(directory,{force:true,recursive:true}));
- let uploads=0;const options={directory,job:{id:'synthetic',dossierId:'synthetic',chunks:[{duration:600}]},bytes:Buffer.from('synthetic'),model:'gpt-4o-transcribe-diarize',apiKey:'synthetic',
+ let uploads=0;const options={directory,job:{id:'synthetic',dossierId:'synthetic',chunks:[{duration:600}]},bytes:Buffer.from('synthetic'),probeAudioDuration:async()=>600,model:'gpt-4o-transcribe-diarize',apiKey:'synthetic',
  sliceAudio:async({output})=>{const b=Buffer.from('synthetic clip');await fs.writeFile(output,b);return b;},
  fetchImpl:async(url,request)=>{
    const index=uploads++;const names=request.body.getAll('known_speaker_names[]');
