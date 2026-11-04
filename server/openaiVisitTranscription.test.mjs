@@ -77,3 +77,14 @@ test('long visit prompts retain original citations and speaker identity without 
   assert.ok(!JSON.stringify(payload).includes('PRIVATE DISPLAY ONLY'));
   assert.equal(JSON.stringify(job),before);
 });
+
+test('joined speaker turns keep exact source line breaks for cross-turn citations',async()=>{
+ const first='Le seuil mesure 12 cm.',second='Aucune chute rapportée.',text=first+'\n'+second;
+ const job={transcript:[{index:0,text,turns:[{speakerId:'voice_1',text:first},{speakerId:'voice_1',text:second}]}]};
+ const provider=createVisitProvider({env,fetchImpl:async(url,options)=>{
+  const payload=JSON.parse(JSON.parse(options.body).messages[1].content);
+  assert.equal(payload.transcript[0].turns[0].text,text);
+  return completion(JSON.stringify({answer:text,sources:[0],citations:[{index:0,quote:text}]}));
+ }});
+ assert.equal((await provider.ask(job,'Seuil et chutes ?')).citations[0].quote,text);
+});
