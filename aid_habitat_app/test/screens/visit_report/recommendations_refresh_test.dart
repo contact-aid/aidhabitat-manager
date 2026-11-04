@@ -50,15 +50,21 @@ class _Repository extends Fake implements DossierRepository {
   }
 }
 
+const _pendingImage =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=';
+
 class _WikiRepository extends Fake implements WikiRepository {
+  _WikiRepository({this.pending = false});
+  final bool pending;
   @override
   Future<List<WikiItem>> fetchAllItems() async => List.generate(
     4,
     (i) => WikiItem(
-      id: 'added-$i',
+      id: pending ? 'local_draft_$i' : 'added-$i',
       title: 'Addition $i',
       description: 'Description $i',
       imageUrl: '',
+      pendingImageDataUrl: pending ? _pendingImage : '',
       category: '',
       tags: const [],
       createdAt: '',
@@ -68,6 +74,35 @@ class _WikiRepository extends Fake implements WikiRepository {
 }
 
 void main() {
+  testWidgets('a pending library photo is visible and copied into the report', (
+    tester,
+  ) async {
+    final repository = _Repository()..items = [];
+    final controller = RecommendationsTabController();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RecommendationsTab(
+            dossier: _Dossier(),
+            repository: repository,
+            wikiRepository: _WikiRepository(pending: true),
+            controller: controller,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ajouter une\npréconisation'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsWidgets);
+    await tester.tap(find.text('Addition 0'));
+    await tester.pumpAndSettle();
+    await controller.flushPendingSave();
+    expect(repository.items.single.wikiItemId, 'local_draft_0');
+    expect(repository.items.single.wikiImageUrl, _pendingImage);
+    expect(find.byType(Image), findsWidgets);
+  });
+
   testWidgets('a delayed refresh cannot remove four additions already saved', (
     tester,
   ) async {

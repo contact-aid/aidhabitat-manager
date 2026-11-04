@@ -410,7 +410,9 @@ class _RecommendationsTabState extends State<RecommendationsTab>
     return current.copyWith(
       wikiItemId: picked.id,
       wikiTitle: picked.title,
-      wikiImageUrl: picked.imageUrl,
+      wikiImageUrl: picked.pendingImageDataUrl.isNotEmpty
+          ? picked.pendingImageDataUrl
+          : picked.imageUrl,
       wikiTag: picked.tags.isNotEmpty ? picked.tags.first : picked.category,
       wikiDescription: wikiDescription,
       // Pré-remplit le titre personnalisé avec le titre wiki uniquement
@@ -1002,9 +1004,12 @@ class _WikiPickerDialogState extends State<WikiPickerDialog> {
               child: Container(
                 width: double.infinity,
                 color: const Color(0xFFF2F4F6),
-                child: it.imageUrl.isNotEmpty
+                child:
+                    (it.imageUrl.isNotEmpty ||
+                        it.pendingImageDataUrl.isNotEmpty)
                     ? CachedRemoteImage(
                         url: resolveMediaUrl(it.imageUrl),
+                        pendingDataUrl: it.pendingImageDataUrl,
                         fit: BoxFit.cover,
                         errorWidget: const Center(
                           child: Icon(

@@ -1,3 +1,4 @@
+import { fitWikiImageDataUrl } from './wikiImage.mjs';
 import { normalizeHousingAccessBaseline, sameHousingSourceVersion } from './housingNullableAccess.mjs';
 import { createJournaledHousingWriter } from './housingWriteJournal.mjs';
 import { joinReportNotePagesText } from './reports/noteText.mjs';
@@ -2091,7 +2092,10 @@ const persistWikiItemInNocodb = async ({ operation, item }) => {
   const primaryTagRecord = primaryTag
     ? normalizedMap.get(primaryTag.toLowerCase())
     : undefined;
-  const payload = wikiNocodbPayload(item, primaryTagRecord);
+  const payload = wikiNocodbPayload({
+    ...item,
+    imageUrl: await fitWikiImageDataUrl(item.imageUrl),
+  }, primaryTagRecord);
   return persistWikiRecord({
     operation,
     itemId: item.id,
@@ -5374,14 +5378,8 @@ app.post('/api/wiki-library', requireAuth, async (req, res, next) => {
     let imageUrl = stringValue(req.body?.imageUrl).trim() || '/wiki-access.svg';
     const imageDataUrl = stringValue(req.body?.imageDataUrl).trim();
     if (imageDataUrl) {
-      // Migration 2026-05-06 — plus de Vercel Blob. L'image est
-      // stockée en base64 directement dans `wiki.photo_base64`
-      // (colonne ajoutée 2026-05-06). On garde le data URL tel quel
-      // côté response — le client Flutter affiche les data URLs
-      // nativement (cf. wiki_screen.dart cached_remote_image).
-      const imagePayload = parseImageDataUrl(imageDataUrl);
-      const mimeType = `image/${imagePayload.extension === 'jpg' ? 'jpeg' : imagePayload.extension}`;
-      imageUrl = `data:${mimeType};base64,${imagePayload.buffer.toString('base64')}`;
+      parseImageDataUrl(imageDataUrl);
+      imageUrl = await fitWikiImageDataUrl(imageDataUrl);
     }
 
     const item = normalizeWikiItemPayload({
@@ -5444,10 +5442,8 @@ app.put('/api/wiki-library/:itemId', requireAuth, async (req, res, next) => {
     let imageUrl = current.imageUrl;
     const imageDataUrl = stringValue(req.body?.imageDataUrl).trim();
     if (imageDataUrl) {
-      // Migration 2026-05-06 — plus de Blob (cf. POST /api/wiki-library).
-      const imagePayload = parseImageDataUrl(imageDataUrl);
-      const mimeType = `image/${imagePayload.extension === 'jpg' ? 'jpeg' : imagePayload.extension}`;
-      imageUrl = `data:${mimeType};base64,${imagePayload.buffer.toString('base64')}`;
+      parseImageDataUrl(imageDataUrl);
+      imageUrl = await fitWikiImageDataUrl(imageDataUrl);
     }
 
     const updated = normalizeWikiItemPayload({
