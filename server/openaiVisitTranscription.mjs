@@ -42,7 +42,7 @@ export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,o
     if(model==='gpt-4o-transcribe-diarize' && Date.now()>=Date.parse('2027-02-26T00:00:00Z')) {
       throw fail('Le modèle de séparation des voix doit être mis à jour. Les sources sont conservées.');
     }
-    const rawFile=path.join(directory,'openai-transcript-raw.json');
+    const rawFile=path.join(directory,'openai-fr-v1-transcript-raw.json');
     let raw=await readJson(rawFile);
     if(!raw) {
       const bytes=await prepareAudio({job,directory});
@@ -51,10 +51,10 @@ export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,o
 
     }
     const speakers=[...new Set(raw.segments.map(s=>s.speaker))];
-    const cleanedFile=path.join(directory,'openai-transcript-clean.json');
+    const cleanedFile=path.join(directory,'openai-fr-v1-transcript-clean.json');
     let cleaned=await readJson(cleanedFile);
     if(!cleaned && raw.segments.length) {
-      cleaned=await cleanVisitTranscript({segments:raw.segments,directory,complete});
+      cleaned=await cleanVisitTranscript({segments:raw.segments,directory,complete,cacheNamespace:'openai-fr-v1-clean'});
       await checkpoint(cleanedFile,cleaned);
     }
     cleaned ??= {turns:[],speakers:[]};
