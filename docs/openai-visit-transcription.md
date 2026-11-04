@@ -21,3 +21,5 @@ Tarifs documentés au 4 novembre 2026 : texte français environ 0,0045 USD/minut
 Les appels de rédaction et de questions envoient les mots originaux, les indices de citation et un répertoire des voix. Ils retirent les métadonnées d’affichage répétées et regroupent les tours consécutifs d’une même voix sans modifier les originaux stockés.
 
 La pré-rédaction et la reformulation professionnelle séparent les thèmes par une ligne vide. La correction orthographique seule conserve les paragraphes existants. Accessibilité regroupe accès et circulation, puis équipements du logement (chauffage/poêle, combustible, volets et manipulation). Le classement indiqué sur les notes manuscrites est pris en compte ; un équipement utilisé sans difficulté reste une information utile.
+
+La pré-rédaction renvoie un objet de thèmes nommés par rubrique. Le serveur assemble les champs non vides avec une ligne vide, indépendamment du profil de style. Accessibilité sépare extérieur/entrée, circulation/niveaux, chauffage, puis ouvrants/manipulation.
