@@ -85,6 +85,9 @@ jobs:
           channel: stable
           cache: false
 
+      - name: Verify sync mutations in Chrome
+        run: flutter test --platform chrome test/services/sync_mutation_test.dart
+
       - name: Build Flutter web
         env:
           AIDHABITAT_API_BASE_URL: ${{ inputs.api_base_url }}

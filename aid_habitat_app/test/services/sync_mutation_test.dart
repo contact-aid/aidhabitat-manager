@@ -5,6 +5,24 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'mutation identifiers work in browsers and remain distinct for rapid edits',
+    () {
+      final ids = List.generate(128, (_) => newSyncWriteId());
+      expect(ids.toSet(), hasLength(ids.length));
+      for (final id in ids) {
+        expect(
+          id,
+          matches(
+            RegExp(
+              r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+            ),
+          ),
+        );
+      }
+    },
+  );
+
+  test(
     'latest occupant pension preserves independent server health and unknown properties',
     () {
       final merged = mergeLatestPatientValues(

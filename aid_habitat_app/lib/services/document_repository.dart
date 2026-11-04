@@ -21,6 +21,7 @@ import 'offline_vault.dart';
 import 'pdf_ink_geometry.dart';
 import 'document_storage_path.dart';
 import 'sync_engine.dart';
+import 'sync_mutation.dart';
 
 @visibleForTesting
 String resolveReplacementDocumentPath({
@@ -1383,8 +1384,7 @@ class DocumentRepository {
           'patientLocalId': patientId,
           'categoryTag': tag,
           'orderedDocumentIds': ids,
-          'mutationId':
-              '${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}',
+          'mutationId': newSyncWriteId(),
           'modifiedAt': now,
           'initializeOnly': initializeOnly,
         }),
