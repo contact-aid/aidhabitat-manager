@@ -1641,11 +1641,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       ReportGenerationService.instance.notifyProgress('Génération du rapport…');
       final patientId = _dossier.patient.id;
       final reportLocalId = 'doc_report_${_dossier.id}';
-      await _dataService.hideObsoleteReportDocuments(
-        patientId: patientId,
-        dossierId: _dossier.id,
-        keepLocalId: reportLocalId,
-      );
 
       // 3. Génération online : on télécharge le PDF synchroneously
       // pour pouvoir l'afficher tout de suite dans Documents.
@@ -1750,6 +1745,13 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           localId: reportLocalId,
         );
       }
+      // Only retire old reports once the replacement has been generated and
+      // stored. Cleanup writes must not enter the pre-generation sync barrier.
+      await _dataService.hideObsoleteReportDocuments(
+        patientId: patientId,
+        dossierId: _dossier.id,
+        keepLocalId: reportLocalId,
+      );
       // ignore: avoid_print
       print(
         '[report] document local_id=${inserted.id} créé '
