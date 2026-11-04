@@ -4828,22 +4828,18 @@ class DossierRepository {
         limit: 1,
       );
 
-      // MERGE remote + drafts locaux (items sans wikiItemId, non pushés car
-      // le serveur les refuse). Sans ce merge, un draft en cours de saisie
-      // serait perdu au prochain refresh après le push des items complets.
-      final List<Map<String, dynamic>> localDrafts = [];
-      if (existing.isNotEmpty) {
-        final raw = existing.first['items_json'] as String? ?? '[]';
-        try {
-          final decoded = (jsonDecode(raw) as List)
-              .cast<Map<String, dynamic>>();
-          for (final item in decoded) {
-            final wikiId = (item['wikiItemId'] as String?) ?? '';
-            if (wikiId.trim().isEmpty) localDrafts.add(item);
-          }
-        } catch (_) {}
-      }
-      final merged = [...remoteItems, ...localDrafts];
+      // The published snapshot excludes local wiki creations until their
+      // acknowledgement. Preserve those recommendations as well as empty drafts.
+      final localItems = existing.isEmpty
+          ? <Map<String, dynamic>>[]
+          : (jsonDecode(existing.first['items_json'] as String) as List)
+                .map((item) => (item as Map).cast<String, dynamic>())
+                .toList();
+      final merged = mergePublishedRecommendationsWithLocalDrafts(
+        remotePublishedItems: remoteItems,
+        localItems: localItems,
+      );
+      final hasLocalDrafts = merged.length > remoteItems.length;
 
       final now = DateTime.now().toIso8601String();
       final data = <String, dynamic>{
@@ -4854,9 +4850,9 @@ class DossierRepository {
         'updated_at': now,
         // Si on a des drafts, on garde pendingSync pour que le prochain
         // refresh ne tente pas de les écraser. Sinon synced.
-        'sync_state': localDrafts.isEmpty
-            ? SyncState.synced.name
-            : SyncState.pendingSync.name,
+        'sync_state': hasLocalDrafts
+            ? SyncState.pendingSync.name
+            : SyncState.synced.name,
       };
       if (existing.isEmpty) {
         data['local_id'] = 'rec_${dossierId}_${_uuid()}';

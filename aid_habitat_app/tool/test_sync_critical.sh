@@ -14,6 +14,7 @@ bash "$script_dir/test_safely.sh" \
   test/screens/sanitary_multiple_rooms_ui_test.dart \
   test/screens/sanitary_level_refresh_test.dart \
   test/screens/visit_report/recommendations_refresh_test.dart \
+  test/services/recommendations_pending_wiki_refresh_test.dart \
   test/typography_layout_test.dart \
   test/services/media_auth_origin_test.dart \
   test/components/plan_web_viewport_test.dart \
