@@ -14,3 +14,5 @@ Le serveur sélectionne explicitement OpenAI avec `AI_PROVIDER=openai`. Il lit l
 Le profil rédactionnel est sélectionné par auteur et seulement si `sourceReview.authorVerified` vaut true. Il contient des règles et exemples de style, pas des faits sur le bénéficiaire actuel. Les données de visite sont classées en faits sourcés puis rédigées par rubrique, sans compléter les informations absentes.
 
 Tarifs documentés au 4 novembre 2026 : transcription avec diarisation environ 0,006 USD/minute ; Luna 0,10 USD/M tokens entrants et 0,50 USD/M tokens sortants. Les crédits disponibles dépendent du projet OpenAI et ne sont pas présumés illimités. Les métriques restent dans `visit-assistant-usage.jsonl`, sans contenu clinique.
+
+Les appels de rédaction et de questions envoient les mots originaux, les indices de citation et un répertoire des voix. Ils retirent les métadonnées d’affichage répétées et regroupent les tours consécutifs d’une même voix sans modifier les originaux stockés.

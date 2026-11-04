@@ -60,3 +60,20 @@ test('whole-visit voice identities, cleanup guards and cached audio survive retr
   assert.equal(result[1].text,'Je ne suis pas tombé.\nJe viens voir mon père.');
   assert.deepEqual(await transcribe({job,directory}),result);assert.equal(uploads,1);assert.equal(cleanups,2);
 });
+
+test('long visit prompts retain original citations and speaker identity without repeated display metadata',async()=>{
+  const source='Aucune chute. Le seuil mesure 12 cm.';
+  const turns=Array.from({length:500},()=>({speakerId:'voice_1',speakerName:'Christelle',role:'therapist',roleConfirmed:true,
+    text:source,cleanText:'PRIVATE DISPLAY ONLY',voice:'unknown',speakerNumber:1,startSeconds:5,endSeconds:9}));
+  const job={transcript:[{index:0,startSeconds:0,text:source,turns}]};const before=JSON.stringify(job);let payload;
+  const provider=createVisitProvider({env,fetchImpl:async(url,options)=>{
+    payload=JSON.parse(JSON.parse(options.body).messages[1].content);
+    return completion(JSON.stringify({answer:source,sources:[0],citations:[{index:0,quote:source}]}));
+  }});
+  assert.equal((await provider.ask(job,'Quel seuil ?')).citations[0].quote,source);
+  assert.equal(payload.transcript[0].text,source);
+  assert.deepEqual(payload.speakers,[{id:'voice_1',name:'Christelle',role:'therapist',roleConfirmed:true}]);
+  assert.ok(JSON.stringify(payload).length<before.length/3);
+  assert.ok(!JSON.stringify(payload).includes('PRIVATE DISPLAY ONLY'));
+  assert.equal(JSON.stringify(job),before);
+});
