@@ -40,6 +40,7 @@ import {
 } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import sharp from 'sharp';
+import { optimizeRecommendationImage } from './recommendationImage.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1534,7 +1535,7 @@ async function embedImageAuto(pdfDoc, buffer, mimeHint) {
  */
 async function setImageInField(
   pdfDoc, form, fieldName, descriptor, fetchImageBytes, stats,
-  { fit = 'contain' } = {},
+  { fit = 'contain', optimizeRecommendation = false } = {},
 ) {
   if (!fieldName || !descriptor || !fetchImageBytes) return false;
   let field;
@@ -1553,7 +1554,10 @@ async function setImageInField(
     stats.imagesMissingValue += 1;
     return false;
   }
-  const pdfImage = await embedImageAuto(pdfDoc, fetched.buffer, fetched.mimeType);
+  const image = optimizeRecommendation
+    ? await optimizeRecommendationImage(fetched, field.acroField.getWidgets().map(widget => widget.getRectangle()))
+    : fetched;
+  const pdfImage = await embedImageAuto(pdfDoc, image.buffer, image.mimeType);
   if (!pdfImage) {
     stats.imagesFailedEmbed += 1;
     return false;
@@ -3609,6 +3613,7 @@ export async function generateVisitReport({
         pdfDoc, form, imageFieldName,
         { kind: 'url', url: wikiUrl },
         fetchImageBytes, stats,
+        { optimizeRecommendation: true },
       ));
     }
   }
