@@ -7,10 +7,10 @@ export function textProviderConfig(env = process.env) {
     model: openai ? env.OPENAI_TEXT_MODEL || 'gpt-6-luna' : OPENROUTER_TEXT_MODEL,
     url: openai ? 'https://api.openai.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions' };
 }
-export function completionBody(config, {messages, model = config.model, maxTokens = 12000, responseFormat}) {
+export function completionBody(config, {messages, model = config.model, maxTokens = 12000, responseFormat, reasoningEffort = 'none'}) {
   return {model, messages, stream:false,
     ...(config.provider === 'openai'
-      ? {store:false, max_completion_tokens:maxTokens, reasoning_effort:'none'}
+      ? {store:false, max_completion_tokens:maxTokens, reasoning_effort:reasoningEffort}
       : {temperature:0.1, max_tokens:maxTokens, reasoning:{enabled:false}, provider:TEXT_PROVIDER_POLICY}),
     ...(responseFormat ? {response_format:responseFormat} : {})};
 }
