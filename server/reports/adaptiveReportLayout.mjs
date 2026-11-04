@@ -157,15 +157,35 @@ export async function drawBeneficiaryOccupants(pdfDoc, page, patient, view, { pr
   for (const [index, occupant] of occupants.entries()) {
     const iso = String(occupant.birthDate ?? '');
     const date = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-    const values = [`Occupant ${index + 1}`, String(occupant.lastName ?? '').trim().toUpperCase(), occupant.firstName ?? '', date ? `${date[3]}/${date[2]}/${date[1]}` : iso,
+    const maidenName = String(occupant.maidenName ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const lastName = String(occupant.lastName ?? '').trim().toUpperCase();
+    const birthNameLine = maidenName ? `${occupant.gender === 'Homme' ? 'né' : 'née'} ${maidenName}` : '';
+    const values = [`Occupant ${index + 1}`, birthNameLine ? `${lastName}\n${birthNameLine}` : lastName, occupant.firstName ?? '', date ? `${date[3]}/${date[2]}/${date[1]}` : iso,
       printableMobilityAidsForReport(occupant.dependenceTxt, regular)];
     const cells = values.map((value, i) => wrapReportLines(value, regular, 9, columns[i].width));
     const rowLines = Math.min(2, Math.max(...cells.map(cell => cell.length)));
     if (cells.some((cell, col) => cell.length > 2 && !(index === 0 && col === 4 && primaryMobilityAppendix))) details.push(values.join(' | '));
     for (const [i, lines] of cells.entries()) {
-      for (const [line, value] of (lines.length > 2 ? [lines[0], index === 0 && i === 4 && primaryMobilityAppendix ? 'Voir annexe mobilité' : 'Voir suite'] : lines).entries()) if (value) page.drawText(value, {
-        x: columns[i].x + (i === 0 ? 0 : (columns[i].width - regular.widthOfTextAtSize(value, 9)) / 2), y: y - line * 11, size: 9, font: i === 0 ? bold : regular,
-      });
+      let displayed = lines.length > 2 ? [lines[0], index === 0 && i === 4 && primaryMobilityAppendix ? 'Voir annexe mobilité' : 'Voir suite'] : lines;
+      if (i === 1 && birthNameLine) {
+        // Reserve one line for each name. Long names are kept in full in
+        // the continuation above; no row may collide with the next occupant
+        // or the fixed administrative block, even with three occupants.
+        displayed = [lastName, birthNameLine].map((text, line) => {
+          const size = line === 1 ? 8 : 9;
+          const wrapped = wrapReportLines(text, regular, size, columns[i].width);
+          if (wrapped.length <= 1) return wrapped[0];
+          let first = wrapped[0];
+          while (regular.widthOfTextAtSize(`${first}…`, size) > columns[i].width) first = first.slice(0, -1);
+          return `${first.trimEnd()}…`;
+        });
+      }
+      for (const [line, value] of displayed.entries()) if (value) {
+        const size = i === 1 && birthNameLine && line === 1 ? 8 : 9;
+        page.drawText(value, {
+          x: columns[i].x + (i === 0 ? 0 : (columns[i].width - regular.widthOfTextAtSize(value, size)) / 2), y: y - line * 11, size, font: i === 0 ? bold : regular,
+        });
+      }
     }
     y -= rowLines * 11 + 8;
 
