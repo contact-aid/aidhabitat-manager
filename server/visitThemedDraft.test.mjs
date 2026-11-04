@@ -29,3 +29,12 @@ test('manual professional reformulation preserves paragraph breaks and protected
  const result=await rewriteNote({text,context:'housing',config:getRewriteConfig(env),fetchImpl:async()=>completion(text)});
  assert.equal(result.text,text);
 });
+
+test('structured themes are ordered and separated even when model fields arrive in a different order',async()=>{
+ const sections={beneficiary:{profil:'',foyer:''},environment:{logement:'',entourageEtAides:''},autonomy:{sante:'',mobilite:'',activitesQuotidiennes:''},
+  access:{ouvrantsEtManipulation:'Les volets sont manipulés sans difficulté.',chauffage:'Poêle à bois utilisant du bois compressé.',circulationEtNiveaux:'',exterieurEtEntree:'Sort à pied par la porte-fenêtre.'},
+  sanitary:{salleDeBainEquipements:'',salleDeBainUtilisation:'',wcEquipements:'',wcUtilisation:''},project:{souhaits:'',projet:''},summary:{preconisations:''}};
+ const provider=createVisitProvider({env,fetchImpl:async()=>completion({sections,warnings:[]})});
+ const result=await provider.draft({context:{existingText:{}},facts:{facts:[],warnings:[]}},null);
+ assert.equal(result.sections['Accessibilité-Notes'],'Sort à pied par la porte-fenêtre.\n\nPoêle à bois utilisant du bois compressé.\n\nLes volets sont manipulés sans difficulté.');
+});
