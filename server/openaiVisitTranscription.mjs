@@ -1,5 +1,4 @@
 import {transcribeFrenchChunks,arrangeFrenchTranscript} from './openaiFrenchTranscript.mjs';
-import { cleanVisitTranscript } from './openaiVisitCleanup.mjs';
 import { transcribeVisitParts } from './openaiVisitAudio.mjs';
 import { textProviderConfig } from './ai/provider.mjs';
 import fs from 'node:fs/promises';
@@ -33,18 +32,15 @@ export async function prepareVisitAudio({job,directory}) {
     throw fail('La préparation audio a échoué. Les fichiers originaux sont conservés.');
   }
 }
-export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,onUsage=async()=>{},prepareAudio=prepareVisitAudio,probeAudioDuration,legacyDiarizationOnly=false}) {
+export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,onUsage=async()=>{},prepareAudio=prepareVisitAudio,probeAudioDuration}) {
   return async ({job,directory}) => {
     const apiKey=textProviderConfig(env).apiKey;
     if(!apiKey) throw fail('La clé OpenAI de transcription n’est pas configurée.');
     const model=env.OPENAI_VISIT_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe-diarize';
     // This specialized capability currently has no non-deprecated replacement.
-    // Keep the model configurable; fail closed when the announced sunset arrives.
+    // Keep it configurable; French text remains usable if voice analysis fails.
     const voiceModelExpired=model==='gpt-4o-transcribe-diarize' && Date.now()>=Date.parse('2027-02-26T00:00:00Z');
-    if(legacyDiarizationOnly && voiceModelExpired) {
-      throw fail('Le modèle de séparation des voix doit être mis à jour. Les sources sont conservées.');
-    }
-    const french=legacyDiarizationOnly?null:await transcribeFrenchChunks({job,directory,apiKey,fetchImpl,onUsage,model:env.OPENAI_VISIT_TEXT_TRANSCRIPTION_MODEL||'gpt-transcribe'});
+    const french=await transcribeFrenchChunks({job,directory,apiKey,fetchImpl,onUsage,model:env.OPENAI_VISIT_TEXT_TRANSCRIPTION_MODEL||'gpt-transcribe'});
     const rawFile=path.join(directory,'openai-fr-v1-transcript-raw.json');
     let raw;
     try {
@@ -57,11 +53,9 @@ export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,o
 
     }
     } catch(error) {
-      if(legacyDiarizationOnly)throw error;
       raw={segments:[],referenceVoices:[]};
       await Promise.resolve().then(()=>onUsage({task:'voice_analysis_unavailable',recordingId:job.id,dossierId:job.dossierId,at:new Date().toISOString()})).catch(()=>{});
     }
-    if(french) {
       let references=raw.referenceVoices;
       if(!references) {
         const names=new Set();
@@ -85,32 +79,5 @@ export function createOpenAIRecordingTranscriber({env,fetchImpl=fetch,complete,o
               speakerName:role==='therapist'?`${job.author||'Ergothérapeute'} · à confirmer`:arranged.labels.get(turn.speaker)}:
               {speakerName:'Voix à identifier'})};
         })}));
-    }
-    const speakers=[...new Set(raw.segments.map(s=>s.speaker))];
-    const cleanedFile=path.join(directory,'openai-fr-v1-transcript-clean.json');
-    let cleaned=await readJson(cleanedFile);
-    if(!cleaned && raw.segments.length) {
-      cleaned=await cleanVisitTranscript({segments:raw.segments,directory,complete,cacheNamespace:'openai-fr-v1-clean'});
-      await checkpoint(cleanedFile,cleaned);
-    }
-    cleaned ??= {turns:[],speakers:[]};
-    const texts=new Map(cleaned.turns.map(t=>[t.id,t.cleanText]));
-    const roles=new Map(cleaned.speakers.map(s=>[s.id,s.role]));
-    const labels=new Map();let participant=0;
-    for(const speaker of speakers) {
-      const role=roles.get(speaker)||'unknown';
-      labels.set(speaker,role==='therapist' ? `${job.author||'Ergothérapeute'} · à confirmer` : `Interlocuteur ${++participant}`);
-    }
-    let start=0;
-    return job.chunks.map((chunk,index)=>{
-      const from=start;start+=chunk.duration;
-      const turns=raw.segments.map((s,id)=>({...s,id})).filter(s=>s.start>=from && (s.start<start||index===job.chunks.length-1)).map(s=>({
-        text:s.text,cleanText:texts.get(s.id)??s.text,speakerId:s.speaker,
-        speakerName:labels.get(s.speaker),role:roles.get(s.speaker)==='therapist'?'therapist':'other',
-        roleConfirmed:false,voice:'unknown',speakerNumber:speakers.indexOf(s.speaker)+1,
-        startSeconds:s.start,endSeconds:s.end,
-      }));
-      return {index,startSeconds:from,text:turns.map(t=>t.text).join('\n'),turns};
-    });
   };
 }
