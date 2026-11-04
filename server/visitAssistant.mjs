@@ -121,7 +121,7 @@ function visitTextSources(job) {
       if(!turn.speakerId)continue;
       speakers.set(turn.speakerId,{id:turn.speakerId,name:turn.speakerName,role:turn.role,roleConfirmed:turn.roleConfirmed===true});
       const previous=turns.at(-1);
-      if(previous?.speakerId===turn.speakerId)previous.text+=' '+turn.text;
+      if(previous?.speakerId===turn.speakerId)previous.text+='\n'+turn.text;
       else turns.push({speakerId:turn.speakerId,text:turn.text});
     }
     if(turns.length)source.turns=turns;
