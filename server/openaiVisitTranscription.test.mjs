@@ -46,7 +46,7 @@ test('whole-visit voice identities, cleanup guards and cached audio survive retr
       if(cleanups===1) throw Error('synthetic interrupted cleanup');
       return JSON.stringify({turns:[{id:0,cleanText:'Le seuil est adapté.'},{id:1,cleanText:''},
         {id:2,cleanText:'Je suis tombé.'},{id:3,cleanText:'Je viens voir mon père.'}],
-        speakers:[{id:'A',role:'therapist'},{id:'B',role:'participant'},{id:'C',role:'participant'}]});
+        speakers:[{id:'voice_1',role:'therapist'},{id:'voice_2',role:'participant'},{id:'voice_3',role:'participant'}]});
     }});
   await assert.rejects(transcribe({job,directory}),/interrupted/);
   const result=await transcribe({job,directory});
