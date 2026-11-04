@@ -117,8 +117,7 @@ class ReportGenerationService {
       ReportGenerationService._internal();
   factory ReportGenerationService() => instance;
 
-  final _controller =
-      StreamController<ReportGenerationState>.broadcast();
+  final _controller = StreamController<ReportGenerationState>.broadcast();
   ReportGenerationState _state = const ReportGenerationState();
 
   /// Stream de l'état. Les abonnés reçoivent l'état courant à
@@ -130,11 +129,14 @@ class ReportGenerationService {
   /// n'ont pas encore d'event Stream à l'écran.
   ReportGenerationState get currentState => _state;
 
-  /// Marque le début d'une génération. Émet l'état mis à jour.
-  void notifyStart({
-    required String dossierId,
-    required String patientLabel,
-  }) {
+  /// Updates the visible preparation or generation phase.
+  void notifyProgress(String label) {
+    if (!_state.inProgress) return;
+    _state = _state.copyWith(progressLabel: label);
+    _controller.add(_state);
+  }
+
+  void notifyStart({required String dossierId, required String patientLabel}) {
     _state = _state.copyWith(
       inProgress: true,
       progressLabel: 'Génération du rapport $patientLabel...',

@@ -22,6 +22,7 @@ import 'retirement_funds_repository.dart';
 import 'sync_engine.dart';
 import 'sync_repository.dart';
 import 'wiki_repository.dart';
+import 'visit_report_preparation.dart';
 
 class DataService {
   DataService._internal()
@@ -721,38 +722,56 @@ class DataService {
       final dossier = await _dossierRepository.fetchDossierById(dossierId);
       patientId = dossier?.patient.id;
     } catch (_) {
-      // Pas bloquant : on génère sans inline si la résolution échoue.
+      // The report guard below requires a resolved patient scope.
+    }
+
+    if (patientId == null || patientId.isEmpty) {
+      throw StateError(
+        'Le dossier doit être chargé avant de générer le rapport.',
+      );
+    }
+    if (await countPendingReportPrerequisites(
+              dossierId: dossierId,
+              patientId: patientId,
+            ) >
+            0 ||
+        await countConflictingReportPrerequisites(
+              dossierId: dossierId,
+              patientId: patientId,
+            ) >
+            0) {
+      throw StateError(
+        'Des modifications attendent encore leur confirmation sur le serveur.',
+      );
     }
 
     var inlineDocs = const <InlineDocumentBytes>[];
     var inlineDocOrder = const <InlineDocumentOrder>[];
     var inlinePlans = const <InlinePlanBytes>[];
-    if (patientId != null && patientId.isNotEmpty) {
-      try {
-        inlineDocs = await _documentRepository.fetchVisitReportInlineBytes(
-          patientId,
-        );
-      } catch (e) {
-        // ignore: avoid_print
-        print('[report] inline docs lookup failed: $e');
-      }
-      try {
-        inlineDocOrder = await _documentRepository.fetchVisitReportPhotoOrder(
-          patientId,
-        );
-      } catch (e) {
-        // ignore: avoid_print
-        print('[report] inline doc order lookup failed: $e');
-      }
-      try {
-        inlinePlans = await _noteRepository.fetchPlanReportInlineBytes(
-          patientId,
-          dossierId: dossierId,
-        );
-      } catch (e) {
-        // ignore: avoid_print
-        print('[report] inline plans lookup failed: $e');
-      }
+    try {
+      inlineDocs = await _documentRepository.fetchVisitReportInlineBytes(
+        patientId,
+      );
+    } catch (e) {
+      // ignore: avoid_print
+      print('[report] inline docs lookup failed: $e');
+    }
+    try {
+      inlineDocOrder = await _documentRepository.fetchVisitReportPhotoOrder(
+        patientId,
+      );
+    } catch (e) {
+      // ignore: avoid_print
+      print('[report] inline doc order lookup failed: $e');
+    }
+    try {
+      inlinePlans = await _noteRepository.fetchPlanReportInlineBytes(
+        patientId,
+        dossierId: dossierId,
+      );
+    } catch (e) {
+      // ignore: avoid_print
+      print('[report] inline plans lookup failed: $e');
     }
 
     if (inlineDocs.isNotEmpty || inlinePlans.isNotEmpty) {
@@ -1339,6 +1358,37 @@ class DataService {
 
   Future<SyncRunResult> runSync() async {
     return _nocodbSyncService.pushPendingChanges();
+  }
+
+  Future<void> synchronizeVisitPhotoOrder(String patientId) async {
+    await waitForVisitReportSync(
+      push: () async {
+        await runSync();
+      },
+      pending: () =>
+          _syncRepository.countUnconfirmedVisitPhotoOrders(patientId),
+      conflicts: () async => 0,
+    );
+  }
+
+  Future<void> synchronizeVisitReport({
+    required String dossierId,
+    required String patientId,
+  }) async {
+    await VisitReportEdits.flush(patientId);
+    await waitForVisitReportSync(
+      push: () async {
+        await runSync();
+      },
+      pending: () => countPendingReportPrerequisites(
+        dossierId: dossierId,
+        patientId: patientId,
+      ),
+      conflicts: () => countConflictingReportPrerequisites(
+        dossierId: dossierId,
+        patientId: patientId,
+      ),
+    );
   }
 
   Future<int> countPendingSyncOperations() {

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:aid_habitat_app/services/visit_report_preparation.dart';
 import 'package:aid_habitat_app/models/types.dart';
 import 'package:aid_habitat_app/models/visit_report_categories.dart';
 import 'package:aid_habitat_app/screens/visit_report/photos_tab.dart';
@@ -31,7 +33,14 @@ class _Photos extends Fake implements DataService {
         ),
       );
   List<DocItem> photos;
+  Completer<void>? saveGate;
   final saved = <List<String>>[];
+  final published = <String>[];
+  @override
+  Future<void> synchronizeVisitPhotoOrder(String patientId) async {
+    published.add(patientId);
+  }
+
   @override
   Future<List<DocItem>> fetchDocuments(String patientId) async => photos;
   @override
@@ -41,6 +50,7 @@ class _Photos extends Fake implements DataService {
     required List<String> orderedDocumentIds,
   }) async {
     saved.add(List.of(orderedDocumentIds));
+    await saveGate?.future;
     photos = [
       for (var i = 0; i < orderedDocumentIds.length; i++)
         photos
@@ -52,6 +62,8 @@ class _Photos extends Fake implements DataService {
 
 void main() {
   for (final (tag, count, targetIndex, accept) in [
+    (kPhotoTagAccessibilite, 5, 4, true),
+    (kPhotoTagSanitaires, 5, 3, true),
     (kPhotoTagPlanAvant, 8, 2, true),
     (kPhotoTagPlanAvant, 8, 7, true),
     (kPhotoTagPlanApres, 3, 2, true),
@@ -97,6 +109,7 @@ void main() {
       await tester.pumpAndSettle();
       if (accept) {
         expect(service.saved, hasLength(1));
+        expect(service.published, ['synthetic-patient']);
         final expected = List.generate(count, (i) => 'plan-$i');
         expected.insert(targetIndex, expected.removeAt(0));
         expect(service.saved.single, expected);
@@ -110,4 +123,48 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
   }
+  testWidgets(
+    'report preparation waits for the dropped photo order to be stored',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final service = _Photos(kPhotoTagSanitaires, 3)
+        ..saveGate = Completer<void>();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PhotosTab(dossier: _Dossier(), dataService: service),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final first = find.byKey(const ValueKey('photo_position_plan-0'));
+      final target = find.byKey(const ValueKey('photo_position_plan-2'));
+      final drag = await tester.startGesture(
+        tester.getTopLeft(first) + const Offset(20, 20),
+        kind: PointerDeviceKind.mouse,
+      );
+      await drag.moveBy(const Offset(5, 0));
+      await tester.pump();
+      await drag.moveTo(tester.getTopLeft(target) + const Offset(20, 20));
+      await tester.pumpAndSettle();
+      await drag.moveBy(const Offset(1, 0));
+      await tester.pump();
+      await drag.up();
+      await tester.pump();
+      expect(service.saved, hasLength(1));
+      var prepared = false;
+      final flush = VisitReportEdits.flush(
+        'synthetic-patient',
+      ).then((_) => prepared = true);
+      await tester.pump();
+      expect(prepared, isFalse);
+      service.saveGate!.complete();
+      await tester.pumpAndSettle();
+      await flush;
+      expect(prepared, isTrue);
+      expect(service.saved.single, ['plan-1', 'plan-2', 'plan-0']);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

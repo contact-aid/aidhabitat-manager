@@ -212,7 +212,12 @@ void main() {
             expect(body['mutationId'], isNotEmpty);
             writes++;
             return http.Response(
-              '{"success":true,"data":{"order":{"revision":5}}}',
+              jsonEncode({
+                'success': true,
+                'data': {
+                  'order': {...body, 'revision': 5},
+                },
+              }),
               200,
             );
           }),

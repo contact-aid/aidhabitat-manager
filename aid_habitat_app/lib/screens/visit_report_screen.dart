@@ -1,3 +1,4 @@
+import '../services/visit_report_preparation.dart';
 import '../services/visit_assistant_service.dart';
 import '../components/visit_recording_button.dart';
 import 'visit_report/transcript_tab.dart';
@@ -1467,6 +1468,7 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       await _bathroomController.flushPendingSave();
       await _wcController.flushPendingSave();
       await _recommendationsController.flushPendingSave();
+      await VisitReportEdits.flush(_dossier.patient.id);
       await _refreshDossier();
     } catch (error) {
       if (mounted) {
@@ -1548,7 +1550,13 @@ class _VisitReportScreenState extends State<VisitReportScreen>
       // déclenchera la génération du rapport. Garantit que le rapport
       // contient toujours les dernières données saisies.
       try {
-        final syncResult = await _dataService.runSync();
+        ReportGenerationService.instance.notifyProgress(
+          'Enregistrement des modifications sur le serveur…',
+        );
+        await _dataService.synchronizeVisitReport(
+          dossierId: _dossier.id,
+          patientId: _dossier.patient.id,
+        );
         final patientId = _dossier.patient.id;
         final pendingAfterSync = await _dataService
             .countPendingReportPrerequisites(
@@ -1560,15 +1568,6 @@ class _VisitReportScreenState extends State<VisitReportScreen>
               dossierId: _dossier.id,
               patientId: patientId,
             );
-        // ignore: avoid_print
-        print(
-          '[report] runSync : pushed=${syncResult.pushedOperations} '
-          'failed=${syncResult.failedOperations} '
-          'deferred=${syncResult.deferredOperations} '
-          'conflicts=${syncResult.conflictCount} '
-          'pendingAfter=$pendingAfterSync '
-          'msg="${syncResult.message}"',
-        );
         if (conflictingAfterSync > 0) {
           // Conflits = action utilisateur requise (résolution manuelle).
           // Pas un cas pour la queue offline — on remonte l'erreur.
@@ -1607,6 +1606,17 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           );
           return;
         }
+      } on StateError catch (error) {
+        _showReportError(error.message.toString());
+        ReportGenerationService.instance.notifyFailure(
+          ReportGenerationFailure(
+            dossierId: _dossier.id,
+            patientLabel: patientLabel,
+            message: error.message.toString(),
+            occurredAt: DateTime.now(),
+          ),
+        );
+        return;
       } catch (error) {
         // runSync a levé : très probablement perte de connectivité
         // entre le check `isOffline` initial et le push. Queue.
@@ -1628,13 +1638,9 @@ class _VisitReportScreenState extends State<VisitReportScreen>
         return;
       }
 
+      ReportGenerationService.instance.notifyProgress('Génération du rapport…');
       final patientId = _dossier.patient.id;
       final reportLocalId = 'doc_report_${_dossier.id}';
-      await _dataService.hideObsoleteReportDocuments(
-        patientId: patientId,
-        dossierId: _dossier.id,
-        keepLocalId: reportLocalId,
-      );
 
       // 3. Génération online : on télécharge le PDF synchroneously
       // pour pouvoir l'afficher tout de suite dans Documents.
@@ -1739,6 +1745,13 @@ class _VisitReportScreenState extends State<VisitReportScreen>
           localId: reportLocalId,
         );
       }
+      // Only retire old reports once the replacement has been generated and
+      // stored. Cleanup writes must not enter the pre-generation sync barrier.
+      await _dataService.hideObsoleteReportDocuments(
+        patientId: patientId,
+        dossierId: _dossier.id,
+        keepLocalId: reportLocalId,
+      );
       // ignore: avoid_print
       print(
         '[report] document local_id=${inserted.id} créé '
@@ -3003,7 +3016,12 @@ class _VisitReportScreenState extends State<VisitReportScreen>
             const SizedBox(height: 12),
             _buildTabBar(),
             const SizedBox(height: 16),
-            Expanded(child: tabView),
+            Expanded(
+              child: AbsorbPointer(
+                absorbing: _isPreparingReport || _isGeneratingReport,
+                child: tabView,
+              ),
+            ),
           ],
         ),
       ),

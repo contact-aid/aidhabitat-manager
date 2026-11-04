@@ -1,3 +1,4 @@
+import '../../services/visit_report_preparation.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -91,6 +92,11 @@ class _ContextTabState extends State<ContextTab>
   @override
   void initState() {
     super.initState();
+    VisitReportEdits.register(
+      this,
+      () => widget.dossier.patient.id,
+      _flushForReport,
+    );
     _subSection = widget.initialSubSection.clamp(0, 1);
     _load();
   }
@@ -160,6 +166,7 @@ class _ContextTabState extends State<ContextTab>
 
   @override
   void dispose() {
+    VisitReportEdits.unregister(this);
     final hadPendingSave = _saveTimer?.isActive ?? false;
     _saveTimer?.cancel();
     if (hadPendingSave) {
@@ -525,7 +532,25 @@ class _ContextTabState extends State<ContextTab>
     _saveTimer = Timer(kSaveDebouncePills, _save);
   }
 
-  Future<void> _save() async {
+  Future<void>? _saveInFlight;
+
+  Future<void> _flushForReport() async {
+    final pending = _saveTimer?.isActive ?? false;
+    _saveTimer?.cancel();
+    await _saveInFlight;
+    if (pending) await _save();
+  }
+
+  Future<void> _save() {
+    late final Future<void> save;
+    save = _persistContext().whenComplete(() {
+      if (identical(_saveInFlight, save)) _saveInFlight = null;
+    });
+    _saveInFlight = save;
+    return save;
+  }
+
+  Future<void> _persistContext() async {
     if (!mounted) return;
     // Pas de setState(_saving) — voir dossier_screen.dart.
     final primary = _contextOccupants.isNotEmpty
