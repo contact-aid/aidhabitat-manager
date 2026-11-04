@@ -1,3 +1,4 @@
+import { textProviderConfig, completionBody } from './provider.mjs';
 import { rewriteInstructions } from '../../shared/aiRewritePrompt.mjs';
 import { OPENROUTER_TEXT_MODEL, TEXT_PROVIDER_POLICY } from './models.mjs';
 export const REWRITE_MODEL = OPENROUTER_TEXT_MODEL;
@@ -17,12 +18,11 @@ export const REWRITE_MODES = Object.freeze({
 });
 
 export const getRewriteConfig = (env = process.env) => ({
-  provider: 'openrouter', model: REWRITE_MODEL,
-  apiKey: String(env.OPENROUTER_API_KEY || '').trim(),
+  ...textProviderConfig(env),
   timeoutMs: 60_000,
 });
 export const getAiRewriteStatus = ({ config = getRewriteConfig() } = {}) => ({
-  ready: Boolean(config.apiKey), webEnabled: true, provider: 'openrouter', model: REWRITE_MODEL,
+  ready: Boolean(config.apiKey), webEnabled: true, provider: config.provider, model: config.model,
 });
 
 export const normalizeRewriteMode = (value) => (
@@ -78,14 +78,11 @@ export const rewriteNote = async ({text, mode = 'professional', context = 'gener
   if (!config.apiKey) throw rewriteError('Le service de reformulation est indisponible. La note est conservée.');
   let response;
   try {
-    response = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
+    response = await fetchImpl(config.url || 'https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(config.timeoutMs),
       headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: REWRITE_MODEL, stream: false,
-        messages: buildRewriteMessages(text, mode, context), temperature: 0,
-        max_tokens: 4096, reasoning: { enabled: false },
-        provider: TEXT_PROVIDER_POLICY,
-      }),
+      body: JSON.stringify(completionBody({...config,model:config.model || REWRITE_MODEL}, {
+        messages:buildRewriteMessages(text,mode,context),maxTokens:4096})),
     });
   } catch (error) {
     throw rewriteError('La reformulation est indisponible. La note est conservée.',
@@ -105,5 +102,5 @@ export const rewriteNote = async ({text, mode = 'professional', context = 'gener
   if (findMissingProtectedFragments(text, rewritten).length) {
     throw rewriteError("La proposition n'était pas assez fidèle à la note originale. La note a été conservée.", 422);
   }
-  return { text: rewritten, mode: normalizeRewriteMode(mode), model: REWRITE_MODEL };
+  return { text: rewritten, mode: normalizeRewriteMode(mode), model: config.model || REWRITE_MODEL };
 };

@@ -146,6 +146,28 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
               crossAxisAlignment: WrapCrossAlignment.center,
               spacing: 8,
               children: [
+                if (job?['status'] == 'complete' &&
+                    job?['transcriptVersion'] != 'openai-speakers-v1')
+                  TextButton.icon(
+                    icon: const Icon(Icons.auto_awesome, size: 18),
+                    label: const Text('Améliorer la transcription'),
+                    onPressed: () async {
+                      try {
+                        await _service.refreshTranscript(
+                          widget.dossierId,
+                          job!['id'] as String,
+                        );
+                        await _load();
+                      } catch (_) {
+                        if (mounted) {
+                          setState(
+                            () => _error =
+                                'L’amélioration de la transcription n’a pas pu démarrer.',
+                          );
+                        }
+                      }
+                    },
+                  ),
                 if (stage != null)
                   Text(
                     stage,
@@ -221,11 +243,23 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
           child: _loading
               ? const Center(child: CircularProgressIndicator())
               : VisitTranscriptWorkspace(
-                  key: ValueKey('${widget.dossierId}:$_selected'),
+                  key: ValueKey(
+                    '${widget.dossierId}:$_selected:${job?['transcriptVersion']}',
+                  ),
                   transcript: (job?['transcript'] as List? ?? [])
                       .whereType<Map>()
                       .map((s) => Map<String, dynamic>.from(s))
                       .toList(),
+                  onRenameSpeaker: (speakerId, name, role) async {
+                    await _service.renameSpeaker(
+                      widget.dossierId,
+                      job!['id'] as String,
+                      speakerId,
+                      name,
+                      role,
+                    );
+                    await _load();
+                  },
                   onAsk: (question) => _service.ask(
                     widget.dossierId,
                     job!['id'] as String,

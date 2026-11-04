@@ -1,0 +1,16 @@
+# Assistant de visite via OpenAI
+
+Le serveur sélectionne explicitement OpenAI avec `AI_PROVIDER=openai`. Il lit la clé depuis `OPENAI_API_KEY` ou le fichier privé désigné par `OPENAI_API_KEY_FILE`. Aucun secret n’est compilé dans les clients. Aucun repli vers OpenRouter lorsque OpenAI est sélectionné.
+
+- Texte, lecture des manuscrits, extraction sourcée, rédaction et questions : `gpt-6-luna`, configurable par `OPENAI_TEXT_MODEL`, reasoning `none`, stockage des réponses désactivé.
+- Transcription avec séparation des voix : `gpt-4o-transcribe-diarize`, configurable par `OPENAI_VISIT_TRANSCRIPTION_MODEL`. La documentation OpenAI annonce son arrêt le 26 février 2027. Une migration de cette capacité doit précéder cette date ; le code bloque son utilisation après cette date et conserve les sources.
+- L’audio est assemblé par ffmpeg en une visite entière, compressée en mono Opus 24 kb/s. Les originaux restent conservés. Un fichier de plus de 24 Mio est refusé sans suppression des sources.
+- Les réponses audio et nettoyées ont des checkpoints privés. Une reprise après échec du nettoyage ne retranscrit pas l’audio déjà facturé.
+- Le nettoyage retire les hésitations et les apartés. La transcription brute reste la source des faits et citations. Une mesure ou négation perdue lors du nettoyage déclenche le retour à la phrase originale.
+- Les voix sont suivies dans toute la visite. Le rôle d’ergothérapeute est proposé, sans preuve d’identité vocale. L’intervenante peut confirmer/renommer une voix ; la correction s’applique à tous ses tours de parole, après contrôle d’accès et d’appartenance.
+- « Améliorer la transcription » d’une ancienne visite crée une version de transcription et archive l’ancienne, sans regénérer les faits, les notes du rapport ou les préconisations déjà insérées.
+- L’iPad conserve l’enregistrement local et attend un réseau Wi-Fi ou Ethernet avant de transférer. Une mise à jour du client installé est nécessaire pour cette politique et les nouveaux contrôles d’affichage. L’affichage cloud est mis à jour par la publication web.
+
+Le profil rédactionnel est sélectionné par auteur et seulement si `sourceReview.authorVerified` vaut true. Il contient des règles et exemples de style, pas des faits sur le bénéficiaire actuel. Les données de visite sont classées en faits sourcés puis rédigées par rubrique, sans compléter les informations absentes.
+
+Tarifs documentés au 4 novembre 2026 : transcription avec diarisation environ 0,006 USD/minute ; Luna 0,10 USD/M tokens entrants et 0,50 USD/M tokens sortants. Les crédits disponibles dépendent du projet OpenAI et ne sont pas présumés illimités. Les métriques restent dans `visit-assistant-usage.jsonl`, sans contenu clinique.
