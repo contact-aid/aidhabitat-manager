@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:image/image.dart' as img;
 
@@ -6,12 +7,16 @@ import 'package:image/image.dart' as img;
 class ImageCompressionWorkerRequest {
   final Uint8List bytes;
   final int maxWidthPx;
+  final int? maxLongEdgePx;
+  final int? maxShortEdgePx;
   final int jpegQuality;
   final bool fastResize;
 
   const ImageCompressionWorkerRequest({
     required this.bytes,
     required this.maxWidthPx,
+    this.maxLongEdgePx,
+    this.maxShortEdgePx,
     required this.jpegQuality,
     required this.fastResize,
   });
@@ -22,10 +27,12 @@ class ImageCompressionWorkerRequest {
 class ImageCompressionWorkerResult {
   final Uint8List? encodedBytes;
   final bool decoded;
+  final bool resized;
 
   const ImageCompressionWorkerResult({
     required this.encodedBytes,
     required this.decoded,
+    this.resized = false,
   });
 }
 
@@ -46,7 +53,30 @@ ImageCompressionWorkerResult compressImageInWorker(
   }
 
   img.Image working = decoded;
-  if (working.width > request.maxWidthPx) {
+  var resized = false;
+  if (request.maxLongEdgePx != null && request.maxShortEdgePx != null) {
+    working = img.bakeOrientation(working);
+    final longEdge = math.max(working.width, working.height);
+    final shortEdge = math.min(working.width, working.height);
+    final scale = math.min(
+      1.0,
+      math.min(
+        request.maxLongEdgePx! / longEdge,
+        request.maxShortEdgePx! / shortEdge,
+      ),
+    );
+    if (scale < 1) {
+      working = img.copyResize(
+        working,
+        width: math.max(1, (working.width * scale).floor()),
+        height: math.max(1, (working.height * scale).floor()),
+        interpolation: request.fastResize
+            ? img.Interpolation.linear
+            : img.Interpolation.cubic,
+      );
+      resized = true;
+    }
+  } else if (working.width > request.maxWidthPx) {
     working = img.copyResize(
       working,
       width: request.maxWidthPx,
@@ -61,5 +91,6 @@ ImageCompressionWorkerResult compressImageInWorker(
       img.encodeJpg(working, quality: request.jpegQuality),
     ),
     decoded: true,
+    resized: resized,
   );
 }
