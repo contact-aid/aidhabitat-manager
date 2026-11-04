@@ -4,7 +4,11 @@ import {findMissingProtectedFragments} from './ai/rewrite.mjs';
 const fail=message=>Object.assign(new Error(message),{statusCode:502});
 export async function cleanVisitTranscript({segments,directory,complete,cacheNamespace='openai-clean'}) {
   const batches=[];
-  for(let offset=0;offset<segments.length;offset+=200)batches.push({offset,source:segments.slice(offset,offset+200)});
+  for(let offset=0;offset<segments.length;) {
+    let end=offset,characters=0;
+    while(end<segments.length&&end-offset<200&&(end===offset||characters+segments[end].text.length<=12000))characters+=segments[end++].text.length;
+    batches.push({offset,source:segments.slice(offset,end)});offset=end;
+  }
   const results=[];let next=0;
   async function worker() {
     while(next<batches.length) {

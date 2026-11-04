@@ -143,7 +143,7 @@ export function registerVisitAssistantRoutes(app, { requireAuth, ensureDossierRe
     const job=await store.locked(dossierId,req.params.id,async()=>{
       const job=await owned(req,dossierId);
       if(job.status!=='complete') throw visitError(409,'Attendez la fin du traitement en cours.');
-      if(job.transcriptVersion==='openai-speakers-v1') return job;
+      if(job.transcriptVersion===(provider.transcriptVersion||'openai-speakers-v1')) return job;
       job.transcriptRefresh=true;job.status='transcribing';job.error=null;job.processingFailures=0;
       await store.write(job);return job;
     });

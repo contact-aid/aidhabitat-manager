@@ -159,7 +159,7 @@ export function createVisitProvider({ env = process.env, fetchImpl = fetch, onUs
     return text;
   };
   return {
-    ...(config.provider === 'openai' ? {transcribeRecording: createOpenAIRecordingTranscriber({env, fetchImpl, complete, onUsage})} : {}),
+    ...(config.provider === 'openai' ? {transcriptVersion:'openai-french-speakers-v2',transcribeRecording: createOpenAIRecordingTranscriber({env, fetchImpl, complete, onUsage})} : {}),
     async rewrite(messages) { return complete(messages); },
     async readHandwriting(image) {
       if (typeof image !== 'string' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(image)) throw visitError(400, 'Page manuscrite invalide.');
@@ -262,7 +262,7 @@ export class VisitProcessor {
             const transcript=await this.provider.transcribeRecording({job,directory:this.store.dir(dossierId,id)});
             job.transcriptHistory ??= [];
             job.transcriptHistory.push({at:new Date().toISOString(),transcript:job.transcript});
-            job.transcript=transcript;job.transcriptVersion='openai-speakers-v1';
+            job.transcript=transcript;job.transcriptVersion=this.provider.transcriptVersion||'openai-speakers-v1';
             delete job.transcriptRefresh;job.status='complete';
           } else if (job.result) {
             job.status = 'applying';
@@ -273,7 +273,7 @@ export class VisitProcessor {
             job.status = 'transcribing';
             if (this.provider.transcribeRecording) {
               job.transcript = await this.provider.transcribeRecording({job, directory:this.store.dir(dossierId,id)});
-              job.transcriptVersion='openai-speakers-v1';
+              job.transcriptVersion=this.provider.transcriptVersion||'openai-speakers-v1';
             } else {
             const bytes = await fs.readFile(path.join(this.store.dir(dossierId, id), `${next}.m4a`));
             const transcription = await this.provider.transcribe(bytes);
