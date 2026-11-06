@@ -41,6 +41,44 @@ const String kPhotoTagPlanAvant = 'Visite - Plan avant';
 /// catégorie d'organisation, pas de slot PDF dédié.
 const String kPhotoTagPlanApres = 'Visite - Plan après';
 
+/// Réglages de compression d'une image importée dans l'onglet Photos.
+class VisitPhotoCompression {
+  final int longEdgePx;
+  final int shortEdgePx;
+  final int jpegQuality;
+
+  const VisitPhotoCompression({
+    required this.longEdgePx,
+    required this.shortEdgePx,
+    required this.jpegQuality,
+  });
+}
+
+/// Photos VAD : assez nettes pour le rapport, volontairement légères pour que
+/// l'import multiple reste fluide.
+const VisitPhotoCompression kVisitPhotoCompression = VisitPhotoCompression(
+  longEdgePx: 480,
+  shortEdgePx: 360,
+  jpegQuality: 74,
+);
+
+/// Plans : deux fois la définition des photos, sinon le nom des pièces et les
+/// cotes deviennent illisibles sur le web et dans le rapport.
+const VisitPhotoCompression kVisitPlanCompression = VisitPhotoCompression(
+  longEdgePx: 960,
+  shortEdgePx: 720,
+  jpegQuality: 74,
+);
+
+/// Choisit les réglages d'une section, y compris une section supplémentaire
+/// (`Visite - Plan après (#2)`).
+VisitPhotoCompression visitPhotoCompressionFor(String categoryTag) {
+  final baseTag = categoryTag.replaceFirst(RegExp(r' \(#\d+\)$'), '');
+  return baseTag == kPhotoTagPlanAvant || baseTag == kPhotoTagPlanApres
+      ? kVisitPlanCompression
+      : kVisitPhotoCompression;
+}
+
 /// Tag fourre-tout (LEGACY) — retiré de l'UI 2026-05-04 (demande
 /// utilisateur : « supprime la partie autres, elle est inutile »).
 /// La constante reste exportée pour ne pas casser le mapping des
