@@ -11,6 +11,7 @@ class ImageCompressionWorkerRequest {
   final int? maxShortEdgePx;
   final int jpegQuality;
   final bool fastResize;
+  final bool preserveThinLines;
 
   const ImageCompressionWorkerRequest({
     required this.bytes,
@@ -19,6 +20,7 @@ class ImageCompressionWorkerRequest {
     this.maxShortEdgePx,
     required this.jpegQuality,
     required this.fastResize,
+    this.preserveThinLines = false,
   });
 }
 
@@ -70,7 +72,10 @@ ImageCompressionWorkerResult compressImageInWorker(
         working,
         width: math.max(1, (working.width * scale).floor()),
         height: math.max(1, (working.height * scale).floor()),
-        interpolation: request.fastResize
+        // Linear and cubic sample a few pixels, so a thin plan line can vanish.
+        interpolation: request.preserveThinLines
+            ? img.Interpolation.average
+            : request.fastResize
             ? img.Interpolation.linear
             : img.Interpolation.cubic,
       );

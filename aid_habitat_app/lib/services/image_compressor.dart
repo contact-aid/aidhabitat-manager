@@ -73,6 +73,7 @@ Future<CompressedImage> compressImageForUpload({
   int jpegQuality = _kJpegQuality,
   int skipThresholdBytes = _kSkipThresholdBytes,
   bool fastResize = false,
+  bool preserveThinLines = false,
 }) async {
   final lowerName = fileName.toLowerCase();
   final originalMime = (sourceMimeType ?? '').toLowerCase();
@@ -127,6 +128,7 @@ Future<CompressedImage> compressImageForUpload({
         maxShortEdgePx: maxShortEdgePx,
         jpegQuality: jpegQuality,
         fastResize: fastResize,
+        preserveThinLines: preserveThinLines,
       ),
       debugLabel: 'image-upload-compression',
     );
