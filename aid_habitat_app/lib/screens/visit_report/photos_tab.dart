@@ -65,12 +65,6 @@ class _PhotosTabState extends State<PhotosTab>
   // _kSlateMuted retiré le 2026-05-12 (servait au badge count
   // supprimé, cf. _buildCountBadge également retiré).
 
-  /// Compression cible pour les photos VAD : assez net pour le rapport,
-  /// mais volontairement plus léger pour que l'import multi reste fluide.
-  static const int _kCompressLongEdge = 480;
-  static const int _kCompressShortEdge = 360;
-  static const int _kCompressQuality = 74;
-
   late final DataService _dataService = widget.dataService ?? DataService();
   final ImagePicker _imagePicker = ImagePicker();
 
@@ -384,12 +378,13 @@ class _PhotosTabState extends State<PhotosTab>
         }
         return;
       }
+      final compression = visitPhotoCompressionFor(categoryTag);
       final XFile? picked = await _imagePicker.pickImage(
         source: source,
         // Limit native decoding work and request JPEG conversion (HEIC).
-        // The common path then enforces the 480/360 bounds for both platforms.
-        maxWidth: _kCompressLongEdge.toDouble(),
-        maxHeight: _kCompressLongEdge.toDouble(),
+        // The common path then enforces the section bounds for both platforms.
+        maxWidth: compression.longEdgePx.toDouble(),
+        maxHeight: compression.longEdgePx.toDouble(),
         imageQuality: 100,
       );
       if (picked == null) return;
@@ -482,6 +477,7 @@ class _PhotosTabState extends State<PhotosTab>
     required List<DocItem> placeholders,
     required String categoryTag,
   }) async {
+    final compression = visitPhotoCompressionFor(categoryTag);
     try {
       for (var i = 0; i < images.length; i++) {
         final f = images[i];
@@ -490,10 +486,11 @@ class _PhotosTabState extends State<PhotosTab>
           final compressed = await compressImageForUpload(
             bytes: f.bytes,
             fileName: f.name,
-            maxLongEdgePx: _kCompressLongEdge,
-            maxShortEdgePx: _kCompressShortEdge,
-            jpegQuality: _kCompressQuality,
+            maxLongEdgePx: compression.longEdgePx,
+            maxShortEdgePx: compression.shortEdgePx,
+            jpegQuality: compression.jpegQuality,
             fastResize: true,
+            preserveThinLines: compression.preserveThinLines,
           );
           final fileName = _buildPhotoFileName(
             categoryTag,

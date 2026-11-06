@@ -20,6 +20,7 @@ import 'screens/database_unavailable_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/note_window_screen.dart';
 import 'services/app_config.dart';
+import 'services/app_orientation_policy.dart';
 import 'services/auth_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/data_service.dart';
@@ -37,6 +38,7 @@ import 'services/note_window_web_stub.dart'
 Future<void> main(List<String> args) async {
   final startedAt = DateTime.now();
   WidgetsFlutterBinding.ensureInitialized();
+  unawaited(applyAppOrientationPolicy());
 
   // ── Handlers d'erreurs globaux (fix 2026-05-15) ─────────────────
   // Avant : les uncaught errors arrivaient dans la console web minifiée

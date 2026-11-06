@@ -25,6 +25,7 @@ import multer from 'multer';
 import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureConditionalSyncTables } from './nocodbMcpClient.mjs';
 import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
+import { createSyncRejectionLog } from './syncRejectionLog.mjs';
 import { createDatabaseValueComparator, toDatabaseDossierStatus } from './nocodbScalarValues.mjs';
 import { inspectLegacyRecovery, mappedDatabaseValueEquals } from './legacySyncRecovery.mjs';
 import { createKeyedSerialExecutor } from './keyedSerialExecutor.mjs';
@@ -313,6 +314,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '30mb' }));
+app.use(createSyncRejectionLog({ directory: path.join(DATA_DIR_PATH, 'sync-diagnostics') }).middleware);
 
 const documentUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
 
