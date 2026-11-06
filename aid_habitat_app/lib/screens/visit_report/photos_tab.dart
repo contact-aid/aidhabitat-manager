@@ -490,6 +490,7 @@ class _PhotosTabState extends State<PhotosTab>
             maxShortEdgePx: compression.shortEdgePx,
             jpegQuality: compression.jpegQuality,
             fastResize: true,
+            preserveThinLines: compression.preserveThinLines,
           );
           final fileName = _buildPhotoFileName(
             categoryTag,

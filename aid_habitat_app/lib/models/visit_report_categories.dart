@@ -47,10 +47,14 @@ class VisitPhotoCompression {
   final int shortEdgePx;
   final int jpegQuality;
 
+  /// Moyenne les pixels à la réduction pour garder les traits fins.
+  final bool preserveThinLines;
+
   const VisitPhotoCompression({
     required this.longEdgePx,
     required this.shortEdgePx,
     required this.jpegQuality,
+    this.preserveThinLines = false,
   });
 }
 
@@ -68,6 +72,7 @@ const VisitPhotoCompression kVisitPlanCompression = VisitPhotoCompression(
   longEdgePx: 960,
   shortEdgePx: 720,
   jpegQuality: 74,
+  preserveThinLines: true,
 );
 
 /// Choisit les réglages d'une section, y compris une section supplémentaire
