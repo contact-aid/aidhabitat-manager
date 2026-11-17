@@ -66,12 +66,13 @@ const VisitPhotoCompression kVisitPhotoCompression = VisitPhotoCompression(
   jpegQuality: 74,
 );
 
-/// Plans : deux fois la définition des photos, sinon le nom des pièces et les
-/// cotes deviennent illisibles sur le web et dans le rapport.
+/// Plans et vues de projet avant/après : définition adaptée à une demi-page A4
+/// dans le rapport, avec une qualité JPEG élevée pour les textes et les détails.
+/// Les images plus petites gardent leurs dimensions d'origine.
 const VisitPhotoCompression kVisitPlanCompression = VisitPhotoCompression(
-  longEdgePx: 960,
-  shortEdgePx: 720,
-  jpegQuality: 74,
+  longEdgePx: 2400,
+  shortEdgePx: 1800,
+  jpegQuality: 92,
   preserveThinLines: true,
 );
 
