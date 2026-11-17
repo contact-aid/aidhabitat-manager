@@ -12,10 +12,11 @@ void main() {
     '$kPhotoTagPlanAvant (#1)',
     '$kPhotoTagPlanApres (#12)',
   ]) {
-    test('plan section uses doubled bounds: $tag', () {
+    test('plan section uses half-page report quality: $tag', () {
       final compression = visitPhotoCompressionFor(tag);
-      expect(compression.longEdgePx, 960);
-      expect(compression.shortEdgePx, 720);
+      expect(compression.longEdgePx, 2400);
+      expect(compression.shortEdgePx, 1800);
+      expect(compression.jpegQuality, 92);
       expect(compression.preserveThinLines, isTrue);
     });
   }
@@ -37,8 +38,10 @@ void main() {
   }
 
   for (final dimensions in <List<int>>[
-    [2400, 1800, 960, 720],
-    [2480, 3508, 678, 960],
+    [3200, 2400, 2400, 1800],
+    [2480, 3508, 1696, 2400],
+    [2400, 2400, 1800, 1800],
+    [1920, 1080, 1920, 1080],
     [640, 480, 640, 480],
   ]) {
     test('imported plan is bounded by plan limits: $dimensions', () async {
