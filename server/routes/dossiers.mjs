@@ -18,7 +18,7 @@ import {
   syntheticBeneficiaryId,
   findByRecordId,
   resolveBeneficiaryRecord,
-  latestByFieldValue,
+  selectDossierByField,
   latestRecord,
   canAccessDossierRecord,
   mapBeneficiaryUpdatesToFields,
@@ -113,7 +113,7 @@ router.patch('/api/beneficiaires/:patientId', requireAuth, async (req, res, next
       throw new Error(`Bénéficiaire ${patientId} introuvable`);
     }
 
-    const dossierRecord = latestByFieldValue(dossiers, 'beneficiaires_id', beneficiaryRecord.id);
+    const dossierRecord = selectDossierByField(dossiers, 'beneficiaires_id', beneficiaryRecord.id);
     if (dossierRecord && !canAccessDossierRecord(req.appUser, dossierRecord)) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce bénéficiaire' });
       return;
@@ -218,7 +218,7 @@ router.patch('/api/logements/by-beneficiary/:beneficiaryId', requireAuth, async 
       throw new Error(`Bénéficiaire ${beneficiaryId} introuvable pour le logement`);
     }
 
-    const dossierRecord = latestByFieldValue(dossiers, 'beneficiaires_id', beneficiaryRecord.id);
+    const dossierRecord = selectDossierByField(dossiers, 'beneficiaires_id', beneficiaryRecord.id);
     if (dossierRecord && !canAccessDossierRecord(req.appUser, dossierRecord)) {
       res.status(403).json({ success: false, error: 'Accès interdit à ce logement' });
       return;
