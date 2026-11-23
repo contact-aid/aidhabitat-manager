@@ -1530,8 +1530,11 @@ export const fetchVisitRecommendations = async (dossierId: string): Promise<Visi
         .then(async () => {
           const queue = readVisitRecommendationsQueueMap();
           if (queue[normalizedDossierId]) return;
+          const beforeRead = readVisitRecommendationsCacheMap()[normalizedDossierId];
           const remoteItems = await fetchVisitRecommendationsRemote(normalizedDossierId);
           const nextCache = readVisitRecommendationsCacheMap();
+          if (readVisitRecommendationsQueueMap()[normalizedDossierId] ||
+              nextCache[normalizedDossierId] !== beforeRead) return;
           nextCache[normalizedDossierId] = {
             dossierId: normalizedDossierId,
             items: remoteItems,
@@ -1548,6 +1551,8 @@ export const fetchVisitRecommendations = async (dossierId: string): Promise<Visi
   try {
     const remoteItems = await fetchVisitRecommendationsRemote(normalizedDossierId);
     const nextCache = readVisitRecommendationsCacheMap();
+    // An edit or another read may have populated the cache while GET was pending.
+    if (nextCache[normalizedDossierId]) return nextCache[normalizedDossierId].items;
     nextCache[normalizedDossierId] = {
       dossierId: normalizedDossierId,
       items: remoteItems,
@@ -1556,8 +1561,10 @@ export const fetchVisitRecommendations = async (dossierId: string): Promise<Visi
     };
     writeVisitRecommendationsCacheMap(nextCache);
     return remoteItems;
-  } catch {
-    return [];
+  } catch (error) {
+    const latest = readVisitRecommendationsCacheMap()[normalizedDossierId];
+    if (latest) return latest.items;
+    throw error;
   }
 };
 
@@ -1592,6 +1599,7 @@ export const saveVisitRecommendations = async (
 
 const fetchVisitRecommendationsRemote = async (dossierId: string): Promise<VisitRecommendationItem[]> => {
   const result = await apiFetch<VisitRecommendationsResult>(`/api/visit-recommendations/${encodeURIComponent(dossierId)}`);
+  if (!result.success) throw new Error(result.error || 'Chargement des préconisations impossible');
   return result.data?.items || [];
 };
 
@@ -1634,6 +1642,9 @@ const flushQueuedVisitRecommendations = async (): Promise<void> => {
       const result = await saveVisitRecommendationsRemote(entry.dossierId, entry.items);
       const cache = readVisitRecommendationsCacheMap();
       const queue = readVisitRecommendationsQueueMap();
+      // A newer edit owns the cache and queue, even if timestamps are identical.
+      // Leave it queued for the next pass instead of acknowledging an older PUT.
+      if (queue[entry.dossierId] !== entry) continue;
 
       if (result.success) {
         delete queue[entry.dossierId];
