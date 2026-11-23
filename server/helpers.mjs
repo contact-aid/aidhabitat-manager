@@ -10,6 +10,7 @@ import { callNocoTool, closeMcpClient } from './nocodbMcpClient.mjs';
 import { createMobileSyncStore } from './mobileSyncStore.mjs';
 import { getRetirementFundMeta } from './retirementFundsCatalog.mjs';
 import { WIKI_FILTER_TAGS, WIKI_LIBRARY_SEED } from './wikiLibraryCatalog.mjs';
+import { latestRecord, selectDossierRecord, selectDossierByField } from './dossierRecordSelection.mjs';
 import { resolveNocodbTables } from './nocodbTables.mjs';
 import {
   buildPasswordCredential,
@@ -302,15 +303,7 @@ export const boolTextOrNull = (value) => {
   return String(Boolean(value));
 };
 export const httpError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
-export const latestRecord = (records) => {
-  const sorted = [...records].sort((a, b) => {
-    const aDate = new Date(field(a, 'UpdatedAt') || field(a, 'updated_at') || field(a, 'created_at') || 0).getTime();
-    const bDate = new Date(field(b, 'UpdatedAt') || field(b, 'updated_at') || field(b, 'created_at') || 0).getTime();
-    if (aDate !== bDate) return bDate - aDate;
-    return Number(b.id) - Number(a.id);
-  });
-  return sorted[0];
-};
+export { latestRecord, selectDossierByField };
 export const normalizeOccupation = (label) => label?.startsWith('Usufruitier') ? 'Usufruitier' : (label || '');
 
 export const parseOccupantsJson = (rawValue) => {
@@ -500,7 +493,7 @@ export const parseSyntheticBeneficiaryId = (value) => {
 export const mobileSyncStore = createMobileSyncStore({ absoluteUrl });
 export const deriveBeneficiaryAppId = ({ beneficiaryRecord, dossierRecords = [], housingRecords = [], contextRecords = [], infoRecords = [] }) => {
   const relatedExternalId = [
-    latestRecord(dossierRecords) ? field(latestRecord(dossierRecords), 'patient_id') : undefined,
+    field(selectDossierRecord(dossierRecords), 'patient_id'),
     latestRecord(housingRecords) ? field(latestRecord(housingRecords), 'beneficiaire_id') : undefined,
     latestRecord(contextRecords) ? field(latestRecord(contextRecords), 'beneficiaire_id') : undefined,
     latestRecord(infoRecords) ? field(latestRecord(infoRecords), 'beneficiaire_id') : undefined,
@@ -514,8 +507,8 @@ export const resolveBeneficiaryRecord = ({ beneficiaires, dossiers = [], logemen
     return findByRecordId(beneficiaires, syntheticId);
   }
 
-  const linkedRecord = latestByFieldValue(dossiers, 'patient_id', appBeneficiaryId)
-    || latestByFieldValue(dossiers, 'uuid_source', appBeneficiaryId)
+  const linkedRecord = selectDossierByField(dossiers, 'patient_id', appBeneficiaryId)
+    || selectDossierByField(dossiers, 'uuid_source', appBeneficiaryId)
     || latestByFieldValue(logements, 'beneficiaire_id', appBeneficiaryId)
     || latestByFieldValue(contextes, 'beneficiaire_id', appBeneficiaryId)
     || latestByFieldValue(infosAdmin, 'beneficiaire_id', appBeneficiaryId);
@@ -1481,7 +1474,7 @@ export const backfillChildDossierLinks = async ({ tableId, records, dossiers, be
     const beneficiaryRowId = field(record, beneficiaryField);
     if (!beneficiaryRowId) continue;
 
-    const dossierRecord = latestByFieldValue(dossiers, 'beneficiaires_id', beneficiaryRowId);
+    const dossierRecord = selectDossierByField(dossiers, 'beneficiaires_id', beneficiaryRowId);
     if (!dossierRecord) continue;
 
     const desiredDossierUuid = field(dossierRecord, 'uuid_source');
@@ -1514,7 +1507,7 @@ export const backfillChildDossierLinks = async ({ tableId, records, dossiers, be
 
 export const createBlankDossierForBeneficiary = async ({ beneficiaryRecord, dossiers, logements, contextes, infosAdmin }) => {
   const beneficiaryRowId = String(beneficiaryRecord.id);
-  const existing = latestByFieldValue(dossiers, 'beneficiaires_id', beneficiaryRowId);
+  const existing = selectDossierByField(dossiers, 'beneficiaires_id', beneficiaryRowId);
   if (existing) return existing;
 
   const beneficiaryHousings = logements.filter((record) => String(field(record, 'beneficiaires_id') ?? '') === beneficiaryRowId);
@@ -2293,7 +2286,7 @@ export const resolveBeneficiaryAccess = async (appUser, patientId) => {
     throw httpError(404, `Bénéficiaire ${patientId} introuvable`);
   }
 
-  const dossierRecord = latestByFieldValue(dossiers, 'beneficiaires_id', beneficiaryRecord.id);
+  const dossierRecord = selectDossierByField(dossiers, 'beneficiaires_id', beneficiaryRecord.id);
   if (dossierRecord && !canAccessDossierRecord(appUser, dossierRecord)) {
     throw httpError(403, 'Accès interdit à ce bénéficiaire');
   }
@@ -2492,7 +2485,7 @@ export const getDossiersForApp = async (appUser) => {
       contextRecords: beneficiaryContexts,
       infoRecords: beneficiaryInfos,
     });
-    const dossierRecord = latestRecord(beneficiaryDossiers);
+    const dossierRecord = selectDossierRecord(beneficiaryDossiers);
     const dossierSourceId = field(dossierRecord, 'uuid_source');
     const housingRecord = latestRecord(beneficiaryHousings);
     const contextRecord = latestRecord((dossierSourceId && contextByDossier.get(String(dossierSourceId))) || beneficiaryContexts || []);
@@ -2524,7 +2517,7 @@ export const ensureDossierRecord = async (dossierIdOrTemp) => {
   }
 
   const patientId = dossierIdOrTemp.replace(/^temp-/, '');
-  const existing = latestByFieldValue(dossiers, 'patient_id', patientId);
+  const existing = selectDossierByField(dossiers, 'patient_id', patientId);
   if (existing) return existing;
 
   const [beneficiaires, logements, contextes, infosAdmin] = await Promise.all([
