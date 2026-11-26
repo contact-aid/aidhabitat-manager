@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../models/types.dart';
+import '../screens/sync_archive_screen.dart';
 import '../services/connectivity_service.dart';
 import '../services/data_service.dart';
 import '../services/sync_repository.dart';
@@ -640,6 +641,19 @@ class _AccountDialogState extends State<AccountDialog> {
                     icon: const Icon(LucideIcons.list, size: 16),
                     label: const Text('Sauvegardes en attente'),
                   ),
+                  if (widget.currentUser.role == LocalUserRole.admin)
+                    OutlinedButton.icon(
+                      key: const ValueKey('open-sync-archive'),
+                      onPressed: _isUploadingPhoto || _isResyncing
+                          ? null
+                          : () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const SyncArchiveScreen(),
+                              ),
+                            ),
+                      icon: const Icon(LucideIcons.archive, size: 16),
+                      label: const Text('Valeurs archivées'),
+                    ),
                   if (widget.onLogout != null)
                     OutlinedButton.icon(
                       onPressed: _isUploadingPhoto || _isResyncing

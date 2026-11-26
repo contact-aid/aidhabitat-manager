@@ -17,6 +17,7 @@ export const SYNC_ARCHIVE_SCHEMA_SPEC = {
     ['table_id', 'SingleLineText'],
     ['record_id', 'SingleLineText'],
     ['dossier_id', 'SingleLineText'],
+    ['beneficiaire_id', 'SingleLineText'],
     ['field_name', 'SingleLineText'],
     ['previous_value', 'LongText'],
     ['next_value', 'LongText'],
@@ -60,22 +61,76 @@ export function overwrittenValues({ patch, observed, baseFields = {},
 
 const serialize = (value) => (value === undefined ? null : JSON.stringify(value));
 
+const parseValue = (raw) => {
+  if (raw == null || raw === '') return null;
+  try { return JSON.parse(raw); } catch { return raw; }
+};
+
+/** Forme d'une entrée pour l'écran admin et la restauration. */
+export function archiveEntryFromRecord(record) {
+  const f = record?.fields ?? record ?? {};
+  return {
+    id: String(f.uuid_source ?? ''),
+    rowId: record?.id ?? f.Id ?? null,
+    archivedAt: f.archived_at ?? null,
+    source: f.source ?? '',
+    tableId: f.table_id ?? '',
+    recordId: f.record_id ?? '',
+    dossierId: f.dossier_id ?? null,
+    beneficiaryId: f.beneficiaire_id ?? null,
+    field: f.field_name ?? '',
+    previous: parseValue(f.previous_value),
+    next: parseValue(f.next_value),
+    baseKnown: Boolean(f.base_known),
+    writeId: f.write_id ?? null,
+    actor: f.actor ?? null,
+    restoredAt: f.restored_at ?? null,
+  };
+}
+
 /**
  * enabled=false : aucune lecture ni écriture (comportement actuel).
  * enabled=true : chaque entrée est écrite avant de rendre la main ; une table
  * absente ou une écriture refusée lève SyncArchiveUnavailableError.
  */
 export function createSyncArchive({ enabled = false, findTableId, createRecord,
+  queryAll = null, updateRecord = null,
   now = () => new Date().toISOString(), newId = randomUUID }) {
   let tableId = null;
+  const requireTable = async () => {
+    tableId ??= await findTableId();
+    if (!tableId) throw new Error(`Table ${SYNC_ARCHIVE_TABLE_NAME} introuvable`);
+    return tableId;
+  };
   return {
     enabled: Boolean(enabled),
+    /** Entrées les plus récentes, éventuellement pour un bénéficiaire. */
+    async list({ limit = 100, beneficiaryId = null } = {}) {
+      const id = await requireTable();
+      const safe = beneficiaryId == null ? null : String(beneficiaryId).replace(/[^\w:.-]/g, '');
+      const records = await queryAll(id, {
+        ...(safe ? { where: `(beneficiaire_id,eq,${safe})` } : {}),
+        sort: '-archived_at',
+      });
+      return records.slice(0, Math.max(1, Math.min(500, Number(limit) || 100)))
+        .map(archiveEntryFromRecord);
+    },
+    async get(entryId) {
+      const id = await requireTable();
+      const safe = String(entryId).replace(/[^0-9a-f-]/gi, '');
+      if (!safe) return null;
+      const records = await queryAll(id, { where: `(uuid_source,eq,${safe})` });
+      return records.length === 1 ? archiveEntryFromRecord(records[0]) : null;
+    },
+    async markRestored(entry) {
+      const id = await requireTable();
+      await updateRecord(id, entry.rowId, { restored_at: now() });
+    },
     async record(entries, { source, tableId: archivedTableId, recordId, dossierId = null,
-      writeId = null, actor = null } = {}) {
+      beneficiaryId = null, writeId = null, actor = null } = {}) {
       if (!enabled || !entries?.length) return 0;
       try {
-        tableId ??= await findTableId();
-        if (!tableId) throw new Error(`Table ${SYNC_ARCHIVE_TABLE_NAME} introuvable`);
+        await requireTable();
         const archivedAt = now();
         for (const entry of entries) {
           await createRecord(tableId, {
@@ -85,6 +140,7 @@ export function createSyncArchive({ enabled = false, findTableId, createRecord,
             table_id: String(archivedTableId ?? ''),
             record_id: String(recordId ?? ''),
             dossier_id: dossierId == null ? null : String(dossierId),
+            beneficiaire_id: beneficiaryId == null ? null : String(beneficiaryId),
             field_name: entry.field,
             previous_value: serialize(entry.previous),
             next_value: serialize(entry.next),

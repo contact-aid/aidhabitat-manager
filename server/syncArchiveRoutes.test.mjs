@@ -57,6 +57,15 @@ if (!process.argv.includes('--runner')) {
     assert.equal(saved.status, 200, await saved.text());
     assert.equal(row.telephone, '0622222222');
     assert.deepEqual(mock.violations, []);
+
+    // Les routes de l'archive sont réservées aux administrateurs.
+    const anonymous = await originalFetch(origin + '/api/admin/sync-archive');
+    assert.equal(anonymous.status, 401);
+    const notAdmin = await originalFetch(origin + '/api/admin/sync-archive', { headers });
+    assert.equal(notAdmin.status, 403, await notAdmin.text());
+    const restoreAttempt = await originalFetch(origin + `/api/admin/sync-archive/${randomUUID()}/restore`,
+      { method: 'POST', headers });
+    assert.equal(restoreAttempt.status, 403);
     console.log('SYNC_ARCHIVE_ROUTES_PASS');
   } finally { await new Promise((r) => server.close(r)); }
 }

@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import '../models/sync_archive_entry.dart';
 import '../models/types.dart';
 import 'app_config.dart';
 import 'document_repository.dart' show InlineDocumentBytes, InlineDocumentOrder;
@@ -2803,6 +2804,61 @@ class NocodbApiClient {
     if (response.statusCode != 204 && response.statusCode != 404) {
       throw Exception('Suppression impossible (${response.statusCode})');
     }
+  }
+
+  /// Valeurs archivées par le serveur avant écrasement (admin seulement).
+  /// Lève une exception lisible si l'archive n'est pas encore en service.
+  Future<List<SyncArchiveEntry>> fetchSyncArchive({int limit = 200}) async {
+    final response = await _client
+        .get(
+          Uri.parse('$_baseUrl/api/admin/sync-archive?limit=$limit'),
+          headers: _headers,
+        )
+        .timeout(_defaultTimeout);
+    if (response.statusCode == 503) {
+      throw Exception("L'archive n'est pas encore en service sur le serveur.");
+    }
+    if (response.statusCode == 403) {
+      throw Exception('Réservé aux administrateurs.');
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Archive indisponible (${response.statusCode})');
+    }
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = (payload['data'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return ((data['entries'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((item) => SyncArchiveEntry.fromJson(item.cast<String, dynamic>()))
+        .toList();
+  }
+
+  /// Remet en place une valeur archivée. Le serveur archive d'abord la
+  /// valeur qu'il remplace, la restauration reste donc réversible.
+  Future<void> restoreSyncArchiveEntry(String entryId) async {
+    final response = await _client
+        .post(
+          Uri.parse(
+            '$_baseUrl/api/admin/sync-archive/${_pathSegment(entryId)}/restore',
+          ),
+          headers: _headers,
+        )
+        .timeout(_defaultTimeout);
+    if (response.statusCode >= 200 && response.statusCode < 300) return;
+    final code = (() {
+      try {
+        return (jsonDecode(response.body) as Map)['error']?.toString();
+      } catch (_) {
+        return null;
+      }
+    })();
+    throw Exception(switch (code) {
+      'SYNC_ARCHIVE_ALREADY_RESTORED' => 'Cette valeur a déjà été restaurée.',
+      'SYNC_ARCHIVE_RESTORE_RETRY' =>
+        'La fiche vient de changer. Actualisez la liste puis réessayez.',
+      'SYNC_ARCHIVE_DISABLED' ||
+      'SYNC_ARCHIVE_UNAVAILABLE' => "L'archive n'est pas disponible pour le moment.",
+      _ => 'Restauration impossible (${response.statusCode}).',
+    });
   }
 
   Future<List<AdminAccessMember>> fetchAdminAccessMembers() async {

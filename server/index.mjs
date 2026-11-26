@@ -26,6 +26,7 @@ import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureCo
 import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
 import { createSyncArchive, SYNC_ARCHIVE_TABLE_NAME } from './syncArchive.mjs';
+import { createSyncArchiveRestorer, registerSyncArchiveRoutes } from './syncArchiveRoutes.mjs';
 import { createSyncRejectionLog } from './syncRejectionLog.mjs';
 import { createDatabaseValueComparator, toDatabaseDossierStatus } from './nocodbScalarValues.mjs';
 import { inspectLegacyRecovery, mappedDatabaseValueEquals } from './legacySyncRecovery.mjs';
@@ -529,6 +530,8 @@ const syncArchive = createSyncArchive({
     return table ? String(table.id) : null;
   },
   createRecord: (tableId, fields) => createRecord(tableId, fields),
+  queryAll: (tableId, options) => queryAll(tableId, options),
+  updateRecord: (tableId, id, fields) => updateRecord(tableId, id, fields),
 });
 const guardedMutationOptions = {
   archive: syncArchive,
@@ -587,6 +590,10 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
       normalizeObserved, normalizeBaseline, canPromoteDefault,
       actor: req.appUser?.email || req.appUser?.id || null,
+      dossierId: tableId === TABLES.dossiers ? field(record, 'uuid_source') || null
+        : field(record, 'dossier_id') || null,
+      beneficiaryId: tableId === TABLES.beneficiaires ? field(record, 'uuid_source') || null
+        : field(record, 'beneficiaire_id') || field(record, 'patient_id') || null,
       authorizeObserved: tableId === TABLES.dossiers
         ? (row) => canAccessDossierRecord(req.appUser, { id: String(record.id), fields: row })
         : undefined,
@@ -7661,6 +7668,34 @@ registerContextRoutes(app, { requireAuth, enabled: conditionalSyncEnabled,
   creationReady: conditionalCreatesReady,
   tableId: TABLES.contexteDeVie, writer: conditionalWriter, createRecord, queryAll,
   ensureDossierRecord, canAccessDossierRecord, field, archive: syncArchive });
+
+if (conditionalWriter) {
+  registerSyncArchiveRoutes(app, {
+    requireAdmin,
+    archive: syncArchive,
+    restore: createSyncArchiveRestorer({
+      archive: syncArchive,
+      readRecord: guardedMutationOptions.readRecord,
+      writer: conditionalWriter,
+      contextTableId: TABLES.contexteDeVie,
+      allowedTableIds: conditionalTables,
+    }),
+    tableLabels: {
+      [TABLES.beneficiaires]: 'Bénéficiaire', [TABLES.logements]: 'Logement',
+      [TABLES.dossiers]: 'Dossier', [TABLES.contexteDeVie]: 'Contexte de vie',
+      [TABLES.mesuresAnthropometriques]: 'Mesures', [TABLES.observations]: 'Observations',
+      [TABLES.diagnosticSanitaires]: 'Salles de bain et WC',
+    },
+    describeBeneficiaries: async (ids) => {
+      const safe = ids.map((id) => String(id).replace(/[^\w:.-]/g, '')).filter(Boolean).slice(0, 100);
+      if (!safe.length) return {};
+      const rows = await queryAll(TABLES.beneficiaires, { fields: ['uuid_source', 'prenom', 'nom'],
+        where: safe.map((id) => `(uuid_source,eq,${id})`).join('~or') });
+      return Object.fromEntries(rows.map((row) => [field(row, 'uuid_source'),
+        [field(row, 'prenom'), field(row, 'nom')].filter(Boolean).join(' ').trim() || null]));
+    },
+  });
+}
 
 app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
   try {

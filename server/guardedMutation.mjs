@@ -62,7 +62,8 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
 export function createGuardedMutation({ readRecord, writer, readColumns, preferLocal = false,
   archive = null }) {
   return async ({ tableId, recordId, fields, baseFields, writeId, authorizeObserved,
-    normalizeObserved, normalizeBaseline, canPromoteDefault, actor = null, dossierId = null }) => {
+    normalizeObserved, normalizeBaseline, canPromoteDefault, actor = null, dossierId = null,
+    beneficiaryId = null }) => {
     if (!uuid.test(writeId ?? '') || typeof writeId !== 'string') {
       throw new SyncMutationError(428, 'SYNC_MUTATION_ID_REQUIRED');
     }
@@ -148,7 +149,7 @@ export function createGuardedMutation({ readRecord, writer, readColumns, preferL
         if (overwritten.length) {
           try {
             await archive.record(overwritten, { source: 'guarded', tableId, recordId,
-              dossierId, writeId, actor });
+              dossierId, beneficiaryId, writeId, actor });
           } catch {
             throw new SyncMutationError(503, 'SYNC_ARCHIVE_UNAVAILABLE');
           }

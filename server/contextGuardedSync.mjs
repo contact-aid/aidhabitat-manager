@@ -409,7 +409,8 @@ export function createContextGuardedSync({
         if (overwritten.length) {
           try {
             await archive.record(overwritten, { source: 'context', tableId,
-              recordId: reference.recordId, dossierId, writeId: guard.writeId, actor });
+              recordId: reference.recordId, dossierId, beneficiaryId: beneficiaryId || null,
+              writeId: guard.writeId, actor });
           } catch {
             throw new SyncMutationError(503, 'CONTEXT_ARCHIVE_UNAVAILABLE');
           }
