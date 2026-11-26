@@ -20,7 +20,7 @@
 #           CHUNKS=10 (blocs audio de ~90 s comparés), PAGES=3 (pages manuscrites relues).
 
 set -euo pipefail
-IMAGE="${IMAGE:?IMAGE requis (image candidate de l'API)}"
+IMAGE="${IMAGE:?IMAGE requis : image candidate du service API}"
 API="$(docker ps --format '{{.Names}}' | grep -i 'aidhabitat-api' | head -1)"
 [ -n "$API" ] || { echo "Conteneur API introuvable." >&2; exit 1; }
 DATA_SRC="$(docker inspect "$API" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"
