@@ -4482,12 +4482,27 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
 // Baselines describe independently stored columns, not a new form submission.
 // A legacy scalar can differ from occupant 1; projecting it into the JSON
 // baseline makes an unchanged server value look like a permanent conflict.
-const mapBeneficiaryBaselineToFields = (baseline, references) => ({
-  ...mapBeneficiaryUpdatesToFields(baseline, references),
-  ...(Array.isArray(baseline.occupants) ? {
-    occupants_json: mapBeneficiaryUpdatesToFields({ occupants: baseline.occupants }, references).occupants_json,
-  } : {}),
-});
+// The read contract only exposes a second occupant when one of these three
+// columns is filled. A known baseline list with fewer than two occupants
+// therefore proves they were empty: map them to null instead of dropping
+// them, otherwise the first entry of a second occupant (e.g. a birth date for
+// a household imported as "X et Y") is compared with an unknown baseline and
+// rejected forever. Other occupant-2 columns stay unknown.
+const SECOND_OCCUPANT_EXPOSURE_COLUMNS = ['prenom_occupant_2', 'nom_occupant_2', 'date_naissance_madame'];
+const mapBeneficiaryBaselineToFields = (baseline, references) => {
+  const fields = {
+    ...mapBeneficiaryUpdatesToFields(baseline, references),
+    ...(Array.isArray(baseline.occupants) ? {
+      occupants_json: mapBeneficiaryUpdatesToFields({ occupants: baseline.occupants }, references).occupants_json,
+    } : {}),
+  };
+  if (Array.isArray(baseline.occupants) && baseline.occupants.length < 2) {
+    for (const column of SECOND_OCCUPANT_EXPOSURE_COLUMNS) {
+      if (fields[column] === undefined) fields[column] = null;
+    }
+  }
+  return fields;
+};
 
 app.post('/api/auth/login', async (req, res, next) => {
   try {
