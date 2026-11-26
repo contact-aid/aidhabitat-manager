@@ -138,7 +138,7 @@ class SyncRepository {
     final now = DateTime.now();
     final eligibleRows = <Map<String, Object?>>[];
     final blockedEntities = <String>{};
-    for (final row in rows) {
+    for (final row in uploadsBeforeDocumentMetadata(rows)) {
       final key = '${row['entity_type']}:${row['entity_local_id']}';
       if (blockedEntities.contains(key)) continue;
       if (row['status'] != SyncOperationStatus.pending.name) {
@@ -749,6 +749,49 @@ class SyncRepository {
         syncState: SyncState.syncError,
       );
     });
+  }
+
+  /// Une mise à jour des informations d'un document (`update_metadata`)
+  /// attend volontairement que son fichier soit envoyé. Or remplacer un
+  /// fichier (rotation, annotation) recrée l'envoi `upload_file` avec la date
+  /// du remplacement : il passait alors APRÈS la mise à jour plus ancienne,
+  /// qui bloquait tout le document. Le fichier n'était jamais envoyé.
+  ///
+  /// Pour chaque document, une mise à jour placée avant le dernier envoi de
+  /// son fichier est déplacée juste après cet envoi. Rien n'est modifié dans
+  /// la file locale : l'ordre est seulement recalculé à la lecture, ce qui
+  /// débloque aussi les opérations déjà coincées sur les appareils. Toutes
+  /// les autres opérations gardent leur ordre d'origine.
+  @visibleForTesting
+  static List<Map<String, Object?>> uploadsBeforeDocumentMetadata(
+    List<Map<String, Object?>> rows,
+  ) {
+    final lastUpload = <String, int>{};
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      if (row['entity_type'] == 'document' &&
+          row['operation_type'] == 'upload_file') {
+        lastUpload['${row['entity_local_id']}'] = i;
+      }
+    }
+    if (lastUpload.isEmpty) return rows;
+    final deferred = <int, List<Map<String, Object?>>>{};
+    final out = <Map<String, Object?>>[];
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      final upload = row['entity_type'] == 'document' &&
+              row['operation_type'] == 'update_metadata'
+          ? lastUpload['${row['entity_local_id']}']
+          : null;
+      if (upload != null && upload > i) {
+        (deferred[upload] ??= []).add(row);
+        continue;
+      }
+      out.add(row);
+      final waiting = deferred.remove(i);
+      if (waiting != null) out.addAll(waiting);
+    }
+    return out;
   }
 
   /// Backoff par opération après échec transitoire. Progression :
