@@ -184,7 +184,7 @@ test('unconfigured audio model uses an audio-compatible low-cost default, never 
       return Response.json({usage:{cost:0.0006},choices:[{message:{content:JSON.stringify({turns:[{text:'Aucune chute rapportée.',role:'unknown',voice:'unknown'}]})},finish_reason:'stop'}]});
     }});
   assert.equal((await provider.transcribe(Buffer.from('synthetic audio'))).text,'Aucune chute rapportée.');
-  assert.equal(body.model,'google/gemini-3.1-flash-lite');
+  assert.equal(body.model,'google/gemini-3.5-flash-lite');
   assert.deepEqual(body.reasoning,{enabled:false});
   assert.equal(body.max_tokens,4096);
   assert.equal(body.provider.zdr,true);
