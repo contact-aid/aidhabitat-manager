@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { overwrittenValues } from './syncArchive.mjs';
 
 import {
   planDatabaseMutation,
@@ -284,6 +285,7 @@ export function createContextGuardedSync({
   writer,
   createRecord,
   preferLocal = false,
+  archive = null,
 }) {
   if (!tableId || typeof readByDossierId !== 'function'
       || typeof writer !== 'function' || typeof createRecord !== 'function') {
@@ -298,6 +300,7 @@ export function createContextGuardedSync({
     updates,
     concurrency,
     authorizeObserved,
+    actor = null,
   }) {
     if (typeof dossierId !== 'string' || !dossierId.trim()) {
       throw new SyncMutationError(400, 'CONTEXT_DOSSIER_REQUIRED');
@@ -397,6 +400,20 @@ export function createContextGuardedSync({
         // migration decision and must never be an implicit side effect of a
         // user's context edit.
         throw conflict('CONTEXT_LEGACY_VALUES_REQUIRE_MIGRATION', observed);
+      }
+
+      // Copie des sections que l'appareil n'avait pas vues, AVANT d'écrire.
+      if (archive?.enabled) {
+        const overwritten = overwrittenValues({ patch: plan.patch, observed: remote,
+          baseFields: baseline });
+        if (overwritten.length) {
+          try {
+            await archive.record(overwritten, { source: 'context', tableId,
+              recordId: reference.recordId, dossierId, writeId: guard.writeId, actor });
+          } catch {
+            throw new SyncMutationError(503, 'CONTEXT_ARCHIVE_UNAVAILABLE');
+          }
+        }
       }
 
       const result = await writer({

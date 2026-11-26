@@ -25,6 +25,7 @@ import multer from 'multer';
 import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureConditionalSyncTables } from './nocodbMcpClient.mjs';
 import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
+import { createSyncArchive, SYNC_ARCHIVE_TABLE_NAME } from './syncArchive.mjs';
 import { createSyncRejectionLog } from './syncRejectionLog.mjs';
 import { createDatabaseValueComparator, toDatabaseDossierStatus } from './nocodbScalarValues.mjs';
 import { inspectLegacyRecovery, mappedDatabaseValueEquals } from './legacySyncRecovery.mjs';
@@ -516,7 +517,21 @@ const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter
   request: requestConditionalNocodbRest,
 }) : null;
 const serializeHousingMutation = createKeyedSerialExecutor();
+// Étape 1 du plan de synchronisation : copie des valeurs écrasées avant
+// écriture. Désactivée tant que AIDHABITAT_SYNC_ARCHIVE n'est pas à 1 ; une
+// fois activée, une archive impossible bloque l'écriture (réessai client).
+const syncArchive = createSyncArchive({
+  enabled: process.env.AIDHABITAT_SYNC_ARCHIVE === '1',
+  findTableId: async () => {
+    const tables = await callNocoTool('getTablesList');
+    const table = (Array.isArray(tables) ? tables : []).find((t) =>
+      String(t?.title || '').trim().toLowerCase() === SYNC_ARCHIVE_TABLE_NAME.toLowerCase());
+    return table ? String(table.id) : null;
+  },
+  createRecord: (tableId, fields) => createRecord(tableId, fields),
+});
 const guardedMutationOptions = {
+  archive: syncArchive,
   writer: conditionalWriter,
   readColumns: async (tableId) => {
     if (!conditionalTables.includes(tableId)) throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
@@ -571,6 +586,7 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
     await mutate({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
       normalizeObserved, normalizeBaseline, canPromoteDefault,
+      actor: req.appUser?.email || req.appUser?.id || null,
       authorizeObserved: tableId === TABLES.dossiers
         ? (row) => canAccessDossierRecord(req.appUser, { id: String(record.id), fields: row })
         : undefined,
@@ -7644,7 +7660,7 @@ registerContextRoutes(app, { requireAuth, enabled: conditionalSyncEnabled,
   preferLocal: true,
   creationReady: conditionalCreatesReady,
   tableId: TABLES.contexteDeVie, writer: conditionalWriter, createRecord, queryAll,
-  ensureDossierRecord, canAccessDossierRecord, field });
+  ensureDossierRecord, canAccessDossierRecord, field, archive: syncArchive });
 
 app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
   try {

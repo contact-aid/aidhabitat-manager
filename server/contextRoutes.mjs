@@ -5,7 +5,7 @@ import { SyncMutationError } from './guardedMutation.mjs';
 export function registerContextRoutes(app, {
   requireAuth, enabled, creationReady = false, preferLocal = false,
   tableId, writer, createRecord, queryAll,
-  ensureDossierRecord, canAccessDossierRecord, field,
+  ensureDossierRecord, canAccessDossierRecord, field, archive = null,
 }) {
   const read = async (dossierId) => {
     const records = await queryAll(tableId, { fields: CONTEXT_RECORD_FIELDS,
@@ -17,7 +17,7 @@ export function registerContextRoutes(app, {
     return records[0] ?? null;
   };
   const mutate = enabled ? createContextGuardedSync({ tableId,
-    preferLocal,
+    preferLocal, archive,
     readByDossierId: read, writer, createRecord: (...args) => {
       if (!creationReady) throw new SyncMutationError(503, 'CONTEXT_CREATION_NOT_PREPARED');
       return createRecord(...args);
@@ -45,6 +45,7 @@ export function registerContextRoutes(app, {
         beneficiaryId: field(dossier, 'patient_id'), dossierRecordId: Number(dossier.id),
         beneficiaryRecordId: field(dossier, 'beneficiaires_id'),
         updates: req.body?.updates, concurrency: req.body?.concurrency,
+        actor: req.appUser?.email || req.appUser?.id || null,
         authorizeObserved: (record) => String(field(record, 'dossier_id')) === String(dossierId),
       });
       res.json({ success: true, data: { dossierId, serverReference: result.serverReference } });
