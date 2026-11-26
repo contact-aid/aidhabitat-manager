@@ -1,0 +1,26 @@
+# Projet Docker pour NAS UGREEN (UGOS Pro, application Docker > Projet).
+# Récupère chaque nuit les sauvegardes NocoDB vérifiées du serveur.
+#
+# Avant de créer le projet :
+#   1. Copier ce dossier (compose.yaml et pull.sh) sur le NAS.
+#   2. Remplacer le chemin de destination ci-dessous par un dossier partagé
+#      du NAS réservé à ces sauvegardes (données de santé : accès admin seul).
+services:
+  aidhabitat-backup-pull:
+    image: alpine:3.20
+    container_name: aidhabitat-backup-pull
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/pull.sh"]
+    environment:
+      TZ: Europe/Paris
+      SERVER: 157.180.20.97
+      REMOTE_USER: nasbackup
+      PULL_TIME: "05:00"
+      KEEP_DAILY: "30"
+      KEEP_MONTHLY: "12"
+      RUN_AT_START: "1"
+    volumes:
+      - ./pull.sh:/pull.sh:ro
+      - ./keys:/keys
+      # À ADAPTER : dossier partagé de destination sur le NAS.
+      - /volume1/Sauvegardes/aidhabitat-nocodb:/backups
