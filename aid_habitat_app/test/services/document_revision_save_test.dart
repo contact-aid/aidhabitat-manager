@@ -707,4 +707,95 @@ void main() {
       expect(await db.query('sync_operations'), isEmpty);
     },
   );
+
+  test(
+    'a replaced file is uploaded before an older metadata update waiting for it',
+    () async {
+      // Situation observed on two iPads: the metadata update was queued first
+      // (and retried 147 times), then the file was replaced, which recreated
+      // the upload with a later date. The upload used to be queued behind the
+      // metadata update and was never attempted.
+      await db.insert('sync_operations', {
+        'id': 'sync_doc_meta_doc',
+        'entity_type': 'document',
+        'entity_local_id': 'doc',
+        'operation_type': 'update_metadata',
+        'status': 'pending',
+        'attempt_count': 147,
+        'last_error':
+            'TransientRemoteException: Document metadata waiting for upload_file',
+        'created_at': '2026-10-01T09:00:00.000',
+        'updated_at': '2026-10-01T09:00:00.000',
+        'payload_json': jsonEncode({'documentLocalId': 'doc', 'title': 'Devis'}),
+      });
+      await db.insert('sync_operations', {
+        'id': 'sync_replace_upload',
+        'entity_type': 'document',
+        'entity_local_id': 'doc',
+        'operation_type': 'upload_file',
+        'status': 'pending',
+        'attempt_count': 0,
+        'created_at': '2026-10-14T17:39:39.685',
+        'updated_at': '2026-10-14T17:39:39.685',
+        'payload_json': jsonEncode({'localPath': original.path}),
+      });
+      // An unrelated document keeps its own order.
+      await db.insert('sync_operations', {
+        'id': 'other_meta',
+        'entity_type': 'document',
+        'entity_local_id': 'other',
+        'operation_type': 'update_metadata',
+        'status': 'pending',
+        'attempt_count': 0,
+        'created_at': '2026-09-01T09:00:00.000',
+        'updated_at': '2026-09-01T09:00:00.000',
+        'payload_json': jsonEncode({'documentLocalId': 'other'}),
+      });
+
+      final sync = SyncRepository.forTesting(databaseProvider: () async => db);
+      final queued = await sync.fetchRunnableOperations(
+        includePayloads: false,
+      );
+      expect(queued.map((op) => op.id).toList(), [
+        'other_meta',
+        'sync_replace_upload',
+        'sync_doc_meta_doc',
+      ]);
+      // Nothing is rewritten in the local queue.
+      final stored = await db.query(
+        'sync_operations',
+        columns: const ['id', 'created_at', 'attempt_count'],
+        orderBy: 'id',
+      );
+      expect(stored, hasLength(3));
+      expect(
+        stored.firstWhere((r) => r['id'] == 'sync_doc_meta_doc')['attempt_count'],
+        147,
+      );
+    },
+  );
+
+  test('metadata queued after its upload keeps its original order', () {
+    Map<String, Object?> op(String id, String entity, String type) => {
+      'id': id,
+      'entity_type': 'document',
+      'entity_local_id': entity,
+      'operation_type': type,
+    };
+    final rows = [
+      op('upload', 'doc', 'upload_file'),
+      op('meta', 'doc', 'update_metadata'),
+      op('delete', 'doc2', 'delete'),
+    ];
+    expect(SyncRepository.uploadsBeforeDocumentMetadata(rows), rows);
+    expect(
+      SyncRepository.uploadsBeforeDocumentMetadata([
+        op('meta', 'doc', 'update_metadata'),
+        op('meta2', 'doc2', 'update_metadata'),
+        op('upload', 'doc', 'upload_file'),
+        op('later', 'doc', 'delete'),
+      ]).map((r) => r['id']).toList(),
+      ['meta2', 'upload', 'meta', 'later'],
+    );
+  });
 }
