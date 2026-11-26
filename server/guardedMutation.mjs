@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { createDatabaseValueComparator, isDefaultFormValue } from './nocodbScalarValues.mjs';
 import { validateConditionalPatch } from './nocodbConditionalWrite.mjs';
+import { overwrittenValues } from './syncArchive.mjs';
 
 export const SYNC_REVISION_FIELD = 'app_sync_revision';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -58,9 +59,11 @@ export function planDatabaseMutation({ fields, baseFields, observed, equals = (_
  * readRecord must isolate one table/Id. writer must atomically compare Id AND
  * app_sync_revision and confirm content, never use an unconditional fallback.
  */
-export function createGuardedMutation({ readRecord, writer, readColumns, preferLocal = false }) {
+export function createGuardedMutation({ readRecord, writer, readColumns, preferLocal = false,
+  archive = null }) {
   return async ({ tableId, recordId, fields, baseFields, writeId, authorizeObserved,
-    normalizeObserved, normalizeBaseline, canPromoteDefault }) => {
+    normalizeObserved, normalizeBaseline, canPromoteDefault, actor = null, dossierId = null,
+    beneficiaryId = null }) => {
     if (!uuid.test(writeId ?? '') || typeof writeId !== 'string') {
       throw new SyncMutationError(428, 'SYNC_MUTATION_ID_REQUIRED');
     }
@@ -136,6 +139,22 @@ export function createGuardedMutation({ readRecord, writer, readColumns, preferL
         });
       }
       if (!Object.keys(plan.patch).length) return { applied: true, replay: true };
+      // Copie des valeurs que l'appareil n'avait pas vues, AVANT d'écrire.
+      // La décision utilise les formes comparées ; la copie garde la valeur
+      // brute stockée en base.
+      if (archive?.enabled) {
+        const overwritten = overwrittenValues({ patch: plan.patch,
+          observed: comparisonObserved, baseFields: comparisonBaseline, equals })
+          .map(entry => ({ ...entry, previous: observed[entry.field] ?? entry.previous }));
+        if (overwritten.length) {
+          try {
+            await archive.record(overwritten, { source: 'guarded', tableId, recordId,
+              dossierId, beneficiaryId, writeId, actor });
+          } catch {
+            throw new SyncMutationError(503, 'SYNC_ARCHIVE_UNAVAILABLE');
+          }
+        }
+      }
       const result = await writer({ tableId, recordId, expectedRevision: revision,
         writeId, fields: plan.patch });
       if (result.status === 'applied') return { applied: true, replay: result.replay };

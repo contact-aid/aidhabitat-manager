@@ -10,7 +10,7 @@ export const REQUIRED_BACKUP_TABLES = [
   'mobile_note_pages',
 ];
 
-const REQUIRED_NON_EMPTY_BACKUP_TABLES = new Set([
+export const REQUIRED_NON_EMPTY_BACKUP_TABLES = new Set([
   'Beneficiaires',
   '📁 dossiers',
 ]);

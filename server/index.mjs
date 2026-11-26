@@ -25,6 +25,8 @@ import multer from 'multer';
 import { callNocoTool, closeMcpClient, requestConditionalNocodbRest, configureConditionalSyncTables } from './nocodbMcpClient.mjs';
 import { createConditionalRecordWriter, ConditionalWriteUncertainError, validateConditionalSchema } from './nocodbConditionalWrite.mjs';
 import { createGuardedMutation, SyncMutationError, SYNC_REVISION_FIELD } from './guardedMutation.mjs';
+import { createSyncArchive, SYNC_ARCHIVE_TABLE_NAME } from './syncArchive.mjs';
+import { createSyncArchiveRestorer, registerSyncArchiveRoutes } from './syncArchiveRoutes.mjs';
 import { createSyncRejectionLog } from './syncRejectionLog.mjs';
 import { createDatabaseValueComparator, toDatabaseDossierStatus } from './nocodbScalarValues.mjs';
 import { inspectLegacyRecovery, mappedDatabaseValueEquals } from './legacySyncRecovery.mjs';
@@ -516,7 +518,23 @@ const conditionalWriter = conditionalSyncEnabled ? createConditionalRecordWriter
   request: requestConditionalNocodbRest,
 }) : null;
 const serializeHousingMutation = createKeyedSerialExecutor();
+// Étape 1 du plan de synchronisation : copie des valeurs écrasées avant
+// écriture. Désactivée tant que AIDHABITAT_SYNC_ARCHIVE n'est pas à 1 ; une
+// fois activée, une archive impossible bloque l'écriture (réessai client).
+const syncArchive = createSyncArchive({
+  enabled: process.env.AIDHABITAT_SYNC_ARCHIVE === '1',
+  findTableId: async () => {
+    const tables = await callNocoTool('getTablesList');
+    const table = (Array.isArray(tables) ? tables : []).find((t) =>
+      String(t?.title || '').trim().toLowerCase() === SYNC_ARCHIVE_TABLE_NAME.toLowerCase());
+    return table ? String(table.id) : null;
+  },
+  createRecord: (tableId, fields) => createRecord(tableId, fields),
+  queryAll: (tableId, options) => queryAll(tableId, options),
+  updateRecord: (tableId, id, fields) => updateRecord(tableId, id, fields),
+});
 const guardedMutationOptions = {
+  archive: syncArchive,
   writer: conditionalWriter,
   readColumns: async (tableId) => {
     if (!conditionalTables.includes(tableId)) throw new SyncMutationError(400, 'SYNC_RECORD_INVALID');
@@ -571,6 +589,11 @@ async function applyConditionalSync(req, res, { tableId, record, fields, mapBase
     await mutate({ tableId, recordId: Number(record.id), fields,
       baseFields: await mapBaseline(guard.baseValues), writeId: guard.writeId,
       normalizeObserved, normalizeBaseline, canPromoteDefault,
+      actor: req.appUser?.email || req.appUser?.id || null,
+      dossierId: tableId === TABLES.dossiers ? field(record, 'uuid_source') || null
+        : field(record, 'dossier_id') || null,
+      beneficiaryId: tableId === TABLES.beneficiaires ? field(record, 'uuid_source') || null
+        : field(record, 'beneficiaire_id') || field(record, 'patient_id') || null,
       authorizeObserved: tableId === TABLES.dossiers
         ? (row) => canAccessDossierRecord(req.appUser, { id: String(record.id), fields: row })
         : undefined,
@@ -4484,12 +4507,27 @@ const mapBeneficiaryUpdatesToFields = (updates, references) => {
 // Baselines describe independently stored columns, not a new form submission.
 // A legacy scalar can differ from occupant 1; projecting it into the JSON
 // baseline makes an unchanged server value look like a permanent conflict.
-const mapBeneficiaryBaselineToFields = (baseline, references) => ({
-  ...mapBeneficiaryUpdatesToFields(baseline, references),
-  ...(Array.isArray(baseline.occupants) ? {
-    occupants_json: mapBeneficiaryUpdatesToFields({ occupants: baseline.occupants }, references).occupants_json,
-  } : {}),
-});
+// The read contract only exposes a second occupant when one of these three
+// columns is filled. A known baseline list with fewer than two occupants
+// therefore proves they were empty: map them to null instead of dropping
+// them, otherwise the first entry of a second occupant (e.g. a birth date for
+// a household imported as "X et Y") is compared with an unknown baseline and
+// rejected forever. Other occupant-2 columns stay unknown.
+const SECOND_OCCUPANT_EXPOSURE_COLUMNS = ['prenom_occupant_2', 'nom_occupant_2', 'date_naissance_madame'];
+const mapBeneficiaryBaselineToFields = (baseline, references) => {
+  const fields = {
+    ...mapBeneficiaryUpdatesToFields(baseline, references),
+    ...(Array.isArray(baseline.occupants) ? {
+      occupants_json: mapBeneficiaryUpdatesToFields({ occupants: baseline.occupants }, references).occupants_json,
+    } : {}),
+  };
+  if (Array.isArray(baseline.occupants) && baseline.occupants.length < 2) {
+    for (const column of SECOND_OCCUPANT_EXPOSURE_COLUMNS) {
+      if (fields[column] === undefined) fields[column] = null;
+    }
+  }
+  return fields;
+};
 
 app.post('/api/auth/login', async (req, res, next) => {
   try {
@@ -7629,7 +7667,35 @@ registerContextRoutes(app, { requireAuth, enabled: conditionalSyncEnabled,
   preferLocal: true,
   creationReady: conditionalCreatesReady,
   tableId: TABLES.contexteDeVie, writer: conditionalWriter, createRecord, queryAll,
-  ensureDossierRecord, canAccessDossierRecord, field });
+  ensureDossierRecord, canAccessDossierRecord, field, archive: syncArchive });
+
+if (conditionalWriter) {
+  registerSyncArchiveRoutes(app, {
+    requireAdmin,
+    archive: syncArchive,
+    restore: createSyncArchiveRestorer({
+      archive: syncArchive,
+      readRecord: guardedMutationOptions.readRecord,
+      writer: conditionalWriter,
+      contextTableId: TABLES.contexteDeVie,
+      allowedTableIds: conditionalTables,
+    }),
+    tableLabels: {
+      [TABLES.beneficiaires]: 'Bénéficiaire', [TABLES.logements]: 'Logement',
+      [TABLES.dossiers]: 'Dossier', [TABLES.contexteDeVie]: 'Contexte de vie',
+      [TABLES.mesuresAnthropometriques]: 'Mesures', [TABLES.observations]: 'Observations',
+      [TABLES.diagnosticSanitaires]: 'Salles de bain et WC',
+    },
+    describeBeneficiaries: async (ids) => {
+      const safe = ids.map((id) => String(id).replace(/[^\w:.-]/g, '')).filter(Boolean).slice(0, 100);
+      if (!safe.length) return {};
+      const rows = await queryAll(TABLES.beneficiaires, { fields: ['uuid_source', 'prenom', 'nom'],
+        where: safe.map((id) => `(uuid_source,eq,${id})`).join('~or') });
+      return Object.fromEntries(rows.map((row) => [field(row, 'uuid_source'),
+        [field(row, 'prenom'), field(row, 'nom')].filter(Boolean).join(' ').trim() || null]));
+    },
+  });
+}
 
 app.patch('/api/dossiers/:dossierId', requireAuth, async (req, res, next) => {
   try {
