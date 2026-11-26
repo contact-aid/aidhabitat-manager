@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {cleanVisitTranscript} from './openaiVisitCleanup.mjs';
+import {throwProviderFailure} from './openaiProviderError.mjs';
 const fail=message=>Object.assign(new Error(message),{statusCode:502});
 const normalized=text=>String(text||'').replace(/\s+/g,' ').trim();
 const read=async filename=>{try{return JSON.parse(await fs.readFile(filename,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
@@ -17,7 +18,7 @@ export async function transcribeFrenchChunks({job,directory,apiKey,fetchImpl=fet
    form.append('model',model);form.append('languages[]','fr');
    form.append('prompt','Visite d’ergothérapie à domicile en français. Conversation sur le logement, la mobilité, les portes, les mesures en centimètres et les sanitaires. Transcription fidèle dans la langue parlée, avec la ponctuation.');
    const response=await fetchImpl('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`},body:form,signal:AbortSignal.timeout(180000)});
-   if(!response.ok)throw fail('La transcription française est indisponible. Les originaux sont conservés.');
+   if(!response.ok)await throwProviderFailure(response,()=>fail('La transcription française est indisponible. Les originaux sont conservés.'));
    raw=await response.json();
    if(typeof raw.text!=='string'||(raw.text.length>100&&raw.languages?.length&&!raw.languages.some(l=>l.code?.startsWith('fr'))))throw fail('La transcription n’a pas conservé le français. La version précédente est conservée.');
    await write(filename,raw);

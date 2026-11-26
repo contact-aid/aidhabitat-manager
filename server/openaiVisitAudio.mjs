@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {throwProviderFailure} from './openaiProviderError.mjs';
 const exec=promisify(execFile);
 const error=message=>Object.assign(new Error(message),{statusCode:502});
 const read=async filename=>{try{return JSON.parse(await fs.readFile(filename,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
@@ -65,7 +66,7 @@ export async function transcribeVisitParts({bytes,job,directory,model,apiKey,fet
       }
       const response=await fetchImpl('https://api.openai.com/v1/audio/transcriptions',{
         method:'POST',headers:{Authorization:`Bearer ${apiKey}`},body:form,signal:AbortSignal.timeout(600000)});
-      if(!response.ok) throw error('OpenAI n’a pas pu transcrire un extrait. Les fichiers audio et les extraits déjà traités sont conservés.');
+      if(!response.ok) await throwProviderFailure(response,()=>error('OpenAI n’a pas pu transcrire un extrait. Les fichiers audio et les extraits déjà traités sont conservés.'));
       raw=await readDiarizedResponse(response);
       if(!Array.isArray(raw.segments)||raw.segments.some(s=>typeof s.text!=='string'||typeof s.speaker!=='string'||!s.speaker.trim()||
         !Number.isFinite(s.start)||!Number.isFinite(s.end)||s.start<0||s.end<s.start))throw error('La séparation des voix OpenAI est inexploitable.');

@@ -112,6 +112,7 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
       'failed' => 'Traitement interrompu',
       _ => job == null ? null : 'Envoi en cours…',
     };
+    final failureMessage = failed ? (job?['error'])?.toString() : null;
     final warnings = ((job?['result'] as Map?)?['warnings'] as List? ?? [])
         .whereType<String>()
         .toList();
@@ -236,6 +237,14 @@ class _VisitTranscriptTabState extends State<VisitTranscriptTab> {
             child: Text(
               _error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        if (failureMessage != null && failureMessage.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              failureMessage,
+              style: TextStyle(color: Colors.orange.shade900),
             ),
           ),
         const SizedBox(height: 8),
