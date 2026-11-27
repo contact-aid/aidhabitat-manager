@@ -185,8 +185,9 @@ test('unconfigured audio model uses an audio-compatible low-cost default, never 
     }});
   assert.equal((await provider.transcribe(Buffer.from('synthetic audio'))).text,'Aucune chute rapportée.');
   assert.equal(body.model,'google/gemini-3.5-flash-lite');
-  assert.deepEqual(body.reasoning,{enabled:false});
-  assert.equal(body.max_tokens,4096);
+  assert.deepEqual(body.reasoning,{effort:'low',exclude:true});
+  assert.equal(body.max_tokens,8192);
+  assert.ok(!('temperature' in body));
   assert.equal(body.provider.zdr,true);
   assert.equal(body.provider.allow_fallbacks,false);
   assert.equal(audit[0].task,'transcription');

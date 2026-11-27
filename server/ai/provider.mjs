@@ -9,10 +9,10 @@ export function textProviderConfig(env = process.env) {
 }
 // temperature: null leaves it out, for models whose privacy-compliant
 // endpoints reject it (with require_parameters, OpenRouter would find none).
-export function completionBody(config, {messages, model = config.model, maxTokens = 12000, responseFormat, reasoningEffort = 'none', temperature = 0.1}) {
+export function completionBody(config, {messages, model = config.model, maxTokens = 12000, responseFormat, reasoningEffort = 'none', temperature = 0.1, reasoning = {enabled:false}}) {
   return {model, messages, stream:false,
     ...(config.provider === 'openai'
       ? {store:false, max_completion_tokens:maxTokens, reasoning_effort:reasoningEffort}
-      : {...(temperature === null ? {} : {temperature}), max_tokens:maxTokens, reasoning:{enabled:false}, provider:TEXT_PROVIDER_POLICY}),
+      : {...(temperature === null ? {} : {temperature}), max_tokens:maxTokens, reasoning, provider:TEXT_PROVIDER_POLICY}),
     ...(responseFormat ? {response_format:responseFormat} : {})};
 }
