@@ -84,7 +84,7 @@ for (let i = 0; i < Math.min(Number(process.env.CHUNKS), job.chunks.length); i++
       const config = textProviderConfig({ ...process.env, AI_PROVIDER: 'openrouter' });
       const bytes = await fs.readFile(path.join(dir, '0.m4a'));
       const r = await fetch(config.url, { method: 'POST', headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(completionBody(config, { model: process.env.VISIT_TRANSCRIPTION_MODEL || 'google/gemini-3.5-flash-lite', maxTokens: 256,
+        body: JSON.stringify(completionBody(config, { model: process.env.VISIT_TRANSCRIPTION_MODEL || 'google/gemini-3.5-flash-lite', maxTokens: 256, temperature: null,
           messages: [{ role: 'user', content: [{ type: 'text', text: 'Transcris.' }, { type: 'input_audio', input_audio: { data: bytes.toString('base64'), format: 'm4a' } }] }] })) });
       const body = await r.json().catch(() => ({}));
       console.log(`  OpenRouter : HTTP ${r.status} ${String(body.error?.message ?? '').slice(0, 300)}`);

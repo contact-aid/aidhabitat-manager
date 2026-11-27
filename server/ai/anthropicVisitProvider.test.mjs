@@ -50,6 +50,7 @@ test('with AI_PROVIDER=anthropic, audio goes to Gemini on OpenRouter and text or
   assert.equal(openrouter[0].auth, 'Bearer synthetic-openrouter');
   assert.equal(openrouter[0].body.model, 'google/gemini-3.5-flash-lite');
   assert.equal(openrouter[0].body.provider.zdr, true);
+  assert.ok(!('temperature' in openrouter[0].body), 'privacy-compliant Gemini endpoints reject temperature');
   assert.equal(claude.calls.length, 1);
   assert.equal(claude.calls[0].model, 'claude-opus-5-5');
   assert.equal(provider.transcribeRecording, undefined, 'speaker tracking stays an OpenAI-only capability');
