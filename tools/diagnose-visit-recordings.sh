@@ -8,7 +8,8 @@
 # OWNER filtre sur une partie de l'e-mail (facultatif), DAYS sur l'ancienneté (14 par défaut).
 
 set -euo pipefail
-API="$(docker ps --format '{{.Names}}' | grep -i 'aidhabitat-api' | head -1)"
+SERVICE="${SERVICE:-aidhabitat-api-staging}"  # service Easypanel de production, malgré son nom
+API="$(docker ps --format '{{.Names}}' | grep -E "^apps_${SERVICE}\.[0-9]+\." | head -1)"
 [ -n "$API" ] || { echo "Conteneur API introuvable." >&2; exit 1; }
 
 echo "== Configuration (sans secrets) =="

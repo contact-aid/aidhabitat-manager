@@ -21,7 +21,8 @@
 
 set -euo pipefail
 IMAGE="${IMAGE:?IMAGE requis : image candidate du service API}"
-API="$(docker ps --format '{{.Names}}' | grep -i 'aidhabitat-api' | head -1)"
+SERVICE="${SERVICE:-aidhabitat-api-staging}"  # service Easypanel de production, malgré son nom
+API="$(docker ps --format '{{.Names}}' | grep -E "^apps_${SERVICE}\.[0-9]+\." | head -1)"
 [ -n "$API" ] || { echo "Conteneur API introuvable." >&2; exit 1; }
 DATA_SRC="$(docker inspect "$API" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"
 [ -n "$DATA_SRC" ] || { echo "Volume /data du conteneur API introuvable." >&2; exit 1; }

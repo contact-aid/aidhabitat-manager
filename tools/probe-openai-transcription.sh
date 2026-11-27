@@ -8,7 +8,8 @@
 #   ssh root@157.180.20.97 'bash -s' < tools/probe-openai-transcription.sh
 
 set -euo pipefail
-API="$(docker ps --format '{{.Names}}' | grep -i 'aidhabitat-api' | head -1)"
+SERVICE="${SERVICE:-aidhabitat-api-staging}"  # service Easypanel de production, malgré son nom
+API="$(docker ps --format '{{.Names}}' | grep -E "^apps_${SERVICE}\.[0-9]+\." | head -1)"
 [ -n "$API" ] || { echo "Conteneur API introuvable." >&2; exit 1; }
 
 docker exec "$API" sh -c 'ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:duration=2" -c:a aac /tmp/probe.m4a'
