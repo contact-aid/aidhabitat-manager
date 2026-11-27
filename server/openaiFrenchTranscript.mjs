@@ -7,6 +7,16 @@ const normalized=text=>String(text||'').replace(/\s+/g,' ').trim();
 const read=async filename=>{try{return JSON.parse(await fs.readFile(filename,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}};
 const write=async(filename,value)=>{await fs.writeFile(filename+'.tmp',JSON.stringify(value),{mode:0o600});await fs.rename(filename+'.tmp',filename);};
 async function workers(items,concurrency,action){let next=0;const result=[];const outcomes=await Promise.allSettled(Array.from({length:Math.min(concurrency,items.length)},async()=>{while(next<items.length){const i=next++;result[i]=await action(items[i],i);}}));const failure=outcomes.find(r=>r.status==='rejected');if(failure)throw failure.reason;return result;}
+export const FRENCH_TRANSCRIPTION_PROMPT='Visite d’ergothérapie à domicile en français. Conversation sur le logement, la mobilité, les portes, les mesures en centimètres et les sanitaires. Transcription fidèle dans la langue parlée, avec la ponctuation.';
+const promptWords=text=>String(text||'').toLowerCase().normalize('NFC').replace(/[’']/g,' ').replace(/[^\p{L}\p{N} ]+/gu,' ').replace(/\s+/g,' ').trim();
+const PROMPT_WORDS=promptWords(FRENCH_TRANSCRIPTION_PROMPT);
+// On a near-silent chunk the speech model can return its own prompt as the
+// transcript. That text was never spoken: drop it so it cannot become a fact.
+export function withoutEchoedPrompt(text){
+ const kept=String(text||'').split(FRENCH_TRANSCRIPTION_PROMPT).join(' ');
+ const words=promptWords(kept);
+ return !words||(words.split(' ').length>=6&&PROMPT_WORDS.includes(words))?'':kept.trim();
+}
 export async function transcribeFrenchChunks({job,directory,apiKey,fetchImpl=fetch,onUsage=async()=>{},model='gpt-transcribe'}) {
  let start=0;const chunks=job.chunks.map((chunk,index)=>{const c={index,startSeconds:start,duration:chunk.duration};start+=chunk.duration;return c;});
  return workers(chunks,4,async chunk=>{
@@ -16,7 +26,7 @@ export async function transcribeFrenchChunks({job,directory,apiKey,fetchImpl=fet
    const bytes=await fs.readFile(path.join(directory,`${chunk.index}.m4a`));
    const form=new FormData();form.append('file',new Blob([bytes],{type:'audio/mp4'}),'visit.m4a');
    form.append('model',model);form.append('languages[]','fr');
-   form.append('prompt','Visite d’ergothérapie à domicile en français. Conversation sur le logement, la mobilité, les portes, les mesures en centimètres et les sanitaires. Transcription fidèle dans la langue parlée, avec la ponctuation.');
+   form.append('prompt',FRENCH_TRANSCRIPTION_PROMPT);
    const response=await fetchImpl('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`},body:form,signal:AbortSignal.timeout(180000)});
    if(!response.ok)await throwProviderFailure(response,()=>fail('La transcription française est indisponible. Les originaux sont conservés.'));
    raw=await response.json();
@@ -24,7 +34,7 @@ export async function transcribeFrenchChunks({job,directory,apiKey,fetchImpl=fet
    await write(filename,raw);
    await Promise.resolve().then(()=>onUsage({task:'transcription_text',provider:'openai',model,recordingId:job.id,dossierId:job.dossierId,part:chunk.index,audioSeconds:chunk.duration,at:new Date().toISOString()})).catch(()=>{});
   }
-  return {...chunk,text:normalized(raw.text)};
+  return {...chunk,text:normalized(withoutEchoedPrompt(raw.text))};
  });
 }
 export async function arrangeFrenchTranscript({chunks,voiceSegments,referenceVoices,directory,complete}) {
