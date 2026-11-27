@@ -16,7 +16,8 @@
 #
 # Depuis le Mac :
 #   ssh root@157.180.20.97 'IMAGE=ghcr.io/contact-aid/aidhabitat-api:<tag> bash -s' < tools/compare-visit-providers.sh
-# Options : RECORDING=<id 32 hex> (défaut : dernière visite complète),
+# Options : AUDIO_ONLY=1 (Gemini seul, sans la partie Claude),
+#           RECORDING=<id 32 hex> (défaut : dernière visite complète),
 #           CHUNKS=10 (blocs audio de ~90 s comparés), PAGES=3 (pages manuscrites relues).
 
 set -euo pipefail
@@ -38,7 +39,7 @@ grep -q '^OPENROUTER_API_KEY=.' "$ENVF" || { echo "OPENROUTER_API_KEY absente du
 OUT=/root/visit-compare; mkdir -p "$OUT"; chmod 700 "$OUT"
 docker pull -q "$IMAGE" >/dev/null
 docker run --rm -i --env-file "$ENVF" -e AI_PROVIDER=anthropic \
-  -e RECORDING="${RECORDING:-}" -e CHUNKS="${CHUNKS:-10}" -e PAGES="${PAGES:-3}" \
+  -e RECORDING="${RECORDING:-}" -e CHUNKS="${CHUNKS:-10}" -e PAGES="${PAGES:-3}" -e AUDIO_ONLY="${AUDIO_ONLY:-}" \
   -v "$DATA_SRC":/data:ro -v "$OUT":/out "$IMAGE" node --input-type=module - <<'JS'
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -107,7 +108,7 @@ if (ok.length) {
 
 // 2. Manuscrits : Claude vs lecture OpenAI existante.
 const pages = [];
-for (const [i, page] of (job.context.handwritten ?? []).slice(0, Number(process.env.PAGES)).entries()) {
+for (const [i, page] of (process.env.AUDIO_ONLY ? [] : job.context.handwritten ?? []).slice(0, Number(process.env.PAGES)).entries()) {
   try { pages.push({ section: page.section, page: page.page, openai: job.handwrittenText?.[i]?.text ?? '', claude: await provider.readHandwriting(page.image) }); }
   catch (e) { pages.push({ section: page.section, page: page.page, error: fail(e) }); console.log(`Page ${i} : ${fail(e)}`); }
 }
@@ -115,7 +116,7 @@ console.log(`Manuscrits Claude : ${pages.filter(p => !p.error).length}/${pages.l
 
 // 3. Rédaction : Claude Opus sur les mêmes sources (transcription OpenAI) que Luna.
 let draft = null;
-try {
+if (!process.env.AUDIO_ONLY) try {
   const sources = { ...job, facts: undefined, result: undefined };
   const facts = await provider.extractFacts(sources);
   let style = null;
