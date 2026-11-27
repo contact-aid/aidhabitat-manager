@@ -18,7 +18,7 @@
 #   ssh root@157.180.20.97 'IMAGE=ghcr.io/contact-aid/aidhabitat-api:<tag> bash -s' < tools/compare-visit-providers.sh
 # Options : AUDIO_ONLY=1 (Gemini seul, sans la partie Claude),
 #           RECORDING=<id 32 hex> (défaut : dernière visite complète),
-#           CHUNKS=10 (blocs audio de ~90 s comparés), PAGES=3 (pages manuscrites relues).
+#           START=30 (premier bloc comparé), CHUNKS=10 (blocs audio comparés), PAGES=3 (pages manuscrites relues).
 
 set -euo pipefail
 IMAGE="${IMAGE:?IMAGE requis : image candidate du service API}"
@@ -39,7 +39,7 @@ grep -q '^OPENROUTER_API_KEY=.' "$ENVF" || { echo "OPENROUTER_API_KEY absente du
 OUT=/root/visit-compare; mkdir -p "$OUT"; chmod 700 "$OUT"
 docker pull -q "$IMAGE" >/dev/null
 docker run --rm -i --env-file "$ENVF" -e AI_PROVIDER=anthropic \
-  -e RECORDING="${RECORDING:-}" -e CHUNKS="${CHUNKS:-10}" -e PAGES="${PAGES:-3}" -e AUDIO_ONLY="${AUDIO_ONLY:-}" \
+  -e RECORDING="${RECORDING:-}" -e CHUNKS="${CHUNKS:-10}" -e PAGES="${PAGES:-3}" -e AUDIO_ONLY="${AUDIO_ONLY:-}" -e START="${START:-30}" \
   -v "$DATA_SRC":/data:ro -v "$OUT":/out "$IMAGE" node --input-type=module - <<'JS'
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -75,19 +75,21 @@ const fail = e => `ÉCHEC (${e.statusCode ?? '?'}) ${String(e.message).slice(0, 
 
 // 1. Audio : Gemini vs texte français OpenAI déjà validé.
 const audio = [];
-for (let i = 0; i < Math.min(Number(process.env.CHUNKS), job.chunks.length); i++) {
+// Start mid-visit: the first minutes are often near-silent set-up.
+const start = Math.min(Number(process.env.START), Math.max(0, job.chunks.length - Number(process.env.CHUNKS)));
+for (let i = start; i < Math.min(start + Number(process.env.CHUNKS), job.chunks.length); i++) {
   const reference = job.transcript.find(t => t.index === i)?.text ?? '';
   try {
     const result = await provider.transcribe(await fs.readFile(path.join(dir, `${i}.m4a`)));
     audio.push({ index: i, openai: reference, gemini: result.text, wer: wer(reference, result.text), numbers: kept(reference, result.text) });
   } catch (e) {
     audio.push({ index: i, openai: reference, error: fail(e) }); console.log(`Bloc ${i} : ${fail(e)}`);
-    if (i === 0) {
+    if (i === start) {
       // The server masks provider answers; show OpenRouter's own error once
       // (status and message only, never request content) to diagnose it.
       const { textProviderConfig, completionBody } = await import('/app/server/ai/provider.mjs');
       const config = textProviderConfig({ ...process.env, AI_PROVIDER: 'openrouter' });
-      const bytes = await fs.readFile(path.join(dir, '0.m4a'));
+      const bytes = await fs.readFile(path.join(dir, `${i}.m4a`));
       const r = await fetch(config.url, { method: 'POST', headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(completionBody(config, { model: process.env.VISIT_TRANSCRIPTION_MODEL || 'google/gemini-3.5-flash-lite', maxTokens: 1024, temperature: null, reasoning: { effort: 'low', exclude: true },
           messages: [{ role: 'user', content: [{ type: 'text', text: 'Transcris.' }, { type: 'input_audio', input_audio: { data: bytes.toString('base64'), format: 'm4a' } }] }] })) });
