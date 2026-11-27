@@ -25,6 +25,9 @@ API="$(docker ps --format '{{.Names}}' | grep -i 'aidhabitat-api' | head -1)"
 [ -n "$API" ] || { echo "Conteneur API introuvable." >&2; exit 1; }
 DATA_SRC="$(docker inspect "$API" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"
 [ -n "$DATA_SRC" ] || { echo "Volume /data du conteneur API introuvable." >&2; exit 1; }
+echo "Conteneur API : $API | volume /data : $DATA_SRC"
+docker exec "$API" sh -c 'test -d "${AIDHABITAT_DATA_DIR_PATH:-/app/server/data}/visit-assistant"' ||
+  { echo "Le conteneur $API n'a pas de dossier visit-assistant : mauvais conteneur ?" >&2; docker ps --format '{{.Names}} {{.Image}} {{.Status}}' | grep -i aidhabitat >&2; exit 1; }
 
 ENVF="$(mktemp)"; chmod 600 "$ENVF"; trap 'rm -f "$ENVF"' EXIT
 docker inspect "$API" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -v '^$' > "$ENVF"
