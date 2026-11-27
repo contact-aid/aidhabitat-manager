@@ -36,3 +36,23 @@ test('cleanup bounds long French paragraphs as well as the number of turns',asyn
  await cleanVisitTranscript({directory,segments,complete:async messages=>{calls++;const {segments}=JSON.parse(messages[1].content);assert.ok(segments.reduce((n,s)=>n+s.text.length,0)<=12000);return JSON.stringify({turns:segments.map(s=>({id:s.id,cleanText:s.text})),speakers:[{id:'unidentified',role:'unknown'}]});}});
  assert.ok(calls>1);
 });
+test('an exhausted OpenAI balance is distinguished from other transcription failures',async t=>{
+ const {PROVIDER_QUOTA_MESSAGE}=await import('./openaiProviderError.mjs');
+ const directory=await temp(t);await fs.writeFile(path.join(directory,'0.m4a'),'synthetic');
+ const run=response=>transcribeFrenchChunks({directory,job:{chunks:[{duration:60}]},apiKey:'synthetic',fetchImpl:async()=>response()});
+ await assert.rejects(run(()=>Response.json({error:{type:'insufficient_quota',code:'credit_balance_exhausted',message:'echoed'}},{status:429})),
+  e=>e.providerQuota===true&&e.message===PROVIDER_QUOTA_MESSAGE&&!e.message.includes('echoed'));
+ await assert.rejects(run(()=>Response.json({error:{type:'rate_limit_exceeded'}},{status:429})),e=>!e.providerQuota&&e.statusCode===502);
+ await assert.rejects(run(()=>new Response('upstream',{status:500})),e=>!e.providerQuota&&e.statusCode===502);
+});
+test('a speech model echoing its own prompt on silence never becomes transcript text',async t=>{
+ const {withoutEchoedPrompt,FRENCH_TRANSCRIPTION_PROMPT}=await import('./openaiFrenchTranscript.mjs');
+ assert.equal(withoutEchoedPrompt(FRENCH_TRANSCRIPTION_PROMPT),'');
+ assert.equal(withoutEchoedPrompt('Conversation sur le logement, la mobilité, les portes.'),'');
+ assert.equal(withoutEchoedPrompt(`${FRENCH_TRANSCRIPTION_PROMPT} Le seuil fait 12 cm.`).trim(),'Le seuil fait 12 cm.');
+ assert.equal(withoutEchoedPrompt('Les portes sont trop étroites.'),'Les portes sont trop étroites.');
+ const directory=await temp(t);await fs.writeFile(path.join(directory,'0.m4a'),'synthetic');
+ const result=await transcribeFrenchChunks({directory,job:{chunks:[{duration:60}]},apiKey:'synthetic',
+  fetchImpl:async()=>Response.json({text:FRENCH_TRANSCRIPTION_PROMPT,languages:[{code:'fr'}]})});
+ assert.equal(result[0].text,'');
+});

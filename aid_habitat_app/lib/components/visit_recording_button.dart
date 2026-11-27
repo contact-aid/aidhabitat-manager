@@ -32,8 +32,10 @@ class VisitRecordingButton extends StatelessWidget {
           'drafting' => 'Rédaction en cours…',
           'complete' => 'Rédaction terminée',
           'recovery_required' => 'Audio à récupérer',
+          'failed' => 'Échec du traitement, à reprendre',
           _ => '',
         };
+        final failed = phase == 'failed';
         final pending =
             latest != null &&
             latest['status'] != 'complete' &&
@@ -44,6 +46,9 @@ class VisitRecordingButton extends StatelessWidget {
             ? 'Une autre visite est en cours d’enregistrement'
             : !VisitAssistantConfig.canRecord
             ? 'Enregistrement disponible dans l’application iPad de test'
+            : failed
+            ? ((latest?['remote'] as Map?)?['error']?.toString() ??
+                  'Traitement en échec : onglet Transcription et IA, Reprendre')
             : pending
             ? 'Visite enregistrée, traitement en attente'
             : 'Enregistrer la visite';
@@ -67,9 +72,11 @@ class VisitRecordingButton extends StatelessWidget {
                     padding: const EdgeInsets.only(left: 12),
                     child: Text(
                       status,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
-                        color: Color(0xff666666),
+                        color: failed
+                            ? const Color(0xffb45309)
+                            : const Color(0xff666666),
                       ),
                     ),
                   ),

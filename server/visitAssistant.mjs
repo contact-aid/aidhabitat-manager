@@ -1,6 +1,7 @@
 import {plainReportText,PLAIN_REPORT_INSTRUCTIONS} from '../shared/plainReportText.mjs';
 import { textProviderConfig, completionBody } from './ai/provider.mjs';
 import { createOpenAIRecordingTranscriber } from './openaiVisitTranscription.mjs';
+import { PROVIDER_QUOTA_MESSAGE, throwProviderFailure } from './openaiProviderError.mjs';
 import { OPENROUTER_TEXT_MODEL, OPENROUTER_TRANSCRIPTION_MODEL, TEXT_PROVIDER_POLICY } from './ai/models.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -164,7 +165,7 @@ export function createVisitProvider({ env = process.env, fetchImpl = fetch, onUs
         responseFormat: json ? (jsonSchema ? {type:'json_schema', json_schema:jsonSchema} : {type:'json_object'}) : undefined})),
     });
     // Never propagate provider bodies: they can echo clinical content or keys.
-    if (!response.ok) throw visitError(502, 'Le prestataire IA est indisponible. Réessayez ultérieurement.');
+    if (!response.ok) await throwProviderFailure(response, () => visitError(502, 'Le prestataire IA est indisponible. Réessayez ultérieurement.'));
     const payload = await response.json();
     await Promise.resolve().then(() => onUsage({ ...visitUsageContext.getStore(), task, model,
       generationId: payload.id ?? null, servedModel: payload.model ?? null,
@@ -341,7 +342,9 @@ export class VisitProcessor {
         job.retryAfter = new Date(Date.now() + this.retryDelayMs).toISOString();
         if (job.processingFailures >= 2) job.status = 'failed';
         job.failure = {stage:failureStage, code:error.statusCode || 503, reason:error.statusCode ? error.message : 'Erreur interne', at:new Date().toISOString()};
-        job.error = 'Le traitement a échoué. Les sources sont conservées ; une reprise est possible.';
+        job.error = error.providerQuota ? PROVIDER_QUOTA_MESSAGE : 'Le traitement a échoué. Les sources sont conservées ; une reprise est possible.';
+        // Stage, code and our own message only: never provider bodies or visit content.
+        console.warn('[visit-assistant] Échec de traitement', JSON.stringify({recordingId: job.id, ...job.failure, failures: job.processingFailures}));
         await this.store.write(job);
         throw error;
       }

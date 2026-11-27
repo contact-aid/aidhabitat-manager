@@ -30,3 +30,10 @@ test('failed note application reuses the paid draft checkpoint',async t=>{
  await assert.rejects(f.processor.step(f.job.dossierId,f.job.id));await f.processor.step(f.job.dossierId,f.job.id);
  assert.equal(f.calls.filter(c=>c==='draft').length,1);assert.equal((await f.store.read(f.job.dossierId,f.job.id)).status,'complete');
 });
+test('an exhausted provider balance is reported explicitly to the therapist',async t=>{
+ const {providerQuotaError,PROVIDER_QUOTA_MESSAGE}=await import('./openaiProviderError.mjs');
+ const f=await fixture(t,{transcribe:async()=>{throw providerQuotaError();}});
+ for(let i=0;i<2;i++)await assert.rejects(f.processor.step(f.job.dossierId,f.job.id));
+ const job=await f.store.read(f.job.dossierId,f.job.id);
+ assert.equal(job.status,'failed');assert.equal(job.error,PROVIDER_QUOTA_MESSAGE);assert.equal(job.failure.code,402);
+});

@@ -280,93 +280,108 @@ class VisitAssistantService extends ChangeNotifier with WidgetsBindingObserver {
       if (ConnectivityService().isOffline || !AppConfig.hasRemoteConfig) return;
       if (!kIsWeb && !ConnectivityService().isUnmetered) return;
       final epoch = AppConfig.sessionEpoch;
+      Object? firstFailure;
       for (final job in jobs.where(
         (j) => ['pending', 'uploading', 'processing'].contains(j['status']),
       )) {
         _checkSession(epoch);
-        if (job['context'] == null) {
-          final loader = contextLoader;
-          if (loader != null) {
-            job['context'] = await loader(
-              job['dossierId'] as String,
-              job['patientId'] as String,
-            );
-          } else {
-            final dossier = await DataService().fetchDossierById(
-              job['dossierId'] as String,
-            );
-            if (dossier == null) {
-              throw StateError('Le dossier local n’est pas disponible.');
-            }
-            job['context'] = await _context(dossier);
-          }
-          await _store.save(job);
-        }
-        final base =
-            '${Uri.encodeComponent(job['dossierId'] as String)}/${job['id']}';
-        if (job['status'] != 'processing') {
-          await _request('PUT', base, body: {'context': job['context']});
-          job['status'] = 'uploading';
-          final segments = job['segments'] as List;
-          for (
-            var i = (job['uploaded'] as int? ?? 0);
-            i < segments.length;
-            i++
-          ) {
-            _checkSession(epoch);
-            final segment = segments[i] as Map;
-            final bytes = await _channel.invokeMethod<Uint8List>('read', {
-              'id': job['id'],
-              'name': segment['name'],
-            });
-            if (bytes == null) throw StateError('Extrait audio introuvable.');
-            await _request(
-              'PUT',
-              '$base/chunks/$i',
-              bytes: bytes,
-              extraHeaders: {
-                'X-Audio-Sha256': sha256.convert(bytes).toString(),
-                'X-Audio-Duration': '${segment['duration']}',
-              },
-            );
-            job['uploaded'] = i + 1;
-            await _store.save(job);
-            notifyListeners();
-          }
-          await _request(
-            'POST',
-            '$base/finish',
-            body: {'chunkCount': segments.length},
-          );
-          job['status'] = 'processing';
-          await _store.save(job);
-        }
-        final remote = (await _request('POST', '$base/process'))['data'] as Map;
-        job['remote'] = remote;
-        if (remote['status'] == 'complete') {
-          final result = Map<String, dynamic>.from(remote['result'] as Map);
-          final sections = Map<String, dynamic>.from(result['sections'] as Map);
-          if (remote['notesAppliedAt'] != null) {
-            await DataService().refreshAllNotePagesForPatient(
-              job['patientId'] as String,
-            );
-          } else {
-            for (final section in sections.entries) {
-              _checkSession(epoch);
-              await _notes.appendVisitText(
-                patientId: job['patientId'] as String,
-                dossierId: job['dossierId'] as String,
-                tabKey: section.key,
-                recordingId: job['id'] as String,
-                text: section.value.toString(),
+        // One failing visit must not hold back the uploads of the others.
+        try {
+          if (job['context'] == null) {
+            final loader = contextLoader;
+            if (loader != null) {
+              job['context'] = await loader(
+                job['dossierId'] as String,
+                job['patientId'] as String,
               );
+            } else {
+              final dossier = await DataService().fetchDossierById(
+                job['dossierId'] as String,
+              );
+              if (dossier == null) {
+                throw StateError('Le dossier local n’est pas disponible.');
+              }
+              job['context'] = await _context(dossier);
             }
+            await _store.save(job);
           }
-          job['status'] = 'complete';
+          final base =
+              '${Uri.encodeComponent(job['dossierId'] as String)}/${job['id']}';
+          if (job['status'] != 'processing') {
+            await _request('PUT', base, body: {'context': job['context']});
+            job['status'] = 'uploading';
+            final segments = job['segments'] as List;
+            for (
+              var i = (job['uploaded'] as int? ?? 0);
+              i < segments.length;
+              i++
+            ) {
+              _checkSession(epoch);
+              final segment = segments[i] as Map;
+              final bytes = await _channel.invokeMethod<Uint8List>('read', {
+                'id': job['id'],
+                'name': segment['name'],
+              });
+              if (bytes == null) throw StateError('Extrait audio introuvable.');
+              await _request(
+                'PUT',
+                '$base/chunks/$i',
+                bytes: bytes,
+                extraHeaders: {
+                  'X-Audio-Sha256': sha256.convert(bytes).toString(),
+                  'X-Audio-Duration': '${segment['duration']}',
+                },
+              );
+              job['uploaded'] = i + 1;
+              await _store.save(job);
+              notifyListeners();
+            }
+            await _request(
+              'POST',
+              '$base/finish',
+              body: {'chunkCount': segments.length},
+            );
+            job['status'] = 'processing';
+            await _store.save(job);
+          }
+          final remote =
+              (await _request('POST', '$base/process'))['data'] as Map;
+          job['remote'] = remote;
+          if (remote['status'] == 'complete') {
+            final result = Map<String, dynamic>.from(remote['result'] as Map);
+            final sections = Map<String, dynamic>.from(
+              result['sections'] as Map,
+            );
+            if (remote['notesAppliedAt'] != null) {
+              await DataService().refreshAllNotePagesForPatient(
+                job['patientId'] as String,
+              );
+            } else {
+              for (final section in sections.entries) {
+                _checkSession(epoch);
+                await _notes.appendVisitText(
+                  patientId: job['patientId'] as String,
+                  dossierId: job['dossierId'] as String,
+                  tabKey: section.key,
+                  recordingId: job['id'] as String,
+                  text: section.value.toString(),
+                );
+              }
+            }
+            job['status'] = 'complete';
+          }
+          job.remove('error');
+          await _store.save(job);
+        } catch (e) {
+          if (AppConfig.sessionEpoch != epoch || !AppConfig.hasRemoteConfig) {
+            rethrow;
+          }
+          firstFailure ??= e;
+          job['error'] = _message(e);
+          await _store.save(job);
         }
-        job.remove('error');
-        await _store.save(job);
       }
+      if (firstFailure != null) throw firstFailure;
       error = null;
     } catch (e) {
       error = _message(e);
