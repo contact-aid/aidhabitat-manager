@@ -4,39 +4,48 @@ import PDFKit
 import UIKit
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private let fileProtectionChannelName = "aidhabitat/file_protection"
   private let pdfRotationChannelName = "aidhabitat/pdf_rotation"
 
+  // iPadOS 27 impose le cycle de vie UIScene : sans lui, UIKit tue l'app
+  // au lancement (crash du 27/11/2026, build 116). Le moteur Flutter est
+  // désormais créé par la scène (FlutterSceneDelegate + storyboard Main) ;
+  // les plugins s'enregistrent donc ici, une fois ce moteur initialisé, et
+  // non plus dans didFinishLaunching (le moteur n'y existe pas encore).
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    GeneratedPluginRegistrant.register(with: self)
-    if let registrar = registrar(forPlugin: "VisitRecorder") {
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    let registry = engineBridge.pluginRegistry
+    GeneratedPluginRegistrant.register(with: registry)
+    if let registrar = registry.registrar(forPlugin: "VisitRecorder") {
       VisitRecorder.register(with: registrar)
     }
-    if let pencilRegistrar = registrar(forPlugin: "PencilDoubleTapPlugin") {
+    if let pencilRegistrar = registry.registrar(forPlugin: "PencilDoubleTapPlugin") {
       PencilDoubleTapPlugin.register(with: pencilRegistrar)
     }
-    if let scannerRegistrar = registrar(forPlugin: "DocumentScannerPlugin") {
+    if let scannerRegistrar = registry.registrar(forPlugin: "DocumentScannerPlugin") {
       DocumentScannerPlugin.register(with: scannerRegistrar)
     }
-    if let registrar = registrar(forPlugin: "PdfRotationChannel") {
+    if let registrar = registry.registrar(forPlugin: "PdfRotationChannel") {
       let channel = FlutterMethodChannel(
         name: pdfRotationChannelName,
         binaryMessenger: registrar.messenger()
       )
       channel.setMethodCallHandler(handlePdfRotationCall)
     }
-    if let registrar = registrar(forPlugin: "LocalFileProtectionChannel") {
+    if let registrar = registry.registrar(forPlugin: "LocalFileProtectionChannel") {
       let channel = FlutterMethodChannel(
         name: fileProtectionChannelName,
         binaryMessenger: registrar.messenger()
       )
       channel.setMethodCallHandler(handleFileProtectionCall)
     }
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   override func application(

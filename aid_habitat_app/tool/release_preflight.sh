@@ -140,6 +140,17 @@ else
   warn "UIRequiresFullScreen ne permet pas clairement le multitache iPad."
 fi
 
+# iPadOS 27 tue au lancement toute app sans cycle de vie UIScene
+# (incident du 27/11/2026, build 116 : app inutilisable en visite).
+scene_delegate="$(/usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName' ios/Runner/Info.plist 2>/dev/null || true)"
+if [ "$scene_delegate" = "FlutterSceneDelegate" ] \
+  && rg -q 'FlutterImplicitEngineDelegate' ios/Runner/AppDelegate.swift \
+  && rg -q 'func didInitializeImplicitFlutterEngine' ios/Runner/AppDelegate.swift; then
+  ok "Cycle de vie UIScene adopte (obligatoire depuis iPadOS 27)."
+else
+  fail "Cycle de vie UIScene absent : l'app plantera au lancement sur iPadOS 27. Voir Info.plist (UISceneConfigurations) et AppDelegate.swift."
+fi
+
 if rg -q 'PencilDoubleTapPlugin\.register\(with: (self|pencilRegistrar)\)' ios/Runner/AppDelegate.swift; then
   ok "Le bridge Apple Pencil natif est branche."
 else
