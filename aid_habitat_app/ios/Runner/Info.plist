@@ -138,10 +138,27 @@
 	<!-- ====================================================== -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>
+		<!-- Une seule scène : Flutter n'a qu'un moteur. -->
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
+		<false/>
+		<!-- Obligatoire depuis iPadOS 27 : sans configuration de scène,
+		     UIKit fait planter l'app au lancement. -->
 		<key>UISceneConfigurations</key>
-		<dict/>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>FlutterSceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
 	</dict>
 </dict>
 </plist>
